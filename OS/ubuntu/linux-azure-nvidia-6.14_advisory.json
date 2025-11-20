@@ -434,7 +434,7 @@
                 "cve_id": "CVE-2025-38033",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/Kconfig: make CFI_AUTO_DEFAULT depend on !RUST or Rust >= 1.88\n\nCalling core::fmt::write() from rust code while FineIBT is enabled\nresults in a kernel panic:\n\n[ 4614.199779] kernel BUG at arch/x86/kernel/cet.c:132!\n[ 4614.205343] Oops: invalid opcode: 0000 [#1] PREEMPT SMP NOPTI\n[ 4614.211781] CPU: 2 UID: 0 PID: 6057 Comm: dmabuf_dump Tainted: G     U     O       6.12.17-android16-0-g6ab38c534a43 #1 9da040f27673ec3945e23b998a0f8bd64c846599\n[ 4614.227832] Tainted: [U]=USER, [O]=OOT_MODULE\n[ 4614.241247] RIP: 0010:do_kernel_cp_fault+0xea/0xf0\n...\n[ 4614.398144] RIP: 0010:_RNvXs5_NtNtNtCs3o2tGsuHyou_4core3fmt3num3impyNtB9_7Display3fmt+0x0/0x20\n[ 4614.407792] Code: 48 f7 df 48 0f 48 f9 48 89 f2 89 c6 5d e9 18 fd ff ff 0f 1f 84 00 00 00 00 00 f3 0f 1e fa 41 81 ea 14 61 af 2c 74 03 0f 0b 90 <66> 0f 1f 00 55 48 89 e5 48 89 f2 48 8b 3f be 01 00 00 00 5d e9 e7\n[ 4614.428775] RSP: 0018:ffffb95acfa4ba68 EFLAGS: 00010246\n[ 4614.434609] RAX: 0000000000000000 RBX: 0000000000000010 RCX: 0000000000000000\n[ 4614.442587] RDX: 0000000000000007 RSI: ffffb95acfa4ba70 RDI: ffffb95acfa4bc88\n[ 4614.450557] RBP: ffffb95acfa4bae0 R08: ffff0a00ffffff05 R09: 0000000000000070\n[ 4614.458527] R10: 0000000000000000 R11: ffffffffab67eaf0 R12: ffffb95acfa4bcc8\n[ 4614.466493] R13: ffffffffac5d50f0 R14: 0000000000000000 R15: 0000000000000000\n[ 4614.474473]  ? __cfi__RNvXs5_NtNtNtCs3o2tGsuHyou_4core3fmt3num3impyNtB9_7Display3fmt+0x10/0x10\n[ 4614.484118]  ? _RNvNtCs3o2tGsuHyou_4core3fmt5write+0x1d2/0x250\n\nThis happens because core::fmt::write() calls\ncore::fmt::rt::Argument::fmt(), which currently has CFI disabled:\n\nlibrary/core/src/fmt/rt.rs:\n171     // FIXME: Transmuting formatter in new and indirectly branching to/calling\n172     // it here is an explicit CFI violation.\n173     #[allow(inline_no_sanitize)]\n174     #[no_sanitize(cfi, kcfi)]\n175     #[inline]\n176     pub(super) unsafe fn fmt(&self, f: &mut Formatter<'_>) -> Result {\n\nThis causes a Control Protection exception, because FineIBT has sealed\noff the original function's endbr64.\n\nThis makes rust currently incompatible with FineIBT. Add a Kconfig\ndependency that prevents FineIBT from getting turned on by default\nif rust is enabled.\n\n[ Rust 1.88.0 (scheduled for 2025-06-26) should have this fixed [1],\n  and thus we relaxed the condition with Rust >= 1.88.\n\n  When `objtool` lands checking for this with e.g. [2], the plan is\n  to ideally run that in upstream Rust's CI to prevent regressions\n  early [3], since we do not control `core`'s source code.\n\n  Alice tested the Rust PR backported to an older compiler.\n\n  Peter would like that Rust provides a stable `core` which can be\n  pulled into the kernel: \"Relying on that much out of tree code is\n  'unfortunate'\".\n\n    - Miguel ]\n\n[ Reduced splat. - Miguel ]",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1007.7"
             },
@@ -482,7 +482,7 @@
                 "cve_id": "CVE-2025-38039",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/mlx5e: Avoid WARN_ON when configuring MQPRIO with HTB offload enabled\n\nWhen attempting to enable MQPRIO while HTB offload is already\nconfigured, the driver currently returns `-EINVAL` and triggers a\n`WARN_ON`, leading to an unnecessary call trace.\n\nUpdate the code to handle this case more gracefully by returning\n`-EOPNOTSUPP` instead, while also providing a helpful user message.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1007.7"
             },
@@ -690,7 +690,7 @@
                 "cve_id": "CVE-2025-38069",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: endpoint: pci-epf-test: Fix double free that causes kernel to oops\n\nFix a kernel oops found while testing the stm32_pcie Endpoint driver\nwith handling of PERST# deassertion:\n\nDuring EP initialization, pci_epf_test_alloc_space() allocates all BARs,\nwhich are further freed if epc_set_bar() fails (for instance, due to no\nfree inbound window).\n\nHowever, when pci_epc_set_bar() fails, the error path:\n\n  pci_epc_set_bar() ->\n    pci_epf_free_space()\n\ndoes not clear the previous assignment to epf_test->reg[bar].\n\nThen, if the host reboots, the PERST# deassertion restarts the BAR\nallocation sequence with the same allocation failure (no free inbound\nwindow), creating a double free situation since epf_test->reg[bar] was\ndeallocated and is still non-NULL.\n\nThus, make sure that pci_epf_alloc_space() and pci_epf_free_space()\ninvocations are symmetric, and as such, set epf_test->reg[bar] to NULL\nwhen memory is freed.\n\n[kwilczynski: commit log]",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1007.7"
             },
@@ -746,7 +746,7 @@
                 "cve_id": "CVE-2025-38076",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nalloc_tag: allocate percpu counters for module tags dynamically\n\nWhen a module gets unloaded it checks whether any of its tags are still in\nuse and if so, we keep the memory containing module's allocation tags\nalive until all tags are unused.  However percpu counters referenced by\nthe tags are freed by free_module().  This will lead to UAF if the memory\nallocated by a module is accessed after module was unloaded.\n\nTo fix this we allocate percpu counters for module allocation tags\ndynamically and we keep it alive for tags which are still in use after\nmodule unloading.  This also removes the requirement of a larger\nPERCPU_MODULE_RESERVE when memory allocation profiling is enabled because\npercpu memory for counters does not need to be reserved anymore.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1006.6"
             },
@@ -786,7 +786,7 @@
                 "cve_id": "CVE-2025-38081",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nspi-rockchip: Fix register out of bounds access\n\nDo not write native chip select stuff for GPIO chip selects.\nGPIOs can be numbered much higher than native CS.\nAlso, it makes no sense.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1007.7"
             },
@@ -3407,7 +3407,7 @@
                 "cve_id": "CVE-2025-38456",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nipmi:msghandler: Fix potential memory corruption in ipmi_create_user()\n\nThe \"intf\" list iterator is an invalid pointer if the correct\n\"intf->intf_num\" is not found.  Calling atomic_dec(&intf->nr_users) on\nand invalid pointer will lead to memory corruption.\n\nWe don't really need to call atomic_dec() if we haven't called\natomic_add_return() so update the if (intf->in_shutdown) path as well.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1009.9"
             },
@@ -3877,7 +3877,7 @@
                 "cve_id": "CVE-2025-38517",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nlib/alloc_tag: do not acquire non-existent lock in alloc_tag_top_users()\n\nalloc_tag_top_users() attempts to lock alloc_tag_cttype->mod_lock even\nwhen the alloc_tag_cttype is not allocated because:\n\n  1) alloc tagging is disabled because mem profiling is disabled\n     (!alloc_tag_cttype)\n  2) alloc tagging is enabled, but not yet initialized (!alloc_tag_cttype)\n  3) alloc tagging is enabled, but failed initialization\n     (!alloc_tag_cttype or IS_ERR(alloc_tag_cttype))\n\nIn all cases, alloc_tag_cttype is not allocated, and therefore\nalloc_tag_top_users() should not attempt to acquire the semaphore.\n\nThis leads to a crash on memory allocation failure by attempting to\nacquire a non-existent semaphore:\n\n  Oops: general protection fault, probably for non-canonical address 0xdffffc000000001b: 0000 [#3] SMP KASAN NOPTI\n  KASAN: null-ptr-deref in range [0x00000000000000d8-0x00000000000000df]\n  CPU: 2 UID: 0 PID: 1 Comm: systemd Tainted: G      D             6.16.0-rc2 #1 VOLUNTARY\n  Tainted: [D]=DIE\n  Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.16.2-debian-1.16.2-1 04/01/2014\n  RIP: 0010:down_read_trylock+0xaa/0x3b0\n  Code: d0 7c 08 84 d2 0f 85 a0 02 00 00 8b 0d df 31 dd 04 85 c9 75 29 48 b8 00 00 00 00 00 fc ff df 48 8d 6b 68 48 89 ea 48 c1 ea 03 <80> 3c 02 00 0f 85 88 02 00 00 48 3b 5b 68 0f 85 53 01 00 00 65 ff\n  RSP: 0000:ffff8881002ce9b8 EFLAGS: 00010016\n  RAX: dffffc0000000000 RBX: 0000000000000070 RCX: 0000000000000000\n  RDX: 000000000000001b RSI: 000000000000000a RDI: 0000000000000070\n  RBP: 00000000000000d8 R08: 0000000000000001 R09: ffffed107dde49d1\n  R10: ffff8883eef24e8b R11: ffff8881002cec20 R12: 1ffff11020059d37\n  R13: 00000000003fff7b R14: ffff8881002cec20 R15: dffffc0000000000\n  FS:  00007f963f21d940(0000) GS:ffff888458ca6000(0000) knlGS:0000000000000000\n  CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n  CR2: 00007f963f5edf71 CR3: 000000010672c000 CR4: 0000000000350ef0\n  Call Trace:\n   <TASK>\n   codetag_trylock_module_list+0xd/0x20\n   alloc_tag_top_users+0x369/0x4b0\n   __show_mem+0x1cd/0x6e0\n   warn_alloc+0x2b1/0x390\n   __alloc_frozen_pages_noprof+0x12b9/0x21a0\n   alloc_pages_mpol+0x135/0x3e0\n   alloc_slab_page+0x82/0xe0\n   new_slab+0x212/0x240\n   ___slab_alloc+0x82a/0xe00\n   </TASK>\n\nAs David Wang points out, this issue became easier to trigger after commit\n780138b12381 (\"alloc_tag: check mem_profiling_support in alloc_tag_init\").\n\nBefore the commit, the issue occurred only when it failed to allocate and\ninitialize alloc_tag_cttype or if a memory allocation fails before\nalloc_tag_init() is called.  After the commit, it can be easily triggered\nwhen memory profiling is compiled but disabled at boot.\n\nTo properly determine whether alloc_tag_init() has been called and its\ndata structures initialized, verify that alloc_tag_cttype is a valid\npointer before acquiring the semaphore.  If the variable is NULL or an\nerror value, it has not been properly initialized.  In such a case, just\nskip and do not attempt to acquire the semaphore.\n\n[harry.yoo@oracle.com: v3]",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1009.9"
             },
@@ -3997,7 +3997,7 @@
                 "cve_id": "CVE-2025-38535",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nphy: tegra: xusb: Fix unbalanced regulator disable in UTMI PHY mode\n\nWhen transitioning from USB_ROLE_DEVICE to USB_ROLE_NONE, the code\nassumed that the regulator should be disabled. However, if the regulator\nis marked as always-on, regulator_is_enabled() continues to return true,\nleading to an incorrect attempt to disable a regulator which is not\nenabled.\n\nThis can result in warnings such as:\n\n[  250.155624] WARNING: CPU: 1 PID: 7326 at drivers/regulator/core.c:3004\n_regulator_disable+0xe4/0x1a0\n[  250.155652] unbalanced disables for VIN_SYS_5V0\n\nTo fix this, we move the regulator control logic into\ntegra186_xusb_padctl_id_override() function since it's directly related\nto the ID override state. The regulator is now only disabled when the role\ntransitions from USB_ROLE_HOST to USB_ROLE_NONE, by checking the VBUS_ID\nregister. This ensures that regulator enable/disable operations are\nproperly balanced and only occur when actually transitioning to/from host\nmode.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1009.9"
             },
@@ -4284,7 +4284,7 @@
                 "cve_id": "CVE-2025-38573",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nspi: cs42l43: Property entry should be a null-terminated array\n\nThe software node does not specify a count of property entries, so the\narray must be null-terminated.\n\nWhen unterminated, this can lead to a fault in the downstream cs35l56\namplifier driver, because the node parse walks off the end of the\narray into unknown memory.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1009.9"
             },
@@ -4332,7 +4332,7 @@
                 "cve_id": "CVE-2025-38581",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: ccp - Fix crash when rebind ccp device for ccp.ko\n\nWhen CONFIG_CRYPTO_DEV_CCP_DEBUGFS is enabled, rebinding\nthe ccp device causes the following crash:\n\n$ echo '0000:0a:00.2' > /sys/bus/pci/drivers/ccp/unbind\n$ echo '0000:0a:00.2' > /sys/bus/pci/drivers/ccp/bind\n\n[  204.976930] BUG: kernel NULL pointer dereference, address: 0000000000000098\n[  204.978026] #PF: supervisor write access in kernel mode\n[  204.979126] #PF: error_code(0x0002) - not-present page\n[  204.980226] PGD 0 P4D 0\n[  204.981317] Oops: Oops: 0002 [#1] SMP NOPTI\n...\n[  204.997852] Call Trace:\n[  204.999074]  <TASK>\n[  205.000297]  start_creating+0x9f/0x1c0\n[  205.001533]  debugfs_create_dir+0x1f/0x170\n[  205.002769]  ? srso_return_thunk+0x5/0x5f\n[  205.004000]  ccp5_debugfs_setup+0x87/0x170 [ccp]\n[  205.005241]  ccp5_init+0x8b2/0x960 [ccp]\n[  205.006469]  ccp_dev_init+0xd4/0x150 [ccp]\n[  205.007709]  sp_init+0x5f/0x80 [ccp]\n[  205.008942]  sp_pci_probe+0x283/0x2e0 [ccp]\n[  205.010165]  ? srso_return_thunk+0x5/0x5f\n[  205.011376]  local_pci_probe+0x4f/0xb0\n[  205.012584]  pci_device_probe+0xdb/0x230\n[  205.013810]  really_probe+0xed/0x380\n[  205.015024]  __driver_probe_device+0x7e/0x160\n[  205.016240]  device_driver_attach+0x2f/0x60\n[  205.017457]  bind_store+0x7c/0xb0\n[  205.018663]  drv_attr_store+0x28/0x40\n[  205.019868]  sysfs_kf_write+0x5f/0x70\n[  205.021065]  kernfs_fop_write_iter+0x145/0x1d0\n[  205.022267]  vfs_write+0x308/0x440\n[  205.023453]  ksys_write+0x6d/0xe0\n[  205.024616]  __x64_sys_write+0x1e/0x30\n[  205.025778]  x64_sys_call+0x16ba/0x2150\n[  205.026942]  do_syscall_64+0x56/0x1e0\n[  205.028108]  entry_SYSCALL_64_after_hwframe+0x76/0x7e\n[  205.029276] RIP: 0033:0x7fbc36f10104\n[  205.030420] Code: 89 02 48 c7 c0 ff ff ff ff c3 66 2e 0f 1f 84 00 00 00 00 00 66 90 48 8d 05 e1 08 2e 00 8b 00 85 c0 75 13 b8 01 00 00 00 0f 05 <48> 3d 00 f0 ff ff 77 54 f3 c3 66 90 41 54 55 49 89 d4 53 48 89 f5\n\nThis patch sets ccp_debugfs_dir to NULL after destroying it in\nccp5_debugfs_destroy, allowing the directory dentry to be\nrecreated when rebinding the ccp device.\n\nTested on AMD Ryzen 7 1700X.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1009.9"
             },
@@ -5637,7 +5637,7 @@
                 "cve_id": "CVE-2025-39725",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/vmscan: fix hwpoisoned large folio handling in shrink_folio_list\n\nIn shrink_folio_list(), the hwpoisoned folio may be large folio, which\ncan't be handled by unmap_poisoned_folio().  For THP, try_to_unmap_one()\nmust be passed with TTU_SPLIT_HUGE_PMD to split huge PMD first and then\nretry.  Without TTU_SPLIT_HUGE_PMD, we will trigger null-ptr deref of\npvmw.pte.  Even we passed TTU_SPLIT_HUGE_PMD, we will trigger a\nWARN_ON_ONCE due to the page isn't in swapcache.\n\nSince UCE is rare in real world, and race with reclaimation is more rare,\njust skipping the hwpoisoned large folio is enough.  memory_failure() will\nhandle it if the UCE is triggered again.\n\nThis happens when memory reclaim for large folio races with\nmemory_failure(), and will lead to kernel panic.  The race is as\nfollows:\n\ncpu0      cpu1\n shrink_folio_list memory_failure\n  TestSetPageHWPoison\n  unmap_poisoned_folio\n  --> trigger BUG_ON due to\n  unmap_poisoned_folio couldn't\n   handle large folio\n\n[tujinjiang@huawei.com: add comment to unmap_poisoned_folio()]",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "fixed_version": "6.14.0-1009.9"
             },
@@ -5735,7 +5735,7 @@
                 "cve_id": "CVE-2025-39744",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nrcu: Fix rcu_read_unlock() deadloop due to IRQ work\n\nDuring rcu_read_unlock_special(), if this happens during irq_exit(), we\ncan lockup if an IPI is issued. This is because the IPI itself triggers\nthe irq_exit() path causing a recursive lock up.\n\nThis is precisely what Xiongfeng found when invoking a BPF program on\nthe trace_tick_stop() tracepoint As shown in the trace below. Fix by\nmanaging the irq_work state correctly.\n\nirq_exit()\n  __irq_exit_rcu()\n    /* in_hardirq() returns false after this */\n    preempt_count_sub(HARDIRQ_OFFSET)\n    tick_irq_exit()\n      tick_nohz_irq_exit()\n\t    tick_nohz_stop_sched_tick()\n\t      trace_tick_stop()  /* a bpf prog is hooked on this trace point */\n\t\t   __bpf_trace_tick_stop()\n\t\t      bpf_trace_run2()\n\t\t\t    rcu_read_unlock_special()\n                              /* will send a IPI to itself */\n\t\t\t      irq_work_queue_on(&rdp->defer_qs_iw, rdp->cpu);\n\nA simple reproducer can also be obtained by doing the following in\ntick_irq_exit(). It will hang on boot without the patch:\n\n  static inline void tick_irq_exit(void)\n  {\n +\trcu_read_lock();\n +\tWRITE_ONCE(current->rcu_read_unlock_special.b.need_qs, true);\n +\trcu_read_unlock();\n +\n\n[neeraj: Apply Frederic's suggested fix for PREEMPT_RT]",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "open"
             },
             "CVE-2025-39745": {
@@ -5931,14 +5931,14 @@
                 "cve_id": "CVE-2025-39779",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: subpage: keep TOWRITE tag until folio is cleaned\n\nbtrfs_subpage_set_writeback() calls folio_start_writeback() the first time\na folio is written back, and it also clears the PAGECACHE_TAG_TOWRITE tag\neven if there are still dirty blocks in the folio. This can break ordering\nguarantees, such as those required by btrfs_wait_ordered_extents().\n\nThat ordering breakage leads to a real failure. For example, running\ngeneric/464 on a zoned setup will hit the following ASSERT. This happens\nbecause the broken ordering fails to flush existing dirty pages before the\nfile size is truncated.\n\n  assertion failed: !list_empty(&ordered->list) :: 0, in fs/btrfs/zoned.c:1899\n  ------------[ cut here ]------------\n  kernel BUG at fs/btrfs/zoned.c:1899!\n  Oops: invalid opcode: 0000 [#1] SMP NOPTI\n  CPU: 2 UID: 0 PID: 1906169 Comm: kworker/u130:2 Kdump: loaded Not tainted 6.16.0-rc6-BTRFS-ZNS+ #554 PREEMPT(voluntary)\n  Hardware name: Supermicro Super Server/H12SSL-NT, BIOS 2.0 02/22/2021\n  Workqueue: btrfs-endio-write btrfs_work_helper [btrfs]\n  RIP: 0010:btrfs_finish_ordered_zoned.cold+0x50/0x52 [btrfs]\n  RSP: 0018:ffffc9002efdbd60 EFLAGS: 00010246\n  RAX: 000000000000004c RBX: ffff88811923c4e0 RCX: 0000000000000000\n  RDX: 0000000000000000 RSI: ffffffff827e38b1 RDI: 00000000ffffffff\n  RBP: ffff88810005d000 R08: 00000000ffffdfff R09: ffffffff831051c8\n  R10: ffffffff83055220 R11: 0000000000000000 R12: ffff8881c2458c00\n  R13: ffff88811923c540 R14: ffff88811923c5e8 R15: ffff8881c1bd9680\n  FS:  0000000000000000(0000) GS:ffff88a04acd0000(0000) knlGS:0000000000000000\n  CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n  CR2: 00007f907c7a918c CR3: 0000000004024000 CR4: 0000000000350ef0\n  Call Trace:\n   <TASK>\n   ? srso_return_thunk+0x5/0x5f\n   btrfs_finish_ordered_io+0x4a/0x60 [btrfs]\n   btrfs_work_helper+0xf9/0x490 [btrfs]\n   process_one_work+0x204/0x590\n   ? srso_return_thunk+0x5/0x5f\n   worker_thread+0x1d6/0x3d0\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x118/0x230\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x205/0x260\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\nConsider process A calling writepages() with WB_SYNC_NONE. In zoned mode or\nfor compressed writes, it locks several folios for delalloc and starts\nwriting them out. Let's call the last locked folio folio X. Suppose the\nwrite range only partially covers folio X, leaving some pages dirty.\nProcess A calls btrfs_subpage_set_writeback() when building a bio. This\nfunction call clears the TOWRITE tag of folio X, whose size = 8K and\nthe block size = 4K. It is following state.\n\n   0     4K    8K\n   |/////|/////|  (flag: DIRTY, tag: DIRTY)\n   <-----> Process A will write this range.\n\nNow suppose process B concurrently calls writepages() with WB_SYNC_ALL. It\ncalls tag_pages_for_writeback() to tag dirty folios with\nPAGECACHE_TAG_TOWRITE. Since folio X is still dirty, it gets tagged. Then,\nB collects tagged folios using filemap_get_folios_tag() and must wait for\nfolio X to be written before returning from writepages().\n\n   0     4K    8K\n   |/////|/////|  (flag: DIRTY, tag: DIRTY|TOWRITE)\n\nHowever, between tagging and collecting, process A may call\nbtrfs_subpage_set_writeback() and clear folio X's TOWRITE tag.\n   0     4K    8K\n   |     |/////|  (flag: DIRTY|WRITEBACK, tag: DIRTY)\n\nAs a result, process B won't see folio X in its batch, and returns without\nwaiting for it. This breaks the WB_SYNC_ALL ordering requirement.\n\nFix this by using btrfs_subpage_set_writeback_keepwrite(), which retains\nthe TOWRITE tag. We now manually clear the tag only after the folio becomes\nclean, via the xas operation.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "open"
             },
             "CVE-2025-39780": {
                 "cve_id": "CVE-2025-39780",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nsched/ext: Fix invalid task state transitions on class switch\n\nWhen enabling a sched_ext scheduler, we may trigger invalid task state\ntransitions, resulting in warnings like the following (which can be\neasily reproduced by running the hotplug selftest in a loop):\n\n sched_ext: Invalid task state transition 0 -> 3 for fish[770]\n WARNING: CPU: 18 PID: 787 at kernel/sched/ext.c:3862 scx_set_task_state+0x7c/0xc0\n ...\n RIP: 0010:scx_set_task_state+0x7c/0xc0\n ...\n Call Trace:\n  <TASK>\n  scx_enable_task+0x11f/0x2e0\n  switching_to_scx+0x24/0x110\n  scx_enable.isra.0+0xd14/0x13d0\n  bpf_struct_ops_link_create+0x136/0x1a0\n  __sys_bpf+0x1edd/0x2c30\n  __x64_sys_bpf+0x21/0x30\n  do_syscall_64+0xbb/0x370\n  entry_SYSCALL_64_after_hwframe+0x77/0x7f\n\nThis happens because we skip initialization for tasks that are already\ndead (with their usage counter set to zero), but we don't exclude them\nduring the scheduling class transition phase.\n\nFix this by also skipping dead tasks during class swiching, preventing\ninvalid task state transitions.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "open"
             },
             "CVE-2025-39781": {
@@ -6704,7 +6704,7 @@
                 "cve_id": "CVE-2025-39916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/damon/reclaim: avoid divide-by-zero in damon_reclaim_apply_parameters()\n\nWhen creating a new scheme of DAMON_RECLAIM, the calculation of\n'min_age_region' uses 'aggr_interval' as the divisor, which may lead to\ndivision-by-zero errors.  Fix it by directly returning -EINVAL when such a\ncase occurs.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "open"
             },
             "CVE-2025-39917": {
@@ -7806,6 +7806,13 @@
                 "severity": "MEDIUM",
                 "status": "open"
             },
+            "CVE-2025-40109": {
+                "cve_id": "CVE-2025-40109",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: rng - Ensure set_ent is always present\n\nEnsure that set_ent is always set since only drbg provides it.",
+                "severity": "MEDIUM",
+                "status": "open"
+            },
             "CVE-2025-40300": {
                 "cve_id": "CVE-2025-40300",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7818,7 +7825,7 @@
                 "cve_id": "CVE-2025-40364",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "summary": "In the Linux kernel, the following vulnerability has been resolved:\n\nio_uring: fix io_req_prep_async with provided buffers\n\nio_req_prep_async() can import provided buffers, commit the ring state\nby giving up on that before, it'll be reimported later if needed.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "open"
             }
         }
