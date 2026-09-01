@@ -1,7 +1,7 @@
 {
     "package_name": "iscsi-initiator-utils",
     "advisory": {
-        "7": {
+        "8": {
             "CVE-2026-18724": {
                 "cve_id": "CVE-2026-18724",
                 "title": "open-iscsi: open-iscsi: Stack buffer overflow in idbm record parsing",
@@ -481,7 +481,262 @@
                 ]
             }
         },
-        "8": {
+        "10": {
+            "CVE-2026-18724": {
+                "cve_id": "CVE-2026-18724",
+                "title": "open-iscsi: open-iscsi: Stack buffer overflow in idbm record parsing",
+                "description": "AI_ONLY_REPORT\npackage: iscsi-initiator-utils-6.2.1.11-0.git4b3e853.el10\n------\nSummary: Stack Buffer Overflow in idbm_recinfo_config via Malicious iSCSI  \nTarget: a crafted SendTargets TargetName can inject an extra configuration  \nline into a persisted node record and later cause a stack buffer overflow  \nwhen that record is reparsed.\nRequirements to exploit: An attacker must control an iSCSI target or tamper  \nwith SendTargets discovery traffic, return a crafted `TargetName`  \ncontaining a newline and oversized injected key or value data, have the  \nvictim run persistent discovery, and then trigger a later node-record read  \nsuch as update or login.\nComponent affected: `iscsi-initiator-utils`;  \n`usr/idbm.c:idbm_recinfo_config`, with attacker-controlled input reaching  \nit through SendTargets handling in `usr/discovery.c` and later record  \nserialization in `usr/idbm.c`.\nVersion affected: `iscsi-initiator-utils-6.2.1.11-0.git4b3e853.el10`\nPatch available: no released package fix established; proposed patch  \nincluded below\nVersion fixed: unknown\nUpstream coordination: Not notified.\nCVSS: CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:H - 7.5 (HIGH)\nAV:N - The attacker can supply the malicious data over the network in a  \nSendTargets discovery response.\nAC:L - The target-name length cap still leaves enough room for a newline  \nplus an overlong injected key; no race or unusual memory state is required.\nPR:N - No prior access to the initiator is required.\nUI:R - The victim must run SendTargets discovery that persists records  \nand later read the saved record.\nS:U - The impact remains within the initiator-side component that parses  \nand stores its own database records.\nC:L - Memory corruption could expose limited process memory, but  \nconfidentiality impact is not demonstrated.\nI:L - Process memory corruption can affect integrity, but reliable code  \nexecution is not established.\nA:H - The clearest supported outcome is a crash during config parsing.\nImpact: Moderate. This issue could otherwise resemble an Important remote  \ndenial-of-service flaw, but Red Hat rates such issues lower when they are  \nless easily exploited or depend on narrower conditions. Here, exploitation  \nrequires a multi-step SendTargets discovery workflow, persistence of the  \ndiscovered record, and a later reread of that record. The strongest  \nsupported outcome is denial of service or other memory corruption, while  \ncode execution remains unproven.\nEmbargo: no\nReason: The available evidence supports a multi-step,  \nconfiguration-dependent denial-of-service or memory-corruption issue rather  \nthan a demonstrated remote code execution flaw, so embargoed handling does  \nnot appear necessary.\nAcknowledgement: Aisle Research\nVulnerability Details: `idbm_recinfo_config()` copies config keys and  \nvalues into fixed stack buffers without bounds checks:\n```c\nwhile (*nl && !isspace(c = *nl) && *nl != '=') {\n*(name+i) = *nl; i+; nl+;\n}\n...\nwhile (*nl) {\n*(value+i) = *nl; i+; nl+;\n}\n```\nIn this code path, `name` and `value` are 128-byte and 256-byte stack  \nbuffers, so an injected key longer than 128 bytes or a value longer than  \n256 bytes can corrupt stack memory.\nDuring SendTargets discovery, attacker-controlled `TargetName` text is  \ncopied into the node record and later written back to disk without  \ncontrol-character filtering:\n```c\nstrlcpy(rec->name, targetname, TARGET_NAME_MAXLEN);\n...\nif (strlen(info[i].value))\nfprintf(f, \"%s = %s\\n\", info[i].name, info[i].value);\n```\n`process_sendtargets_response()` treats `TargetName=` records as discovery  \ninput, and `add_target_record()` accepts names up to `TARGET_NAME_MAXLEN`.  \nThat limit is 255 bytes in this package, which is still enough to carry a  \nnewline plus a key longer than the 128-byte `name` buffer. A `TargetName`  \nsuch as `iqn.test\\nAAAA...=B` can therefore split the serialized  \n`node.name` entry into two lines and inject a second config line.\nPersistent SendTargets discovery stores discovered node records unless  \nnonpersistent mode is used, and later discovery update/login or explicit  \nnode operations reread those saved records. The 2048-byte line buffer in  \n`idbm_recinfo_config()` does not prevent this because the injected line  \nonly needs to exceed 128 bytes for the key or 256 bytes for the value.  \nBased on the available evidence, the supported impact is a crash or other  \nmemory corruption during reparsing. Reliable code execution is plausible  \nbut not established.\nSteps to reproduce:\n1. Run a malicious SendTargets responder, or intercept discovery traffic,  \nand return a `TargetName` value containing a newline and an oversized  \ninjected key, for example `TargetName=iqn.test\\nAAAAAAAA...(>=129 chars)=B`.\n2. Run SendTargets discovery in its normal persistent mode. The default  \n`iscsiadm -m discovery ...` workflow persists records unless nonpersistent  \nmode is selected.\n3. Inspect the saved node record and confirm that it contains both the  \nexpected `node.name = ...` line and an injected `AAAA...=B` line.\n4. Trigger any operation that rereads the node record, such as discovery  \nupdate, node update, or login.\n5. Observe a crash during parsing. With instrumentation enabled, the  \noverflow should be reported in `idbm_recinfo_config()`.\nMitigation: Until a fix is available, avoid persistent SendTargets  \ndiscovery against untrusted or interceptable networks. Where operationally  \nacceptable, use nonpersistent discovery, and remove node records created  \nfrom untrusted discovery results before later update or login operations.\nProposed Fix: The fix should address both parts of the chain: bound the key  \nand value copies in `idbm_recinfo_config()` and reject control characters  \nin `TargetName` before persistence.\n```diff\ndiff --git a/usr/idbm.c b/usr/idbm.c\n@@ void idbm_recinfo_config(recinfo_t *info, FILE *f)\n      while (*nl && !isspace(c = *nl) && *nl != '=') {\n\n              *(name+i) = *nl; i+; nl+;\n\n      }\n+       while (*nl && !isspace(c = *nl) && *nl != '=') {\n+               if (i >= NAME_MAXVAL - 1) {\n+                       log_warning(\"Config file line %d key too long\",  \nline_number);\n+                       break;\n+               }\n+               name[i++] = *nl++;\n+       }\n@@\n\n      while (*nl) {\n\n              *(value+i) = *nl; i+; nl+;\n\n      }\n+       while (*nl) {\n+               if (i >= VALUE_MAXVAL - 1) {\n+                       log_warning(\"Config file line %d value too long\",  \nline_number);\n+                       break;\n+               }\n+               value[i++] = *nl++;\n+       }\n\n\ndiff --git a/usr/discovery.c b/usr/discovery.c\n@@ static int add_target_record(char *name, char *end, discovery_rec_t  \n*drec,\nwhile ((nul < end) && (*nul != '\\0'))\nnul++;\n+       for (char *p = name; p < nul; p++) {\n+               if (*p == '\\n' || *p == '\\r' || (unsigned char)*p < 0x20) {\n+                       log_error(\"TargetName contains control characters,  \nrejecting\");\n+                       return 0;\n+               }\n+       }\n```\n------\nThis report was generated using AI technology. Always review AI-generated  \ncontent prior to use",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.9-18.gita65a472.fc40",
+                        "fixed": "6.2.1.9-21.gita65a472.fc40",
+                        "identifier": "fc40"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
+                        "identifier": "fc41"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
+                        "identifier": "fc42"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-2.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-18725": {
+                "cve_id": "CVE-2026-18725",
+                "title": "CVE-2026-18725",
+                "description": "open-iscsi: open-iscsi: Out-of-bounds access in iscsiuio ICMPv6 echo handling",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.9-18.gita65a472.fc40",
+                        "fixed": "6.2.1.9-21.gita65a472.fc40",
+                        "identifier": "fc40"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
+                        "identifier": "fc41"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
+                        "identifier": "fc42"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-2.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-18726": {
+                "cve_id": "CVE-2026-18726",
+                "title": "A flaw was found in open-iscsi. This vulnerability allows a remot ...",
+                "description": "A flaw was found in open-iscsi. This vulnerability allows a remote attacker on the same local network segment to cause a Denial of Service (DoS) in the iscsiuio daemon. By sending a specially crafted Internet Control Message Protocol version 6 (ICMPv6) Router Advertisement with a zero-length option, the attacker can trigger an infinite loop. This leads to sustained CPU usage, rendering the daemon unresponsive and impacting system availability. A secondary risk of out-of-bounds reads exists with a short IPv6 payload, though no memory corruption or data exposure has been confirmed.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.9-18.gita65a472.fc40",
+                        "fixed": "6.2.1.9-21.gita65a472.fc40",
+                        "identifier": "fc40"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
+                        "identifier": "fc41"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
+                        "identifier": "fc42"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-2.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-18727": {
+                "cve_id": "CVE-2026-18727",
+                "title": "A flaw was found in open-iscsi's iscsiuio component. This vulnera ...",
+                "description": "A flaw was found in open-iscsi's iscsiuio component. This vulnerability involves an integer underflow and out-of-bounds read during Dynamic Host Configuration Protocol for IPv6 (DHCPv6) packet parsing. Specifically, crafted DHCPv6 Advertise traffic with a short User Datagram Protocol (UDP) length can cause the DHCPv6 payload length to underflow. An unauthenticated attacker on an adjacent network segment can exploit this by sending specially crafted IPv6 UDP traffic while the client is in an active DHCPv6 exchange, leading to a denial of service due to a process crash or service disruption.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.9-18.gita65a472.fc40",
+                        "fixed": "6.2.1.9-21.gita65a472.fc40",
+                        "identifier": "fc40"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
+                        "identifier": "fc41"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
+                        "identifier": "fc42"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-2.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-18728": {
+                "cve_id": "CVE-2026-18728",
+                "title": "A flaw was found in open-iscsi. An integer underflow vulnerabilit ...",
+                "description": "A flaw was found in open-iscsi. An integer underflow vulnerability in the `iscsiuio` component, specifically during IPv4 Dynamic Host Configuration Protocol (DHCP) parsing, allows a remote attacker on the same local network segment to cause a denial of service. By sending a specially crafted IPv4/UDP DHCP reply, the attacker can trigger an out-of-bounds read, leading to the `iscsiuio` process crashing. This issue affects systems where `iscsiuio` is actively handling IPv4 DHCP traffic.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.9-18.gita65a472.fc40",
+                        "fixed": "6.2.1.9-21.gita65a472.fc40",
+                        "identifier": "fc40"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
+                        "identifier": "fc41"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
+                        "identifier": "fc42"
+                    },
+                    {
+                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
+                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-2.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-44943": {
+                "cve_id": "CVE-2026-44943",
+                "title": "An Improper Limitation of a Pathname to a Restricted Directory (' ...",
+                "description": "An Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal') vulnerability in open-iscsi allows remote MITM attackers\u00a0 to create root-owned files outside the database and inject lines into the record.\n\n\n\n\n\n\nThis issue affects open-iscsi: from through 668ca1df9c9a1e9bdd5c999ae1d67c9c8909237e.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.2.1.9-22.gita65a472.0.4.el10",
+                        "fixed": "0:6.2.1.11-1.git4b3e853.0.1.el10_2.2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-44944": {
+                "cve_id": "CVE-2026-44944",
+                "title": "An Incorrect Authorization vulnerability in open-iscsi allows\u00a0unp ...",
+                "description": "An Incorrect Authorization vulnerability in open-iscsi allows\u00a0unprivilidged local users to use the isscsiuio control socket.\n\n\n\n\n\n\nThis issue affects open-iscsi: from ? through 668ca1df9c9a1e9bdd5c999ae1d67c9c8909237e.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.2.1.9-22.gita65a472.0.4.el10",
+                        "fixed": "0:6.2.1.11-1.git4b3e853.0.1.el10_2.2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
+                        "fixed": "6.2.1.12-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            }
+        },
+        "7": {
             "CVE-2026-18724": {
                 "cve_id": "CVE-2026-18724",
                 "title": "open-iscsi: open-iscsi: Stack buffer overflow in idbm record parsing",
@@ -923,261 +1178,6 @@
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-1.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            }
-        },
-        "10": {
-            "CVE-2026-18724": {
-                "cve_id": "CVE-2026-18724",
-                "title": "open-iscsi: open-iscsi: Stack buffer overflow in idbm record parsing",
-                "description": "AI_ONLY_REPORT\npackage: iscsi-initiator-utils-6.2.1.11-0.git4b3e853.el10\n------\nSummary: Stack Buffer Overflow in idbm_recinfo_config via Malicious iSCSI  \nTarget: a crafted SendTargets TargetName can inject an extra configuration  \nline into a persisted node record and later cause a stack buffer overflow  \nwhen that record is reparsed.\nRequirements to exploit: An attacker must control an iSCSI target or tamper  \nwith SendTargets discovery traffic, return a crafted `TargetName`  \ncontaining a newline and oversized injected key or value data, have the  \nvictim run persistent discovery, and then trigger a later node-record read  \nsuch as update or login.\nComponent affected: `iscsi-initiator-utils`;  \n`usr/idbm.c:idbm_recinfo_config`, with attacker-controlled input reaching  \nit through SendTargets handling in `usr/discovery.c` and later record  \nserialization in `usr/idbm.c`.\nVersion affected: `iscsi-initiator-utils-6.2.1.11-0.git4b3e853.el10`\nPatch available: no released package fix established; proposed patch  \nincluded below\nVersion fixed: unknown\nUpstream coordination: Not notified.\nCVSS: CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:L/I:L/A:H - 7.5 (HIGH)\nAV:N - The attacker can supply the malicious data over the network in a  \nSendTargets discovery response.\nAC:L - The target-name length cap still leaves enough room for a newline  \nplus an overlong injected key; no race or unusual memory state is required.\nPR:N - No prior access to the initiator is required.\nUI:R - The victim must run SendTargets discovery that persists records  \nand later read the saved record.\nS:U - The impact remains within the initiator-side component that parses  \nand stores its own database records.\nC:L - Memory corruption could expose limited process memory, but  \nconfidentiality impact is not demonstrated.\nI:L - Process memory corruption can affect integrity, but reliable code  \nexecution is not established.\nA:H - The clearest supported outcome is a crash during config parsing.\nImpact: Moderate. This issue could otherwise resemble an Important remote  \ndenial-of-service flaw, but Red Hat rates such issues lower when they are  \nless easily exploited or depend on narrower conditions. Here, exploitation  \nrequires a multi-step SendTargets discovery workflow, persistence of the  \ndiscovered record, and a later reread of that record. The strongest  \nsupported outcome is denial of service or other memory corruption, while  \ncode execution remains unproven.\nEmbargo: no\nReason: The available evidence supports a multi-step,  \nconfiguration-dependent denial-of-service or memory-corruption issue rather  \nthan a demonstrated remote code execution flaw, so embargoed handling does  \nnot appear necessary.\nAcknowledgement: Aisle Research\nVulnerability Details: `idbm_recinfo_config()` copies config keys and  \nvalues into fixed stack buffers without bounds checks:\n```c\nwhile (*nl && !isspace(c = *nl) && *nl != '=') {\n*(name+i) = *nl; i+; nl+;\n}\n...\nwhile (*nl) {\n*(value+i) = *nl; i+; nl+;\n}\n```\nIn this code path, `name` and `value` are 128-byte and 256-byte stack  \nbuffers, so an injected key longer than 128 bytes or a value longer than  \n256 bytes can corrupt stack memory.\nDuring SendTargets discovery, attacker-controlled `TargetName` text is  \ncopied into the node record and later written back to disk without  \ncontrol-character filtering:\n```c\nstrlcpy(rec->name, targetname, TARGET_NAME_MAXLEN);\n...\nif (strlen(info[i].value))\nfprintf(f, \"%s = %s\\n\", info[i].name, info[i].value);\n```\n`process_sendtargets_response()` treats `TargetName=` records as discovery  \ninput, and `add_target_record()` accepts names up to `TARGET_NAME_MAXLEN`.  \nThat limit is 255 bytes in this package, which is still enough to carry a  \nnewline plus a key longer than the 128-byte `name` buffer. A `TargetName`  \nsuch as `iqn.test\\nAAAA...=B` can therefore split the serialized  \n`node.name` entry into two lines and inject a second config line.\nPersistent SendTargets discovery stores discovered node records unless  \nnonpersistent mode is used, and later discovery update/login or explicit  \nnode operations reread those saved records. The 2048-byte line buffer in  \n`idbm_recinfo_config()` does not prevent this because the injected line  \nonly needs to exceed 128 bytes for the key or 256 bytes for the value.  \nBased on the available evidence, the supported impact is a crash or other  \nmemory corruption during reparsing. Reliable code execution is plausible  \nbut not established.\nSteps to reproduce:\n1. Run a malicious SendTargets responder, or intercept discovery traffic,  \nand return a `TargetName` value containing a newline and an oversized  \ninjected key, for example `TargetName=iqn.test\\nAAAAAAAA...(>=129 chars)=B`.\n2. Run SendTargets discovery in its normal persistent mode. The default  \n`iscsiadm -m discovery ...` workflow persists records unless nonpersistent  \nmode is selected.\n3. Inspect the saved node record and confirm that it contains both the  \nexpected `node.name = ...` line and an injected `AAAA...=B` line.\n4. Trigger any operation that rereads the node record, such as discovery  \nupdate, node update, or login.\n5. Observe a crash during parsing. With instrumentation enabled, the  \noverflow should be reported in `idbm_recinfo_config()`.\nMitigation: Until a fix is available, avoid persistent SendTargets  \ndiscovery against untrusted or interceptable networks. Where operationally  \nacceptable, use nonpersistent discovery, and remove node records created  \nfrom untrusted discovery results before later update or login operations.\nProposed Fix: The fix should address both parts of the chain: bound the key  \nand value copies in `idbm_recinfo_config()` and reject control characters  \nin `TargetName` before persistence.\n```diff\ndiff --git a/usr/idbm.c b/usr/idbm.c\n@@ void idbm_recinfo_config(recinfo_t *info, FILE *f)\n      while (*nl && !isspace(c = *nl) && *nl != '=') {\n\n              *(name+i) = *nl; i+; nl+;\n\n      }\n+       while (*nl && !isspace(c = *nl) && *nl != '=') {\n+               if (i >= NAME_MAXVAL - 1) {\n+                       log_warning(\"Config file line %d key too long\",  \nline_number);\n+                       break;\n+               }\n+               name[i++] = *nl++;\n+       }\n@@\n\n      while (*nl) {\n\n              *(value+i) = *nl; i+; nl+;\n\n      }\n+       while (*nl) {\n+               if (i >= VALUE_MAXVAL - 1) {\n+                       log_warning(\"Config file line %d value too long\",  \nline_number);\n+                       break;\n+               }\n+               value[i++] = *nl++;\n+       }\n\n\ndiff --git a/usr/discovery.c b/usr/discovery.c\n@@ static int add_target_record(char *name, char *end, discovery_rec_t  \n*drec,\nwhile ((nul < end) && (*nul != '\\0'))\nnul++;\n+       for (char *p = name; p < nul; p++) {\n+               if (*p == '\\n' || *p == '\\r' || (unsigned char)*p < 0x20) {\n+                       log_error(\"TargetName contains control characters,  \nrejecting\");\n+                       return 0;\n+               }\n+       }\n```\n------\nThis report was generated using AI technology. Always review AI-generated  \ncontent prior to use",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.2.1.9-18.gita65a472.fc40",
-                        "fixed": "6.2.1.9-21.gita65a472.fc40",
-                        "identifier": "fc40"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
-                        "identifier": "fc41"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
-                        "identifier": "fc42"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
-                        "identifier": "fc44"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-2.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            },
-            "CVE-2026-18725": {
-                "cve_id": "CVE-2026-18725",
-                "title": "CVE-2026-18725",
-                "description": "open-iscsi: open-iscsi: Out-of-bounds access in iscsiuio ICMPv6 echo handling",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.2.1.9-18.gita65a472.fc40",
-                        "fixed": "6.2.1.9-21.gita65a472.fc40",
-                        "identifier": "fc40"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
-                        "identifier": "fc41"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
-                        "identifier": "fc42"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
-                        "identifier": "fc44"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-2.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            },
-            "CVE-2026-18726": {
-                "cve_id": "CVE-2026-18726",
-                "title": "A flaw was found in open-iscsi. This vulnerability allows a remot ...",
-                "description": "A flaw was found in open-iscsi. This vulnerability allows a remote attacker on the same local network segment to cause a Denial of Service (DoS) in the iscsiuio daemon. By sending a specially crafted Internet Control Message Protocol version 6 (ICMPv6) Router Advertisement with a zero-length option, the attacker can trigger an infinite loop. This leads to sustained CPU usage, rendering the daemon unresponsive and impacting system availability. A secondary risk of out-of-bounds reads exists with a short IPv6 payload, though no memory corruption or data exposure has been confirmed.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.2.1.9-18.gita65a472.fc40",
-                        "fixed": "6.2.1.9-21.gita65a472.fc40",
-                        "identifier": "fc40"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
-                        "identifier": "fc41"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
-                        "identifier": "fc42"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
-                        "identifier": "fc44"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-2.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            },
-            "CVE-2026-18727": {
-                "cve_id": "CVE-2026-18727",
-                "title": "A flaw was found in open-iscsi's iscsiuio component. This vulnera ...",
-                "description": "A flaw was found in open-iscsi's iscsiuio component. This vulnerability involves an integer underflow and out-of-bounds read during Dynamic Host Configuration Protocol for IPv6 (DHCPv6) packet parsing. Specifically, crafted DHCPv6 Advertise traffic with a short User Datagram Protocol (UDP) length can cause the DHCPv6 payload length to underflow. An unauthenticated attacker on an adjacent network segment can exploit this by sending specially crafted IPv6 UDP traffic while the client is in an active DHCPv6 exchange, leading to a denial of service due to a process crash or service disruption.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.2.1.9-18.gita65a472.fc40",
-                        "fixed": "6.2.1.9-21.gita65a472.fc40",
-                        "identifier": "fc40"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
-                        "identifier": "fc41"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
-                        "identifier": "fc42"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
-                        "identifier": "fc44"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-2.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            },
-            "CVE-2026-18728": {
-                "cve_id": "CVE-2026-18728",
-                "title": "A flaw was found in open-iscsi. An integer underflow vulnerabilit ...",
-                "description": "A flaw was found in open-iscsi. An integer underflow vulnerability in the `iscsiuio` component, specifically during IPv4 Dynamic Host Configuration Protocol (DHCP) parsing, allows a remote attacker on the same local network segment to cause a denial of service. By sending a specially crafted IPv4/UDP DHCP reply, the attacker can trigger an out-of-bounds read, leading to the `iscsiuio` process crashing. This issue affects systems where `iscsiuio` is actively handling IPv4 DHCP traffic.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.2.1.9-18.gita65a472.fc40",
-                        "fixed": "6.2.1.9-21.gita65a472.fc40",
-                        "identifier": "fc40"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc41",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc41",
-                        "identifier": "fc41"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc42.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc42",
-                        "identifier": "fc42"
-                    },
-                    {
-                        "introduced": "6.2.1.10-0.gitd0f04ae.fc43.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc43.2",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc44.3",
-                        "fixed": "6.2.1.11-1.git4b3e853.fc44.3",
-                        "identifier": "fc44"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-2.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            },
-            "CVE-2026-44943": {
-                "cve_id": "CVE-2026-44943",
-                "title": "An Improper Limitation of a Pathname to a Restricted Directory (' ...",
-                "description": "An Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal') vulnerability in open-iscsi allows remote MITM attackers\u00a0 to create root-owned files outside the database and inject lines into the record.\n\n\n\n\n\n\nThis issue affects open-iscsi: from through 668ca1df9c9a1e9bdd5c999ae1d67c9c8909237e.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.2.1.9-22.gita65a472.0.4.el10",
-                        "fixed": "0:6.2.1.11-1.git4b3e853.0.1.el10_2.2",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
-                        "fixed": "6.2.1.12-1.fc45",
-                        "identifier": "fc45"
-                    }
-                ]
-            },
-            "CVE-2026-44944": {
-                "cve_id": "CVE-2026-44944",
-                "title": "An Incorrect Authorization vulnerability in open-iscsi allows\u00a0unp ...",
-                "description": "An Incorrect Authorization vulnerability in open-iscsi allows\u00a0unprivilidged local users to use the isscsiuio control socket.\n\n\n\n\n\n\nThis issue affects open-iscsi: from ? through 668ca1df9c9a1e9bdd5c999ae1d67c9c8909237e.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.2.1.9-22.gita65a472.0.4.el10",
-                        "fixed": "0:6.2.1.11-1.git4b3e853.0.1.el10_2.2",
-                        "identifier": "el10"
-                    },
                     {
                         "introduced": "6.2.1.11-0.git4b3e853.fc45.4",
                         "fixed": "6.2.1.12-1.fc45",
