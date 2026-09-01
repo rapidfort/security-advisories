@@ -36077,6 +36077,19 @@
                     }
                 ]
             },
+            "CVE-2025-54505": {
+                "cve_id": "CVE-2025-54505",
+                "title": "A transient execution vulnerability within AMD CPUs may allow a l ...",
+                "description": "A transient execution vulnerability within AMD CPUs may allow a local user-privileged attacker to leak data via the floating point divisor unit, potentially resulting in loss of confidentiality.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2025-68170": {
                 "cve_id": "CVE-2025-68170",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -68577,6 +68590,45 @@
                     }
                 ]
             },
+            "CVE-2026-80590": {
+                "cve_id": "CVE-2026-80590",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ninet: frags: strip GSO state from fragments before reassembly\n\nA virtio_net_hdr (tun/tap, or AF_PACKET with PACKET_VNET_HDR) can mark\nan IPv4 or IPv6 fragment as GSO; nothing relates gso_type to frag_off.\ninet_frag_reasm_prepare()/inet_frag_reasm_finish() keep the first\nfragment's skb as the head of the reassembled datagram, including its\nshinfo->gso_size/gso_type/gso_segs, and chain the remaining fragments\non frag_list with whatever linear/paged layout they arrived with.\n\nAfter ip_defrag() (ip_local_deliver(), nf_defrag_ipv4, ...) the\nreassembled skb therefore still claims to be GSO (SKB_GSO_DODGY), and\nthe next software segmentation point - udp_rcv_segment() on local\ndelivery, validate_xmit_skb(), or the ip_finish_output_gso() slow\npath - hands it to skb_segment(). skb_segment()'s frag_list walk\nassumes GRO-shaped input and hits one of its BUG_ON()s. Two writes to\na tap by an unprivileged user in its own userns are enough:\n\n  kernel BUG at net/core/skbuff.c:4899!\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 0 UID: 1000 PID: 82 Comm: poc Not tainted 7.2.0-pentest+ #2\n  RIP: 0010:skb_segment+0x20ca/0x48b0\n  Call Trace:\n   <TASK>\n   __udp_gso_segment+0x29a/0x27d0\n   udp4_ufo_fragment+0x458/0x6c0\n   inet_gso_segment+0x429/0x1340\n   skb_mac_gso_segment+0x233/0x4f0\n   __skb_gso_segment+0x308/0x660\n   udp_queue_rcv_skb+0x440/0xad0\n   udp_unicast_rcv_skb+0xc7/0x2c0\n   udp_rcv+0x16ce/0x2260\n   ip_protocol_deliver_rcu+0x197/0x2d0\n   ip_local_deliver+0x430/0x690\n   ip_rcv+0x16f/0x1f0\n   __netif_receive_skb_one_core+0x15e/0x1c0\n   __netif_receive_skb+0x1e/0x110\n   netif_receive_skb+0xf6/0x5c0\n   tun_rx_batched.isra.0+0x3ab/0x790\n   tun_get_user+0x17c3/0x3550\n   tun_chr_write_iter+0xba/0x1b0\n   vfs_write+0x646/0x1130\n   </TASK>\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nThis runs with BH disabled, so it is a panic rather than an oops. The\nsame is reachable with CAP_NET_RAW in a netns where a defrag point\nprecedes a GSO point, and from a guest whose VMM forwards\nvirtio_net_hdr to a tap. The SKB_GSO_DODGY frag_list checks added by\ncommit 3dcbdb134f32 (\"net: gso: Fix skb_segment splat when splitting\ngso_size mangled skb having linear-headed frag_list\") and by\ncommit 9e4b7a99a03a (\"net: gso: fix panic on frag_list with mixed head\nalloc types\") do not cover it: page-backed heads skip them, and kmalloc\nheads skip them when gso_size == skb_headlen(head), which the sender\ncontrols.\n\nAn skb entering a frag queue is an IP fragment by definition and\ncannot legitimately carry GSO state: GRO does not merge fragments and\nthe stack segments before it fragments, so only untrusted sources are\naffected. This has been reachable since\ncommit f43798c27684 (\"tun: Allow GSO using virtio_net_hdr\"), the first\npath that let userspace attach GSO metadata to an IP fragment. Reset\nthe GSO fields of every fragment as it is queued, in\ninet_frag_queue_insert(), which IPv4, IPv6, nf_conntrack_reasm and\n6lowpan reassembly share; then neither the head nor the frag_list\nmembers of the reassembled skb carry them (the members matter too:\nthe ip_do_fragment()/ip6_fragment() fast paths send them out as they\nare). The head may remain CHECKSUM_PARTIAL; that is already accepted\non receive and resolved by skb_checksum_help() in\nip_do_fragment()/ip6_fragment() on forward.\n\nTested on top of net.git (dc4b95b8fee9), x86_64: the tap reproducer\nabove, two further IPv4 frag_list geometries that reach\nBUG_ON(i >= nfrags) and BUG_ON(!list_skb->head_frag), and an IPv6\nfragment-header variant (udp6_ufo_fragment()) each panic the unpatched\nkernel; with this patch all four datagrams are delivered intact and\nnothing is logged.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80593": {
+                "cve_id": "CVE-2026-80593",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhwmon: (asus_atk0110) Check package count before accessing element\n\natk_ec_present() walks the management group package returned by the GGRP\nACPI method and, for each sub-package, reads its first element:\n\n\tid = &obj->package.elements[0];\n\tif (id->type != ACPI_TYPE_INTEGER)\n\nwithout checking that the sub-package is non-empty.  ACPICA allocates the\nelement array with exactly package.count entries, so for a sub-package\nwith a zero count this reads past the allocation.\n\nThe sibling function atk_debugfs_ggrp_open() performs the same access but\nskips empty packages with a package.count check first.  Add the same\ncheck to atk_ec_present() so a malformed firmware package cannot trigger\nan out-of-bounds read.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80602": {
+                "cve_id": "CVE-2026-80602",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf/x86/amd/lbr: Fix kernel address leakage\n\nA user-only branch stack can contain branches that originate from\nthe kernel. As a result, kernel addresses are exposed to user space\neven when PERF_SAMPLE_BRANCH_USER is requested. On AMD processors\nsupporting X86_FEATURE_AMD_LBR_V2, perf can still report SYSRET/ERET\nentries for which the branch-from addresses are in the kernel.\n\nE.g.\n\n  $ perf record -e cycles -o - -j any,save_type,u -- \\\n        perf bench syscall basic --loop 1000 | \\\n        perf script -i - -F brstack|tr ' ' '\\n'| \\\n        grep -E '0x[89a-f][0-9a-f]{15}'\n\n  ...\n  0xffffffff81001268/0x717a90a38f1a/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a39157/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a2c628/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a41b60/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a260db/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a260db/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a8bef1c30/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a8e4d3c90/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  ...\n\nThe reason is that the hardware filter only considers the privilege\nlevel applicable to the branch target. Extend software filtering to\nalso validate the branch-from addresses against br_sel, so that any\nbranch record whose branch-from address is in the kernel is dropped\nwhen PERF_SAMPLE_BRANCH_USER is requested.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-80603": {
                 "cve_id": "CVE-2026-80603",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -68595,6 +68647,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Avoid double-unpin of DOORBELL/MMIO BOs on free\n\namdgpu_amdkfd_gpuvm_free_memory_of_gpu() unpinned DOORBELL and MMIO\nremap BOs (which are pinned at allocation time) before checking whether\nthe BO is still mapped to the GPU. When the BO is still mapped, the\nfunction returns -EBUSY and leaves the BO alive, but it has already\nbeen unpinned. The BO is then unpinned again when it is finally freed\nduring process teardown, triggering a ttm_bo_unpin() underflow warning:\n\n  WARNING: CPU: 18 PID: 15066 at ttm/ttm_bo.c:650 amdttm_bo_unpin+0x6d/0x80 [amdttm]\n  Workqueue: kfd_process_wq kfd_process_wq_release [amdgpu]\n  RIP: 0010:amdttm_bo_unpin+0x6d/0x80 [amdttm]\n  Call Trace:\n   amdgpu_bo_unpin+0x1a/0x90 [amdgpu]\n   amdgpu_amdkfd_gpuvm_unpin_bo+0x31/0xb0 [amdgpu]\n   amdgpu_amdkfd_gpuvm_free_memory_of_gpu+0x3bf/0x460 [amdgpu]\n   kfd_process_free_outstanding_kfd_bos+0xd4/0x170 [amdgpu]\n   kfd_process_wq_release+0x109/0x1b0 [amdgpu]\n   process_one_work+0x1e2/0x3b0\n   worker_thread+0x50/0x3a0\n   kthread+0xdd/0x100\n   ret_from_fork+0x29/0x50\n\nMove the unpin after the mapped_to_gpu_memory check so it only happens\nonce we are committed to freeing the BO.\n\n(cherry picked from commit 927c5b2defb9b09856444d94bebfd056a002bd75)",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80622": {
+                "cve_id": "CVE-2026-80622",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nchar: tlclk: fix use-after-free in tlclk_cleanup()\n\nThis patch improves the module cleanup process in the tlclk driver to\nprevent potential use-after-free and race conditions.\n\nCurrently, the file_operations structure does not specify the .owner\nfield, which could allow the module to be unloaded while user-space\nprocesses are still interacting with the device. Additionally, the\ntlclk_cleanup() function frees the alarm_events memory before ensuring\nthat blocked processes in the waitqueue are fully awakened and that the\nswitchover_timer has completed.\n\nTo address these cases, this patch:\n- Sets '.owner = THIS_MODULE' in tlclk_fops to safely defer module\n  unloading while the device is in use.\n- Updates tlclk_cleanup() to explicitly wake up all blocked readers\n  (wake_up_all), properly release hardware I/O regions, and safely\n  delete the timer (timer_delete_sync) prior to freeing memory.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -68629,6 +68694,58 @@
                     }
                 ]
             },
+            "CVE-2026-80636": {
+                "cve_id": "CVE-2026-80636",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: conntrack: revert ct extension genid infrastructure\n\nThis infrastructure is not used anymore after moving ct timeout and\nhelper to use datapath refcount to track object use.\n\nRevert commit c56716c69ce1 (\"netfilter: extensions: introduce extension\ngenid count\") this patch disables all ct extensions (leading to NULL)\nfor unconfirmed conntracks, when this is only targeted at ct helper and\nct timeout. There is also codebase that dereferences the ct extension\nwithout checking for NULL which could lead to crash.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80643": {
+                "cve_id": "CVE-2026-80643",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nEDAC/igen6: Fix call trace due to missing release()\n\nWhen unloading the igen6_edac driver, there is a call trace:\n\n  Device '(null)' does not have a release() function, it is broken and must be fixed.\n  See Documentation/core-api/kobject.rst.\n  WARNING: drivers/base/core.c:2567 at device_release+0x84/0x90, CPU#5: rmmod/127209\n  ...\n  RIP: 0010:device_release+0x84/0x90\n  Call Trace:\n   <TASK>\n   kobject_put+0x8c/0x220\n   put_device+0x17/0x30\n   igen6_unregister_mcis+0xa2/0xe0 [igen6_edac]\n   igen6_remove+0x82/0xb0 [igen6_edac]\n   ...\n\nFix the call trace by providing empty release() functions for the\nmemory controller devices.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80652": {
+                "cve_id": "CVE-2026-80652",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: ccp - Treat zero-length cert chain as query for blob lengths\n\nWhen handling a PDH export, treat a zero-length userspace cert chain buffer\nas a request to query the length of the relevant blobs.  Failure to account\nfor the zero-length buffer trips a BUG_ON() when running with\nCONFIG_DEBUG_VIRTUAL=y due to trying to get the physical address of the\nZERO_SIZE_PTR (returned by kzalloc() on the bogus allocation).\n\n   kernel BUG at arch/x86/mm/physaddr.c:28 !\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 30 UID: 0 PID: 28580 Comm: syz.2.18 Kdump: loaded\n  Tainted: G        W           6.18.16-smp-DEV #1 NONE\n  Tainted: [W]=WARN\n  Hardware name: Google, Inc. Arcadia_IT_80/Arcadia_IT_80, BIOS 12.62.0-0 11/19/2025\n   RIP: 0010:__phys_addr+0x16a/0x180 arch/x86/mm/physaddr.c:28\n  RSP: 0018:ffffc9008329fc80 EFLAGS: 00010293\n  RAX: ffffffff8179110a RBX: 0000778000000010 RCX: ffff8884e6992600\n  RDX: 0000000000000000 RSI: 0000000080000010 RDI: 0000778000000010\n  RBP: ffffc9008329fdf0 R08: 0000000000000dc0 R09: 00000000ffffffff\n  R10: dffffc0000000000 R11: fffffbfff126d297 R12: dffffc0000000000\n  R13: 1ffff92010653fc8 R14: 0000000080000010 R15: dffffc0000000000\n  FS:  0000555556bec9c0(0000) GS:ffff88aa4ce1c000(0000) knlGS:0000000000000000\n  CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n  CR2: 00007fd3159e7000 CR3: 00000004fbc44000 CR4: 0000000000350ef0\n  Call Trace:\n   <TASK>\n    [<ffffffff853d3869>] sev_ioctl_do_pdh_export+0x559/0x7a0 drivers/crypto/ccp/sev-dev.c:2308\n    [<ffffffff853d1fdd>] sev_ioctl+0x2cd/0x480 drivers/crypto/ccp/sev-dev.c:2556\n    [<ffffffff82549ebc>] vfs_ioctl fs/ioctl.c:52 [inline]\n    [<ffffffff82549ebc>] __do_sys_ioctl fs/ioctl.c:598 [inline]\n    [<ffffffff82549ebc>] __se_sys_ioctl+0xfc/0x170 fs/ioctl.c:584\n    [<ffffffff8630115f>] do_syscall_x64 arch/x86/entry/syscall_64.c:64 [inline]\n    [<ffffffff8630115f>] do_syscall_64+0x9f/0xf40 arch/x86/entry/syscall_64.c:98\n   [<ffffffff81000136>] entry_SYSCALL_64_after_hwframe+0x76/0x7e\n  RIP: 0033:0x7fd3158eac39\n   </TASK>\n\nThankfully, the bug is benign outside of CONFIG_DEBUG_VIRTUAL=y as getting\nthe physical address is just arithmetic, and the PSP errors out before\ntrying to write to the garbage address (which it must, otherwise querying\nthe blob lengths would clobber memory at pfn=0).",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80653": {
+                "cve_id": "CVE-2026-80653",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: hisi_sas: Add slave_destroy interface for v3 hw\n\nWARNING is triggered when executing link reset of remote PHY and rmmod\nSAS driver simultaneously. Following is the WARNING log:\n\nWARNING: CPU: 61 PID: 21818 at drivers/base/core.c:1347 __device_links_no_driver+0xb4/0xc0\n Call trace:\n  __device_links_no_driver+0xb4/0xc0\n  device_links_driver_cleanup+0xb0/0xfc\n  __device_release_driver+0x198/0x23c\n  device_release_driver+0x38/0x50\n  bus_remove_device+0x130/0x140\n  device_del+0x184/0x434\n  __scsi_remove_device+0x118/0x150\n  scsi_remove_target+0x1bc/0x240\n  sas_rphy_remove+0x90/0x94\n  sas_rphy_delete+0x24/0x3c\n  sas_destruct_devices+0x64/0xa0 [libsas]\n  sas_revalidate_domain+0xe4/0x150 [libsas]\n  process_one_work+0x1e0/0x46c\n  worker_thread+0x15c/0x464\n  kthread+0x160/0x170\n  ret_from_fork+0x10/0x20\n ---[ end trace 71e059eb58f85d4a ]---\n\nDuring SAS phy up, link->status is set to DL_STATE_AVAILABLE in\ndevice_links_driver_bound, then this setting influences\n__device_links_no_driver() before driver rmmod and caused WARNING.\n\nAdd the slave_destroy interface to make sure link is removed after flush\nworkque.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-80664": {
                 "cve_id": "CVE-2026-80664",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -68655,11 +68772,76 @@
                     }
                 ]
             },
+            "CVE-2026-80669": {
+                "cve_id": "CVE-2026-80669",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Disable xfrm_decode_session hook attachment\n\nBPF LSM programs can currently attach to xfrm_decode_session(). That\nhook may return an error, but security_skb_classify_flow() calls it\nfrom a void path and triggers BUG_ON() if an error is returned.\n\nDisable BPF attachment to the hook to prevent a BPF LSM program from\nturning packet classification into a full panic.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80676": {
+                "cve_id": "CVE-2026-80676",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nDrivers: hv: vmbus: use generic driver_override infrastructure\n\nWhen a driver is probed through __driver_attach(), the bus' match()\ncallback is called without the device lock held, thus accessing the\ndriver_override field without a lock, which can cause a UAF.\n\nFix this by using the driver-core driver_override infrastructure taking\ncare of proper locking internally.\n\nNote that calling match() from __driver_attach() without the device lock\nheld is intentional. [1]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-80678": {
                 "cve_id": "CVE-2026-80678",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: imx: Fix slave registration race and error handling\n\nIn i2c_imx_reg_slave(), the slave pointer was assigned before\npm_runtime_resume_and_get().  If pm_runtime_resume_and_get() failed,\nthe error path returned without clearing i2c_imx->slave, leaving it\nnon-NULL and causing all subsequent registration attempts to fail\nwith -EBUSY.\n\nAdditionally, because this driver uses a shared IRQ, the interrupt\nhandler i2c_imx_isr() can execute concurrently and, after acquiring\nslave_lock, dereference i2c_imx->slave.  The previous fix attempt\nadded a lockless i2c_imx->slave = NULL on the error path, but that\ncould race with the ISR under the lock and still cause a NULL pointer\ndereference.\n\nFix both issues by deferring the assignment of i2c_imx->slave and\ni2c_imx->last_slave_event to after a successful resume, and by\nperforming the assignment inside the slave_lock critical section.\nThis guarantees that the slave pointer is never left stale on the\nerror path and is always valid when observed by the interrupt handler.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80679": {
+                "cve_id": "CVE-2026-80679",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/dasd: Fix potential NULL pointer dereference\n\ndasd_release_space() checks the implementation of the is_ese()\ndiscipline function before calling it to determine if a given device is\nan ESE DASD.\n\nThe current usage of the logical AND operator will lead to a NULL\npointer dereference as the function is called even if the function\npointer is NULL.\n\nFix this by using the logical OR operator.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80681": {
+                "cve_id": "CVE-2026-80681",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvxlan: re-fetch eth header after route_shortcircuit()\n\nBefore route_shortcircuit(), the eth header pointer is cached from eth_hdr(skb).\n\nInside route_shortcircuit(), pskb_may_pull() can be called, which may\nreallocate skb->head.\n\nIn this case, returning to vxlan_xmit() leaves the cached eth pointer pointing to\nfreed memory, leading to a use-after-free when dereferencing eth->h_dest.\n\nFix this by updating eth = eth_hdr(skb) after calling route_shortcircuit().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80684": {
+                "cve_id": "CVE-2026-80684",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: s390: pci: Fix NULL dereference on AIBV allocation failure\n\nThe airq_iv_create() can return NULL on failure, but the return value was\nnever checked. If it fails, zdev->aibv will be NULL and fail when\ndereferenced in kvm_zpci_set_airq(). Add a NULL check and free the\npreviously allocated AISB bit and zdev->aisb on failure.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -68711,6 +68893,19 @@
                 "cve_id": "CVE-2026-80707",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: j1939: transport: j1939_session_fresh_new(): initialize receive buffer\n\nZero the allocated buffer in j1939_session_fresh_new() to ensure it\ncontains no residual data.\n\nWhile there is a potential performance impact if users allocate maximum\nsized ETP buffers, most real-world use cases are not noticeably affected\nsince the maximum known buffer size is typically around 65K.\n\n[mkl: add Message-ID]",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80710": {
+                "cve_id": "CVE-2026-80710",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/dasd: Fix undersized format-check buffer\n\nfmt_buffer_size in dasd_eckd_check_device_format() is declared as\nint, even though one of the multiplicands, sizeof(struct eckd_count),\nis a size_t. The expression\n\n    trkcount * rpt_max * sizeof(struct eckd_count)\n\nis therefore correctly evaluated at 64-bit width, but the result is\nsilently truncated when it is stored back into the 32-bit\nfmt_buffer_size variable. For a sufficiently large track range\n(start_unit/stop_unit are caller-controlled) this truncation\nyields a buffer size far smaller than the number of tracks actually\nrequested. kzalloc() then succeeds with an undersized allocation,\nwhile the subsequent channel program build still operates on the\nuntruncated track count and writes past the end of that buffer.\n\nCompute the buffer size with check_mul_overflow() and keep it in a\nsize_t, so that a value that no longer fits results in -EINVAL\ninstead of a silently truncated allocation size.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -107709,6 +107904,45 @@
                     }
                 ]
             },
+            "CVE-2026-80590": {
+                "cve_id": "CVE-2026-80590",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ninet: frags: strip GSO state from fragments before reassembly\n\nA virtio_net_hdr (tun/tap, or AF_PACKET with PACKET_VNET_HDR) can mark\nan IPv4 or IPv6 fragment as GSO; nothing relates gso_type to frag_off.\ninet_frag_reasm_prepare()/inet_frag_reasm_finish() keep the first\nfragment's skb as the head of the reassembled datagram, including its\nshinfo->gso_size/gso_type/gso_segs, and chain the remaining fragments\non frag_list with whatever linear/paged layout they arrived with.\n\nAfter ip_defrag() (ip_local_deliver(), nf_defrag_ipv4, ...) the\nreassembled skb therefore still claims to be GSO (SKB_GSO_DODGY), and\nthe next software segmentation point - udp_rcv_segment() on local\ndelivery, validate_xmit_skb(), or the ip_finish_output_gso() slow\npath - hands it to skb_segment(). skb_segment()'s frag_list walk\nassumes GRO-shaped input and hits one of its BUG_ON()s. Two writes to\na tap by an unprivileged user in its own userns are enough:\n\n  kernel BUG at net/core/skbuff.c:4899!\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 0 UID: 1000 PID: 82 Comm: poc Not tainted 7.2.0-pentest+ #2\n  RIP: 0010:skb_segment+0x20ca/0x48b0\n  Call Trace:\n   <TASK>\n   __udp_gso_segment+0x29a/0x27d0\n   udp4_ufo_fragment+0x458/0x6c0\n   inet_gso_segment+0x429/0x1340\n   skb_mac_gso_segment+0x233/0x4f0\n   __skb_gso_segment+0x308/0x660\n   udp_queue_rcv_skb+0x440/0xad0\n   udp_unicast_rcv_skb+0xc7/0x2c0\n   udp_rcv+0x16ce/0x2260\n   ip_protocol_deliver_rcu+0x197/0x2d0\n   ip_local_deliver+0x430/0x690\n   ip_rcv+0x16f/0x1f0\n   __netif_receive_skb_one_core+0x15e/0x1c0\n   __netif_receive_skb+0x1e/0x110\n   netif_receive_skb+0xf6/0x5c0\n   tun_rx_batched.isra.0+0x3ab/0x790\n   tun_get_user+0x17c3/0x3550\n   tun_chr_write_iter+0xba/0x1b0\n   vfs_write+0x646/0x1130\n   </TASK>\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nThis runs with BH disabled, so it is a panic rather than an oops. The\nsame is reachable with CAP_NET_RAW in a netns where a defrag point\nprecedes a GSO point, and from a guest whose VMM forwards\nvirtio_net_hdr to a tap. The SKB_GSO_DODGY frag_list checks added by\ncommit 3dcbdb134f32 (\"net: gso: Fix skb_segment splat when splitting\ngso_size mangled skb having linear-headed frag_list\") and by\ncommit 9e4b7a99a03a (\"net: gso: fix panic on frag_list with mixed head\nalloc types\") do not cover it: page-backed heads skip them, and kmalloc\nheads skip them when gso_size == skb_headlen(head), which the sender\ncontrols.\n\nAn skb entering a frag queue is an IP fragment by definition and\ncannot legitimately carry GSO state: GRO does not merge fragments and\nthe stack segments before it fragments, so only untrusted sources are\naffected. This has been reachable since\ncommit f43798c27684 (\"tun: Allow GSO using virtio_net_hdr\"), the first\npath that let userspace attach GSO metadata to an IP fragment. Reset\nthe GSO fields of every fragment as it is queued, in\ninet_frag_queue_insert(), which IPv4, IPv6, nf_conntrack_reasm and\n6lowpan reassembly share; then neither the head nor the frag_list\nmembers of the reassembled skb carry them (the members matter too:\nthe ip_do_fragment()/ip6_fragment() fast paths send them out as they\nare). The head may remain CHECKSUM_PARTIAL; that is already accepted\non receive and resolved by skb_checksum_help() in\nip_do_fragment()/ip6_fragment() on forward.\n\nTested on top of net.git (dc4b95b8fee9), x86_64: the tap reproducer\nabove, two further IPv4 frag_list geometries that reach\nBUG_ON(i >= nfrags) and BUG_ON(!list_skb->head_frag), and an IPv6\nfragment-header variant (udp6_ufo_fragment()) each panic the unpatched\nkernel; with this patch all four datagrams are delivered intact and\nnothing is logged.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-80593": {
+                "cve_id": "CVE-2026-80593",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhwmon: (asus_atk0110) Check package count before accessing element\n\natk_ec_present() walks the management group package returned by the GGRP\nACPI method and, for each sub-package, reads its first element:\n\n\tid = &obj->package.elements[0];\n\tif (id->type != ACPI_TYPE_INTEGER)\n\nwithout checking that the sub-package is non-empty.  ACPICA allocates the\nelement array with exactly package.count entries, so for a sub-package\nwith a zero count this reads past the allocation.\n\nThe sibling function atk_debugfs_ggrp_open() performs the same access but\nskips empty packages with a package.count check first.  Add the same\ncheck to atk_ec_present() so a malformed firmware package cannot trigger\nan out-of-bounds read.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-80602": {
+                "cve_id": "CVE-2026-80602",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf/x86/amd/lbr: Fix kernel address leakage\n\nA user-only branch stack can contain branches that originate from\nthe kernel. As a result, kernel addresses are exposed to user space\neven when PERF_SAMPLE_BRANCH_USER is requested. On AMD processors\nsupporting X86_FEATURE_AMD_LBR_V2, perf can still report SYSRET/ERET\nentries for which the branch-from addresses are in the kernel.\n\nE.g.\n\n  $ perf record -e cycles -o - -j any,save_type,u -- \\\n        perf bench syscall basic --loop 1000 | \\\n        perf script -i - -F brstack|tr ' ' '\\n'| \\\n        grep -E '0x[89a-f][0-9a-f]{15}'\n\n  ...\n  0xffffffff81001268/0x717a90a38f1a/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a39157/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a2c628/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a41b60/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a260db/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a90a260db/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a8bef1c30/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  0xffffffff81001268/0x717a8e4d3c90/M/-/-/0/ERET/NON_SPEC_CORRECT_PATH\n  ...\n\nThe reason is that the hardware filter only considers the privilege\nlevel applicable to the branch target. Extend software filtering to\nalso validate the branch-from addresses against br_sel, so that any\nbranch record whose branch-from address is in the kernel is dropped\nwhen PERF_SAMPLE_BRANCH_USER is requested.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-80603": {
                 "cve_id": "CVE-2026-80603",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -107735,6 +107969,19 @@
                     }
                 ]
             },
+            "CVE-2026-80622": {
+                "cve_id": "CVE-2026-80622",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nchar: tlclk: fix use-after-free in tlclk_cleanup()\n\nThis patch improves the module cleanup process in the tlclk driver to\nprevent potential use-after-free and race conditions.\n\nCurrently, the file_operations structure does not specify the .owner\nfield, which could allow the module to be unloaded while user-space\nprocesses are still interacting with the device. Additionally, the\ntlclk_cleanup() function frees the alarm_events memory before ensuring\nthat blocked processes in the waitqueue are fully awakened and that the\nswitchover_timer has completed.\n\nTo address these cases, this patch:\n- Sets '.owner = THIS_MODULE' in tlclk_fops to safely defer module\n  unloading while the device is in use.\n- Updates tlclk_cleanup() to explicitly wake up all blocked readers\n  (wake_up_all), properly release hardware I/O regions, and safely\n  delete the timer (timer_delete_sync) prior to freeing memory.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-80628": {
                 "cve_id": "CVE-2026-80628",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -107748,11 +107995,76 @@
                     }
                 ]
             },
+            "CVE-2026-80643": {
+                "cve_id": "CVE-2026-80643",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nEDAC/igen6: Fix call trace due to missing release()\n\nWhen unloading the igen6_edac driver, there is a call trace:\n\n  Device '(null)' does not have a release() function, it is broken and must be fixed.\n  See Documentation/core-api/kobject.rst.\n  WARNING: drivers/base/core.c:2567 at device_release+0x84/0x90, CPU#5: rmmod/127209\n  ...\n  RIP: 0010:device_release+0x84/0x90\n  Call Trace:\n   <TASK>\n   kobject_put+0x8c/0x220\n   put_device+0x17/0x30\n   igen6_unregister_mcis+0xa2/0xe0 [igen6_edac]\n   igen6_remove+0x82/0xb0 [igen6_edac]\n   ...\n\nFix the call trace by providing empty release() functions for the\nmemory controller devices.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-80652": {
+                "cve_id": "CVE-2026-80652",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: ccp - Treat zero-length cert chain as query for blob lengths\n\nWhen handling a PDH export, treat a zero-length userspace cert chain buffer\nas a request to query the length of the relevant blobs.  Failure to account\nfor the zero-length buffer trips a BUG_ON() when running with\nCONFIG_DEBUG_VIRTUAL=y due to trying to get the physical address of the\nZERO_SIZE_PTR (returned by kzalloc() on the bogus allocation).\n\n   kernel BUG at arch/x86/mm/physaddr.c:28 !\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 30 UID: 0 PID: 28580 Comm: syz.2.18 Kdump: loaded\n  Tainted: G        W           6.18.16-smp-DEV #1 NONE\n  Tainted: [W]=WARN\n  Hardware name: Google, Inc. Arcadia_IT_80/Arcadia_IT_80, BIOS 12.62.0-0 11/19/2025\n   RIP: 0010:__phys_addr+0x16a/0x180 arch/x86/mm/physaddr.c:28\n  RSP: 0018:ffffc9008329fc80 EFLAGS: 00010293\n  RAX: ffffffff8179110a RBX: 0000778000000010 RCX: ffff8884e6992600\n  RDX: 0000000000000000 RSI: 0000000080000010 RDI: 0000778000000010\n  RBP: ffffc9008329fdf0 R08: 0000000000000dc0 R09: 00000000ffffffff\n  R10: dffffc0000000000 R11: fffffbfff126d297 R12: dffffc0000000000\n  R13: 1ffff92010653fc8 R14: 0000000080000010 R15: dffffc0000000000\n  FS:  0000555556bec9c0(0000) GS:ffff88aa4ce1c000(0000) knlGS:0000000000000000\n  CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n  CR2: 00007fd3159e7000 CR3: 00000004fbc44000 CR4: 0000000000350ef0\n  Call Trace:\n   <TASK>\n    [<ffffffff853d3869>] sev_ioctl_do_pdh_export+0x559/0x7a0 drivers/crypto/ccp/sev-dev.c:2308\n    [<ffffffff853d1fdd>] sev_ioctl+0x2cd/0x480 drivers/crypto/ccp/sev-dev.c:2556\n    [<ffffffff82549ebc>] vfs_ioctl fs/ioctl.c:52 [inline]\n    [<ffffffff82549ebc>] __do_sys_ioctl fs/ioctl.c:598 [inline]\n    [<ffffffff82549ebc>] __se_sys_ioctl+0xfc/0x170 fs/ioctl.c:584\n    [<ffffffff8630115f>] do_syscall_x64 arch/x86/entry/syscall_64.c:64 [inline]\n    [<ffffffff8630115f>] do_syscall_64+0x9f/0xf40 arch/x86/entry/syscall_64.c:98\n   [<ffffffff81000136>] entry_SYSCALL_64_after_hwframe+0x76/0x7e\n  RIP: 0033:0x7fd3158eac39\n   </TASK>\n\nThankfully, the bug is benign outside of CONFIG_DEBUG_VIRTUAL=y as getting\nthe physical address is just arithmetic, and the PSP errors out before\ntrying to write to the garbage address (which it must, otherwise querying\nthe blob lengths would clobber memory at pfn=0).",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-80664": {
                 "cve_id": "CVE-2026-80664",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: xt_nat: reject unsupported target families\n\nxt_nat SNAT and DNAT target handlers assume IP-family conntrack state\nis present and can dereference a NULL pointer when instantiated from an\nunsupported family through nft_compat. A bridge-family compat rule can\ntherefore trigger a NULL-dereference in nf_nat_setup_info().\n\nReject non-IP families in xt_nat_checkentry() so unsupported targets\ncannot be installed. Keep NFPROTO_INET allowed for valid inet NAT\ncompat users and leave the runtime fast path unchanged.\n\n[ The crash was fixed via\n  9dbba7e694ec (\"netfilter: nft_compat: ebtables emulation must reject non-bridge targets\"),\n  so this patch is no longer critical.\n  Nevertheless, NAT is only relevant for ipv4/ipv6, so this extra\n  family check is a good idea in any case. ]",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-80669": {
+                "cve_id": "CVE-2026-80669",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Disable xfrm_decode_session hook attachment\n\nBPF LSM programs can currently attach to xfrm_decode_session(). That\nhook may return an error, but security_skb_classify_flow() calls it\nfrom a void path and triggers BUG_ON() if an error is returned.\n\nDisable BPF attachment to the hook to prevent a BPF LSM program from\nturning packet classification into a full panic.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-80676": {
+                "cve_id": "CVE-2026-80676",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nDrivers: hv: vmbus: use generic driver_override infrastructure\n\nWhen a driver is probed through __driver_attach(), the bus' match()\ncallback is called without the device lock held, thus accessing the\ndriver_override field without a lock, which can cause a UAF.\n\nFix this by using the driver-core driver_override infrastructure taking\ncare of proper locking internally.\n\nNote that calling match() from __driver_attach() without the device lock\nheld is intentional. [1]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-80684": {
+                "cve_id": "CVE-2026-80684",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: s390: pci: Fix NULL dereference on AIBV allocation failure\n\nThe airq_iv_create() can return NULL on failure, but the return value was\nnever checked. If it fails, zdev->aibv will be NULL and fail when\ndereferenced in kvm_zpci_set_airq(). Add a NULL check and free the\npreviously allocated AISB bit and zdev->aisb on failure.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {

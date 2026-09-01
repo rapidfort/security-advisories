@@ -1,163 +1,85 @@
 {
     "package_name": "erlang-cowboy",
     "advisory": {
+        "10": {
+            "CVE-2026-43972": {
+                "cve_id": "CVE-2026-43972",
+                "title": "Origin Validation Error vulnerability in ninenines gun (gun_http2 ...",
+                "description": "Origin Validation Error vulnerability in ninenines gun (gun_http2 module) allows cross-origin cookie injection via unvalidated HTTP/2 PUSH_PROMISE authority.\n\nIn gun_http2:push_promise_frame/7, the :authority pseudo-header from an incoming PUSH_PROMISE frame is stored verbatim into the promised stream record without checking that it matches the connection's origin. When gun_http2:headers_frame/9 later processes the response headers for the promised stream, it calls gun_cookies:set_cookie_header/7 with the unvalidated server-supplied authority before any status branching and before user code can act. This violates RFC 7540 \u00a710.6 / RFC 9113 \u00a78.4, which require receivers to treat as a protocol error any push for a resource the server is not authoritative for.\n\nA malicious or compromised HTTP/2 server can plant cookies scoped to arbitrary third-party domains into the client's shared cookie store. This enables session fixation attacks against those domains and, if the planted cookie overrides a legitimate session token, may result in account takeover. No user interaction beyond making a normal HTTP/2 request to the attacker-controlled server is required.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.16.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.16.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-43973": {
+                "cve_id": "CVE-2026-43973",
+                "title": "Uncontrolled Resource Consumption vulnerability in ninenines gun  ...",
+                "description": "Uncontrolled Resource Consumption vulnerability in ninenines gun (gun_http module) allows a malicious server to exhaust client memory via unbounded HTTP/1.1 response buffering.\n\nIn gun_http:handle/5, three clauses accumulate incoming TCP data into the connection's buffer field using binary concatenation with no upper-bound check: the head clause appends data until the \\r\\n\\r\\n header terminator is found; the body_chunked clause appends data whenever cow_http_te:stream_chunked/2 returns a more result indicating an incomplete chunk boundary; and the body_trailer clause appends data until the trailing \\r\\n\\r\\n is found. In each case, when the expected terminator never arrives, the enlarged binary is stored back into state and the process waits for more data, with no configurable or hard-coded ceiling on buffer size.\n\nA malicious or compromised server can exploit this by sending a partial response that never completes. For example, a response may begin with HTTP/1.1 200 OK\\r\\nX-Pad:  followed by an unbounded stream of arbitrary bytes, never sending the header terminator. The gun connection process will continuously append the incoming data to its buffer, causing unbounded heap growth. Because BEAM imposes no per-process heap limit by default, a single malicious connection can exhaust all available memory on the node, causing a node-wide out-of-memory crash.\n\nThis issue affects gun: from 1.0.0 before 2.4.0.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.16.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.16.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-43974": {
+                "cve_id": "CVE-2026-43974",
+                "title": "Unexpected Status Code or Return Value vulnerability in ninenines ...",
+                "description": "Unexpected Status Code or Return Value vulnerability in ninenines gun (gun_http module) allows a malicious HTTP server to force the client into raw protocol mode via an unsolicited 101 Switching Protocols response.\n\nIn gun_http:handle_inform/8, when a 101 Switching Protocols response is received over HTTP/1.1, the function verifies only that the Upgrade header is syntactically valid and that the stream reference is a plain reference(). It does not check whether the client ever sent an Upgrade or Connection: upgrade header on the corresponding request. Because this check is absent, any 101 response (solicited or not) causes gun to dispatch a gun_upgrade message to the caller and transition the entire connection to raw protocol mode.\n\nA malicious or compromised HTTP server can send an unsolicited 101 response to any HTTP/1.1 request, causing the gun client to abandon HTTP framing for that connection. Once in raw mode, gun_raw applies no flow control (flow=infinity) and re-arms socket active mode after every received packet, so the server can flood the client with arbitrary bytes. These are forwarded as unbounded gun_data messages to the owner process, exhausting its mailbox and BEAM memory, ultimately crashing the VM.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.16.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.16.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-59248": {
+                "cve_id": "CVE-2026-59248",
+                "title": "Allocation of resources without limits vulnerability in ninenines ...",
+                "description": "Allocation of resources without limits vulnerability in ninenines cowlib allows an unauthenticated remote HTTP/2 or HTTP/3 peer to exhaust memory on the vulnerable server (or client) and cause a denial of service.\n\nThe HPACK and QPACK prefixed-integer decoder cow_hpack_common:dec_big_int/3 in src/cow_hpack_common.hrl (invoked from cow_hpack:decode/2 in src/cow_hpack.erl and from cow_qpack:decode_field_section/3 in src/cow_qpack.erl) reads continuation octets until it sees one whose high bit is clear, evaluating Int + (Value bsl M) at each step with the shift M growing by seven per octet. No limit is enforced on the number of continuation octets, on the resulting bit width, or on the value; the decoder consumes whatever encoded length the peer supplies.\n\nBecause Erlang integers are immutable, each intermediate Value bsl M and each accumulator update allocates a fresh bignum whose digit width grows linearly with the number of octets processed so far. Summed across the whole decode, the transient bignum digit materialization is on the order of the square of the encoded length. A single maximal HPACK indexed representation carried inside one HTTP/2 HEADERS plus one CONTINUATION frame at Cowboy's default max_frame_size_received can force hundreds of megabytes of transient allocation and garbage-collection churn before the resulting header-table index is rejected as invalid. Repeated or concurrent connections multiply the pressure and can drive the Erlang VM to memory exhaustion.\n\nCowlib is the HTTP parser used by Cowboy, RabbitMQ's management plugin, and other Erlang and Elixir HTTP/2 and HTTP/3 servers and clients, so any exposed endpoint that accepts HPACK or QPACK from an untrusted peer is reachable.\n\nThis issue affects cowlib: from 2.0.0 before 2.19.0.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.18.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.18.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            }
+        },
         "7": {
-            "CVE-2026-43972": {
-                "cve_id": "CVE-2026-43972",
-                "title": "Origin Validation Error vulnerability in ninenines gun (gun_http2 ...",
-                "description": "Origin Validation Error vulnerability in ninenines gun (gun_http2 module) allows cross-origin cookie injection via unvalidated HTTP/2 PUSH_PROMISE authority.\n\nIn gun_http2:push_promise_frame/7, the :authority pseudo-header from an incoming PUSH_PROMISE frame is stored verbatim into the promised stream record without checking that it matches the connection's origin. When gun_http2:headers_frame/9 later processes the response headers for the promised stream, it calls gun_cookies:set_cookie_header/7 with the unvalidated server-supplied authority before any status branching and before user code can act. This violates RFC 7540 \u00a710.6 / RFC 9113 \u00a78.4, which require receivers to treat as a protocol error any push for a resource the server is not authoritative for.\n\nA malicious or compromised HTTP/2 server can plant cookies scoped to arbitrary third-party domains into the client's shared cookie store. This enables session fixation attacks against those domains and, if the planted cookie overrides a legitimate session token, may result in account takeover. No user interaction beyond making a normal HTTP/2 request to the attacker-controlled server is required.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.16.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.16.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            },
-            "CVE-2026-43973": {
-                "cve_id": "CVE-2026-43973",
-                "title": "Uncontrolled Resource Consumption vulnerability in ninenines gun  ...",
-                "description": "Uncontrolled Resource Consumption vulnerability in ninenines gun (gun_http module) allows a malicious server to exhaust client memory via unbounded HTTP/1.1 response buffering.\n\nIn gun_http:handle/5, three clauses accumulate incoming TCP data into the connection's buffer field using binary concatenation with no upper-bound check: the head clause appends data until the \\r\\n\\r\\n header terminator is found; the body_chunked clause appends data whenever cow_http_te:stream_chunked/2 returns a more result indicating an incomplete chunk boundary; and the body_trailer clause appends data until the trailing \\r\\n\\r\\n is found. In each case, when the expected terminator never arrives, the enlarged binary is stored back into state and the process waits for more data, with no configurable or hard-coded ceiling on buffer size.\n\nA malicious or compromised server can exploit this by sending a partial response that never completes. For example, a response may begin with HTTP/1.1 200 OK\\r\\nX-Pad:  followed by an unbounded stream of arbitrary bytes, never sending the header terminator. The gun connection process will continuously append the incoming data to its buffer, causing unbounded heap growth. Because BEAM imposes no per-process heap limit by default, a single malicious connection can exhaust all available memory on the node, causing a node-wide out-of-memory crash.\n\nThis issue affects gun: from 1.0.0 before 2.4.0.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.16.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.16.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            },
-            "CVE-2026-43974": {
-                "cve_id": "CVE-2026-43974",
-                "title": "Unexpected Status Code or Return Value vulnerability in ninenines ...",
-                "description": "Unexpected Status Code or Return Value vulnerability in ninenines gun (gun_http module) allows a malicious HTTP server to force the client into raw protocol mode via an unsolicited 101 Switching Protocols response.\n\nIn gun_http:handle_inform/8, when a 101 Switching Protocols response is received over HTTP/1.1, the function verifies only that the Upgrade header is syntactically valid and that the stream reference is a plain reference(). It does not check whether the client ever sent an Upgrade or Connection: upgrade header on the corresponding request. Because this check is absent, any 101 response (solicited or not) causes gun to dispatch a gun_upgrade message to the caller and transition the entire connection to raw protocol mode.\n\nA malicious or compromised HTTP server can send an unsolicited 101 response to any HTTP/1.1 request, causing the gun client to abandon HTTP framing for that connection. Once in raw mode, gun_raw applies no flow control (flow=infinity) and re-arms socket active mode after every received packet, so the server can flood the client with arbitrary bytes. These are forwarded as unbounded gun_data messages to the owner process, exhausting its mailbox and BEAM memory, ultimately crashing the VM.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.16.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.16.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            },
-            "CVE-2026-59248": {
-                "cve_id": "CVE-2026-59248",
-                "title": "Allocation of resources without limits vulnerability in ninenines ...",
-                "description": "Allocation of resources without limits vulnerability in ninenines cowlib allows an unauthenticated remote HTTP/2 or HTTP/3 peer to exhaust memory on the vulnerable server (or client) and cause a denial of service.\n\nThe HPACK and QPACK prefixed-integer decoder cow_hpack_common:dec_big_int/3 in src/cow_hpack_common.hrl (invoked from cow_hpack:decode/2 in src/cow_hpack.erl and from cow_qpack:decode_field_section/3 in src/cow_qpack.erl) reads continuation octets until it sees one whose high bit is clear, evaluating Int + (Value bsl M) at each step with the shift M growing by seven per octet. No limit is enforced on the number of continuation octets, on the resulting bit width, or on the value; the decoder consumes whatever encoded length the peer supplies.\n\nBecause Erlang integers are immutable, each intermediate Value bsl M and each accumulator update allocates a fresh bignum whose digit width grows linearly with the number of octets processed so far. Summed across the whole decode, the transient bignum digit materialization is on the order of the square of the encoded length. A single maximal HPACK indexed representation carried inside one HTTP/2 HEADERS plus one CONTINUATION frame at Cowboy's default max_frame_size_received can force hundreds of megabytes of transient allocation and garbage-collection churn before the resulting header-table index is rejected as invalid. Repeated or concurrent connections multiply the pressure and can drive the Erlang VM to memory exhaustion.\n\nCowlib is the HTTP parser used by Cowboy, RabbitMQ's management plugin, and other Erlang and Elixir HTTP/2 and HTTP/3 servers and clients, so any exposed endpoint that accepts HPACK or QPACK from an untrusted peer is reachable.\n\nThis issue affects cowlib: from 2.0.0 before 2.19.0.",
-                "severity": "LOW",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.18.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.18.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            }
-        },
-        "9": {
-            "CVE-2026-43972": {
-                "cve_id": "CVE-2026-43972",
-                "title": "Origin Validation Error vulnerability in ninenines gun (gun_http2 ...",
-                "description": "Origin Validation Error vulnerability in ninenines gun (gun_http2 module) allows cross-origin cookie injection via unvalidated HTTP/2 PUSH_PROMISE authority.\n\nIn gun_http2:push_promise_frame/7, the :authority pseudo-header from an incoming PUSH_PROMISE frame is stored verbatim into the promised stream record without checking that it matches the connection's origin. When gun_http2:headers_frame/9 later processes the response headers for the promised stream, it calls gun_cookies:set_cookie_header/7 with the unvalidated server-supplied authority before any status branching and before user code can act. This violates RFC 7540 \u00a710.6 / RFC 9113 \u00a78.4, which require receivers to treat as a protocol error any push for a resource the server is not authoritative for.\n\nA malicious or compromised HTTP/2 server can plant cookies scoped to arbitrary third-party domains into the client's shared cookie store. This enables session fixation attacks against those domains and, if the planted cookie overrides a legitimate session token, may result in account takeover. No user interaction beyond making a normal HTTP/2 request to the attacker-controlled server is required.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.16.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.16.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            },
-            "CVE-2026-43973": {
-                "cve_id": "CVE-2026-43973",
-                "title": "Uncontrolled Resource Consumption vulnerability in ninenines gun  ...",
-                "description": "Uncontrolled Resource Consumption vulnerability in ninenines gun (gun_http module) allows a malicious server to exhaust client memory via unbounded HTTP/1.1 response buffering.\n\nIn gun_http:handle/5, three clauses accumulate incoming TCP data into the connection's buffer field using binary concatenation with no upper-bound check: the head clause appends data until the \\r\\n\\r\\n header terminator is found; the body_chunked clause appends data whenever cow_http_te:stream_chunked/2 returns a more result indicating an incomplete chunk boundary; and the body_trailer clause appends data until the trailing \\r\\n\\r\\n is found. In each case, when the expected terminator never arrives, the enlarged binary is stored back into state and the process waits for more data, with no configurable or hard-coded ceiling on buffer size.\n\nA malicious or compromised server can exploit this by sending a partial response that never completes. For example, a response may begin with HTTP/1.1 200 OK\\r\\nX-Pad:  followed by an unbounded stream of arbitrary bytes, never sending the header terminator. The gun connection process will continuously append the incoming data to its buffer, causing unbounded heap growth. Because BEAM imposes no per-process heap limit by default, a single malicious connection can exhaust all available memory on the node, causing a node-wide out-of-memory crash.\n\nThis issue affects gun: from 1.0.0 before 2.4.0.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.16.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.16.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            },
-            "CVE-2026-43974": {
-                "cve_id": "CVE-2026-43974",
-                "title": "Unexpected Status Code or Return Value vulnerability in ninenines ...",
-                "description": "Unexpected Status Code or Return Value vulnerability in ninenines gun (gun_http module) allows a malicious HTTP server to force the client into raw protocol mode via an unsolicited 101 Switching Protocols response.\n\nIn gun_http:handle_inform/8, when a 101 Switching Protocols response is received over HTTP/1.1, the function verifies only that the Upgrade header is syntactically valid and that the stream reference is a plain reference(). It does not check whether the client ever sent an Upgrade or Connection: upgrade header on the corresponding request. Because this check is absent, any 101 response (solicited or not) causes gun to dispatch a gun_upgrade message to the caller and transition the entire connection to raw protocol mode.\n\nA malicious or compromised HTTP server can send an unsolicited 101 response to any HTTP/1.1 request, causing the gun client to abandon HTTP framing for that connection. Once in raw mode, gun_raw applies no flow control (flow=infinity) and re-arms socket active mode after every received packet, so the server can flood the client with arbitrary bytes. These are forwarded as unbounded gun_data messages to the owner process, exhausting its mailbox and BEAM memory, ultimately crashing the VM.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.16.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.16.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            },
-            "CVE-2026-59248": {
-                "cve_id": "CVE-2026-59248",
-                "title": "Allocation of resources without limits vulnerability in ninenines ...",
-                "description": "Allocation of resources without limits vulnerability in ninenines cowlib allows an unauthenticated remote HTTP/2 or HTTP/3 peer to exhaust memory on the vulnerable server (or client) and cause a denial of service.\n\nThe HPACK and QPACK prefixed-integer decoder cow_hpack_common:dec_big_int/3 in src/cow_hpack_common.hrl (invoked from cow_hpack:decode/2 in src/cow_hpack.erl and from cow_qpack:decode_field_section/3 in src/cow_qpack.erl) reads continuation octets until it sees one whose high bit is clear, evaluating Int + (Value bsl M) at each step with the shift M growing by seven per octet. No limit is enforced on the number of continuation octets, on the resulting bit width, or on the value; the decoder consumes whatever encoded length the peer supplies.\n\nBecause Erlang integers are immutable, each intermediate Value bsl M and each accumulator update allocates a fresh bignum whose digit width grows linearly with the number of octets processed so far. Summed across the whole decode, the transient bignum digit materialization is on the order of the square of the encoded length. A single maximal HPACK indexed representation carried inside one HTTP/2 HEADERS plus one CONTINUATION frame at Cowboy's default max_frame_size_received can force hundreds of megabytes of transient allocation and garbage-collection churn before the resulting header-table index is rejected as invalid. Repeated or concurrent connections multiply the pressure and can drive the Erlang VM to memory exhaustion.\n\nCowlib is the HTTP parser used by Cowboy, RabbitMQ's management plugin, and other Erlang and Elixir HTTP/2 and HTTP/3 servers and clients, so any exposed endpoint that accepts HPACK or QPACK from an untrusted peer is reachable.\n\nThis issue affects cowlib: from 2.0.0 before 2.19.0.",
-                "severity": "LOW",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.12.0-7.fc43",
-                        "fixed": "2.18.0-1.fc43",
-                        "identifier": "fc43"
-                    },
-                    {
-                        "introduced": "0",
-                        "fixed": "2.18.0-1.fc44",
-                        "identifier": "fc44"
-                    }
-                ]
-            }
-        },
-        "6": {
             "CVE-2026-43972": {
                 "cve_id": "CVE-2026-43972",
                 "title": "Origin Validation Error vulnerability in ninenines gun (gun_http2 ...",
@@ -313,6 +235,84 @@
                 ]
             }
         },
+        "6": {
+            "CVE-2026-43972": {
+                "cve_id": "CVE-2026-43972",
+                "title": "Origin Validation Error vulnerability in ninenines gun (gun_http2 ...",
+                "description": "Origin Validation Error vulnerability in ninenines gun (gun_http2 module) allows cross-origin cookie injection via unvalidated HTTP/2 PUSH_PROMISE authority.\n\nIn gun_http2:push_promise_frame/7, the :authority pseudo-header from an incoming PUSH_PROMISE frame is stored verbatim into the promised stream record without checking that it matches the connection's origin. When gun_http2:headers_frame/9 later processes the response headers for the promised stream, it calls gun_cookies:set_cookie_header/7 with the unvalidated server-supplied authority before any status branching and before user code can act. This violates RFC 7540 \u00a710.6 / RFC 9113 \u00a78.4, which require receivers to treat as a protocol error any push for a resource the server is not authoritative for.\n\nA malicious or compromised HTTP/2 server can plant cookies scoped to arbitrary third-party domains into the client's shared cookie store. This enables session fixation attacks against those domains and, if the planted cookie overrides a legitimate session token, may result in account takeover. No user interaction beyond making a normal HTTP/2 request to the attacker-controlled server is required.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.16.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.16.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-43973": {
+                "cve_id": "CVE-2026-43973",
+                "title": "Uncontrolled Resource Consumption vulnerability in ninenines gun  ...",
+                "description": "Uncontrolled Resource Consumption vulnerability in ninenines gun (gun_http module) allows a malicious server to exhaust client memory via unbounded HTTP/1.1 response buffering.\n\nIn gun_http:handle/5, three clauses accumulate incoming TCP data into the connection's buffer field using binary concatenation with no upper-bound check: the head clause appends data until the \\r\\n\\r\\n header terminator is found; the body_chunked clause appends data whenever cow_http_te:stream_chunked/2 returns a more result indicating an incomplete chunk boundary; and the body_trailer clause appends data until the trailing \\r\\n\\r\\n is found. In each case, when the expected terminator never arrives, the enlarged binary is stored back into state and the process waits for more data, with no configurable or hard-coded ceiling on buffer size.\n\nA malicious or compromised server can exploit this by sending a partial response that never completes. For example, a response may begin with HTTP/1.1 200 OK\\r\\nX-Pad:  followed by an unbounded stream of arbitrary bytes, never sending the header terminator. The gun connection process will continuously append the incoming data to its buffer, causing unbounded heap growth. Because BEAM imposes no per-process heap limit by default, a single malicious connection can exhaust all available memory on the node, causing a node-wide out-of-memory crash.\n\nThis issue affects gun: from 1.0.0 before 2.4.0.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.16.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.16.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-43974": {
+                "cve_id": "CVE-2026-43974",
+                "title": "Unexpected Status Code or Return Value vulnerability in ninenines ...",
+                "description": "Unexpected Status Code or Return Value vulnerability in ninenines gun (gun_http module) allows a malicious HTTP server to force the client into raw protocol mode via an unsolicited 101 Switching Protocols response.\n\nIn gun_http:handle_inform/8, when a 101 Switching Protocols response is received over HTTP/1.1, the function verifies only that the Upgrade header is syntactically valid and that the stream reference is a plain reference(). It does not check whether the client ever sent an Upgrade or Connection: upgrade header on the corresponding request. Because this check is absent, any 101 response (solicited or not) causes gun to dispatch a gun_upgrade message to the caller and transition the entire connection to raw protocol mode.\n\nA malicious or compromised HTTP server can send an unsolicited 101 response to any HTTP/1.1 request, causing the gun client to abandon HTTP framing for that connection. Once in raw mode, gun_raw applies no flow control (flow=infinity) and re-arms socket active mode after every received packet, so the server can flood the client with arbitrary bytes. These are forwarded as unbounded gun_data messages to the owner process, exhausting its mailbox and BEAM memory, ultimately crashing the VM.\n\nThis issue affects gun: from 2.0.0 before 2.4.0.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.16.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.16.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-59248": {
+                "cve_id": "CVE-2026-59248",
+                "title": "Allocation of resources without limits vulnerability in ninenines ...",
+                "description": "Allocation of resources without limits vulnerability in ninenines cowlib allows an unauthenticated remote HTTP/2 or HTTP/3 peer to exhaust memory on the vulnerable server (or client) and cause a denial of service.\n\nThe HPACK and QPACK prefixed-integer decoder cow_hpack_common:dec_big_int/3 in src/cow_hpack_common.hrl (invoked from cow_hpack:decode/2 in src/cow_hpack.erl and from cow_qpack:decode_field_section/3 in src/cow_qpack.erl) reads continuation octets until it sees one whose high bit is clear, evaluating Int + (Value bsl M) at each step with the shift M growing by seven per octet. No limit is enforced on the number of continuation octets, on the resulting bit width, or on the value; the decoder consumes whatever encoded length the peer supplies.\n\nBecause Erlang integers are immutable, each intermediate Value bsl M and each accumulator update allocates a fresh bignum whose digit width grows linearly with the number of octets processed so far. Summed across the whole decode, the transient bignum digit materialization is on the order of the square of the encoded length. A single maximal HPACK indexed representation carried inside one HTTP/2 HEADERS plus one CONTINUATION frame at Cowboy's default max_frame_size_received can force hundreds of megabytes of transient allocation and garbage-collection churn before the resulting header-table index is rejected as invalid. Repeated or concurrent connections multiply the pressure and can drive the Erlang VM to memory exhaustion.\n\nCowlib is the HTTP parser used by Cowboy, RabbitMQ's management plugin, and other Erlang and Elixir HTTP/2 and HTTP/3 servers and clients, so any exposed endpoint that accepts HPACK or QPACK from an untrusted peer is reachable.\n\nThis issue affects cowlib: from 2.0.0 before 2.19.0.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.12.0-7.fc43",
+                        "fixed": "2.18.0-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "2.18.0-1.fc44",
+                        "identifier": "fc44"
+                    }
+                ]
+            }
+        },
         "5": {
             "CVE-2026-43972": {
                 "cve_id": "CVE-2026-43972",
@@ -391,7 +391,7 @@
                 ]
             }
         },
-        "10": {
+        "9": {
             "CVE-2026-43972": {
                 "cve_id": "CVE-2026-43972",
                 "title": "Origin Validation Error vulnerability in ninenines gun (gun_http2 ...",
