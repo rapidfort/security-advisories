@@ -51,8 +51,6 @@ The package name used in the filename differs by package format:
 | dpkg | Ubuntu, Debian | Source package | `glibc_advisory.json` (not `libc6`) |
 | rpm | Red Hat, Oracle Linux, AlmaLinux, Rocky Linux | Binary package | `openssl_advisory.json` **and** `openssl-libs_advisory.json` |
 
-For rpm-based distributions, each binary subpackage has its own advisory file. Look up the advisory using the binary package name reported by `rpm -qa`, not the source package it was built from.
-
 Package names prefixed with `rf-` (e.g. `rf-python3`, `rf-chromium`) are RapidFort-rebuilt packages.
 
 ---
@@ -93,8 +91,6 @@ Which identifiers appear depends on the distribution:
 | Red Hat | `el5`–`el10`, `fc18`–`fc46`, `rf` |
 | Oracle Linux | `el2`, `el4`–`el10`, `fc3`–`fc46`, `rf` |
 | AlmaLinux, Rocky Linux | `el8`, `el9`, `el10`, `fc18`–`fc46`, `rf` |
-
-> **Important:** In the rpm-based distributions, Fedora (`fc*`) events typically **outnumber** the `el*` events within the same release key. Filtering on `identifier` is required for correct results — see [Identifier Matching](#identifier-matching).
 
 ---
 
@@ -163,8 +159,6 @@ Each advisory file is a JSON object with the following structure:
 | Oracle Linux | `"6"`, `"7"`, `"8"`, `"9"`, `"10"` | Major release number |
 | AlmaLinux | `"8"`, `"9"`, `"10"` | Major release number |
 | Rocky Linux | `"8"`, `"9"`, `"10"` | Major release number |
-
-**Legacy release keys:** a small number of Red Hat and Oracle Linux files carry `el`-prefixed release keys for end-of-life releases — `"el4"` in Red Hat, and `"el4"` / `"el5"` in Oracle Linux. Consumers that parse release keys as integers must tolerate these.
 
 ---
 
@@ -244,8 +238,6 @@ For every distribution except Alpine, events may include an `identifier` field. 
 - On Ubuntu, evaluate only events with `identifier = "ubuntu"` for archive packages, or `identifier = "rf"` for RapidFort-rebuilt packages
 - On Debian, evaluate only events with `identifier = "debian"` for archive packages, or `identifier = "rf"` for RapidFort-rebuilt packages
 
-Skipping this filter causes substantial over-reporting on rpm-based distributions, because a single release key aggregates events from many streams. For example, within the `"9"` release key of a Red Hat advisory, Fedora `fc43` events commonly outnumber the applicable `el9` events by roughly two to one — none of which apply to a RHEL 9 target.
-
 ```json
 {
   "events": [
@@ -288,7 +280,6 @@ Debian example — the Debian archive fix, tracked under the `debian` identifier
 | `MEDIUM` | Exploitation requires specific conditions but could impact confidentiality or integrity |
 | `LOW` | Limited impact; exploitation is difficult or consequences are minimal |
 | `UNKNOWN` | Severity has not been assessed by the upstream source |
-| `""` | Empty string — no severity was published by the upstream source. Treat the same as `UNKNOWN`. |
 
 ---
 
@@ -308,8 +299,6 @@ Version strings are OS-specific. Consumers must use the appropriate version comp
 
 **Notes:**
 - The epoch prefix (e.g. `1:`, `2:`) is significant for version ordering and must not be ignored.
-- The epoch prefix is **not always present**. In the rpm-based distributions many versions are written without one (e.g. `4.10.0-110.el9_8.3`); treat a missing epoch as `0`.
-- Debian security updates carry a `+deb{release}u{revision}` suffix (e.g. `2:3.87.1-1+deb12u4`), but plain Debian revisions without the suffix are the more common form. Standard dpkg version comparison handles both.
 - An `introduced` value of `"0"` is a sentinel meaning "all versions from the beginning," not a literal version string. Epoch-qualified forms of the same sentinel also occur — `"0:0"` and, less commonly, values such as `"32:0"` — and carry the same meaning within that epoch.
 
 ---
@@ -319,6 +308,5 @@ Version strings are OS-specific. Consumers must use the appropriate version comp
 A small number of packages (typically third-party or vendor-provided) have minor schema differences:
 
 - The `title` field may be an empty string for packages where the upstream source does not provide a short summary.
-- The `severity` field may be `"UNKNOWN"` or an empty string when no CVSS score is available from the upstream source.
-- A release key may map to an empty object when a package is tracked for a release but has no advisories against it. A small number of Ubuntu packages (e.g. `kong`) have empty objects for every release key. Consumers should treat this as "no known vulnerabilities," not as a malformed file.
+- The `severity` field may be `"UNKNOWN"` when no CVSS score is available from the upstream source.
 - Debian advisories are occasionally keyed by a Debian Security Advisory identifier rather than a CVE — `DSA-*` (e.g. `DSA-6197-2`) or `DLA-*`. The `cve_id` field still mirrors the parent key. Consumers that assume a `CVE-` prefix should fall back to treating the key as an opaque advisory ID.
