@@ -722,7 +722,7 @@
             "CVE-2025-29923": {
                 "cve_id": "CVE-2025-29923",
                 "title": "go-redis is the official Redis client library for the Go programm ...",
-                "description": "go-redis is the official Redis client library for the Go programming language. Prior to 9.5.5, 9.6.3, and 9.7.2, go-redis potentially responds out of order when `CLIENT SETINFO` times out during connection establishment. This can happen when the client is configured to transmit its identity, there are network connectivity issues, or the client was configured with aggressive timeouts. The problem occurs for multiple use cases. For sticky connections, you receive persistent out-of-order responses for the lifetime of the connection. All commands in the pipeline receive incorrect responses. When used with the default ConnPool once a connection is returned after use with ConnPool#Put the read buffer will be checked and the connection will be marked as bad due to the unread data. This means that at most one out-of-order response before the connection is discarded. This issue is fixed in 9.5.5, 9.6.3, and 9.7.2; however, 9.7.2 has been retracted and 9.7.3 is the lowest available patched version on the 9.7.x branch. As a workaround, set the flag `DisableIndentity` to `true` when constructing the client instance.",
+                "description": "go-redis is the official Redis client library for the Go programming language. Prior to 9.5.5, 9.6.3, and 9.7.2, go-redis potentially responds out of order when `CLIENT SETINFO` times out during connection establishment. This can happen when the client is configured to transmit its identity, there are network connectivity issues, or the client was configured with aggressive timeouts. The problem occurs for multiple use cases. For sticky connections, you receive persistent out-of-order responses for the lifetime of the connection. All commands in the pipeline receive incorrect responses. When used with the default ConnPool once a connection is returned after use with ConnPool#Put the read buffer will be checked and the connection will be marked as bad due to the unread data. This means that at most one out-of-order response before the connection is discarded. This issue is fixed in 9.5.5, 9.6.3, and 9.7.2; however, 9.7.2 has been yanked and 9.7.3 is the lowest available patched version on the 9.7.x branch. As a workaround, set the flag `DisableIndentity` to `true` when constructing the client instance.",
                 "severity": "LOW",
                 "status": "open",
                 "events": [
@@ -2468,6 +2468,40 @@
                     }
                 ]
             },
+            "CVE-2026-81521": {
+                "cve_id": "CVE-2026-81521",
+                "title": "The MongoDB Go Driver's client-level bulk write operation may acc ...",
+                "description": "The MongoDB Go Driver's client-level bulk write operation may accept a caller-supplied database name containing a reserved separator character without escaping it before the name is used to build the target namespace for the operation. An application that passes untrusted input as a database name could therefore have the write directed at a database and collection other than the ones it intended. Only the Client.BulkWrite API is affected.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-82417": {
+                "cve_id": "CVE-2026-82417",
+                "title": "### Summary\n\n\n\n`qs.stringify` throws a `TypeError` when it serial ...",
+                "description": "### Summary\n\n\n\n`qs.stringify` throws a `TypeError` when it serializes an object whose own `constructor` property has a truthy, non-callable `isBuffer` member. `utils.isBuffer` duck-types buffers by calling `obj.constructor.isBuffer(obj)` after checking only that the property is truthy, so a value such as `{ constructor: { isBuffer: \"x\" } }` makes the call throw `TypeError: obj.constructor.isBuffer is not a function`.\n\n\n\n### Details\n\n\n\n`lib/stringify.js:127` calls `utils.isBuffer` on every non-primitive value it serializes. `utils.isBuffer` (`lib/utils.js:332`) reads `obj.constructor.isBuffer` and invokes it without verifying that it is a function. `constructor` and `isBuffer` are ordinary property names, so any object carrying them as own properties reaches the unchecked call.\n\n\n\nSuch an object can be built from untrusted input. `qs.parse(\"x[constructor][isBuffer]=y\", { plainObjects: true })` or `{ allowPrototypes: true }` keeps the `constructor` key as an own property (the default parse options drop it), and `JSON.parse(\"{\\\"a\\\":{\\\"constructor\\\":{\\\"isBuffer\\\":\\\"x\\\"}}}\")` produces the same shape with no qs option involved. Express 4 with its default `query parser` setting and body-parser with `extended: true` both call `qs.parse` with `allowPrototypes: true`, so on those stacks `req.query` and `req.body` can carry the shape directly.\n\n\n\n#### PoC\n\n\n\n```js\n\n\n\nvar qs = require(\"qs\");\n\n\n\nqs.stringify(qs.parse(\"x[constructor][isBuffer]=y\", { plainObjects: true }));\n\n\n\nqs.stringify(JSON.parse(\"{\\\"a\\\":{\\\"constructor\\\":{\\\"isBuffer\\\":\\\"x\\\"}}}\"));\n\n\n\n// TypeError: obj.constructor.isBuffer is not a function\n\n\n\n//     at Object.isBuffer (lib/utils.js:332:78)\n\n\n\n//     at stringify (lib/stringify.js:127:45)\n\n\n\n```\n\n\n\n#### Fix\n\n\n\n`lib/utils.js`, applied in e83d321 on `main` and released as v6.16.0:\n\n\n\n```diff\n\n\n\n- return !!(obj.constructor && obj.constructor.isBuffer && obj.constructor.isBuffer(obj));\n\n\n\n+ return !!(obj.constructor && typeof obj.constructor.isBuffer === \"function\" && obj.constructor.isBuffer(obj));\n\n\n\n```\n\n\n\nReal `Buffer`, `safer-buffer`, and browserify `buffer` polyfill instances serialize exactly as before; only the throw is removed.\n\n\n\n### Affected versions\n\n\n\n`>=2.2.5 <6.16.0`, fixed in v6.16.0.\n\n\n\nThe unguarded duck-type was introduced in 3768a75 and first shipped in v2.2.5 (September 2014). v2.2.4 and earlier used `Buffer.isBuffer` and are not affected. Every release from v2.2.5 through v6.15.3 contains the unguarded call.\n\n\n\n### Impact\n\n\n\nAn unauthenticated request can make any code path that re-serializes attacker-influenced data with `qs.stringify` (for example, rebuilding a query string from `req.query` for a redirect or an upstream request, or serializing a parsed JSON body) throw synchronously. In a typical Node.js HTTP framework the throw is caught by the framework error boundary and the affected request returns a 500; the process survives and other requests are unaffected. Where the call runs outside an error boundary, such as an `async` Express 4 handler (where the throw becomes an unhandled promise rejection) or a background job, the process exits, so the impact in that case depends on the application error handling rather than on qs.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-82556": {
                 "cve_id": "CVE-2026-82556",
                 "title": "A vulnerability was found in Forgejo up to 15.0.4. This issue aff ...",
@@ -2621,6 +2655,27 @@
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-84368": {
+                "cve_id": "CVE-2026-84368",
+                "title": "joi is a schema description language and data validator for JavaS ...",
+                "description": "joi is a schema description language and data validator for JavaScript. From 16.0.0 until 17.13.6 and 18.2.5, the @hapi/joi package through 17.1.1 and the successor joi package contain prototype pollution in lib/messages.js, where exports.compile() and exports.merge() reuse inherited objects for attacker-controlled language keys supplied through messages(), message(), prefs({ messages }), Joi.extend({ messages }), or rule({ message }). A language key named __proto__ writes properties onto Object.prototype, and constructor writes to the Object function's static properties. A consuming application that gates on the presence of an inherited property can take the wrong branch for every inspected object. The flaw is not reachable from data that joi validates and requires an application to feed untrusted input directly into schema-construction configuration. This issue is fixed in joi versions 17.13.6 and 18.2.5; no fixed @hapi/joi version is available.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
                     {
                         "introduced": "10.2.6-19.fc43",
                         "identifier": "fc43"
@@ -3500,7 +3555,7 @@
             "CVE-2025-29923": {
                 "cve_id": "CVE-2025-29923",
                 "title": "go-redis is the official Redis client library for the Go programm ...",
-                "description": "go-redis is the official Redis client library for the Go programming language. Prior to 9.5.5, 9.6.3, and 9.7.2, go-redis potentially responds out of order when `CLIENT SETINFO` times out during connection establishment. This can happen when the client is configured to transmit its identity, there are network connectivity issues, or the client was configured with aggressive timeouts. The problem occurs for multiple use cases. For sticky connections, you receive persistent out-of-order responses for the lifetime of the connection. All commands in the pipeline receive incorrect responses. When used with the default ConnPool once a connection is returned after use with ConnPool#Put the read buffer will be checked and the connection will be marked as bad due to the unread data. This means that at most one out-of-order response before the connection is discarded. This issue is fixed in 9.5.5, 9.6.3, and 9.7.2; however, 9.7.2 has been retracted and 9.7.3 is the lowest available patched version on the 9.7.x branch. As a workaround, set the flag `DisableIndentity` to `true` when constructing the client instance.",
+                "description": "go-redis is the official Redis client library for the Go programming language. Prior to 9.5.5, 9.6.3, and 9.7.2, go-redis potentially responds out of order when `CLIENT SETINFO` times out during connection establishment. This can happen when the client is configured to transmit its identity, there are network connectivity issues, or the client was configured with aggressive timeouts. The problem occurs for multiple use cases. For sticky connections, you receive persistent out-of-order responses for the lifetime of the connection. All commands in the pipeline receive incorrect responses. When used with the default ConnPool once a connection is returned after use with ConnPool#Put the read buffer will be checked and the connection will be marked as bad due to the unread data. This means that at most one out-of-order response before the connection is discarded. This issue is fixed in 9.5.5, 9.6.3, and 9.7.2; however, 9.7.2 has been yanked and 9.7.3 is the lowest available patched version on the 9.7.x branch. As a workaround, set the flag `DisableIndentity` to `true` when constructing the client instance.",
                 "severity": "LOW",
                 "status": "open",
                 "events": [
@@ -5519,6 +5574,40 @@
                     }
                 ]
             },
+            "CVE-2026-81521": {
+                "cve_id": "CVE-2026-81521",
+                "title": "The MongoDB Go Driver's client-level bulk write operation may acc ...",
+                "description": "The MongoDB Go Driver's client-level bulk write operation may accept a caller-supplied database name containing a reserved separator character without escaping it before the name is used to build the target namespace for the operation. An application that passes untrusted input as a database name could therefore have the write directed at a database and collection other than the ones it intended. Only the Client.BulkWrite API is affected.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-82417": {
+                "cve_id": "CVE-2026-82417",
+                "title": "### Summary\n\n\n\n`qs.stringify` throws a `TypeError` when it serial ...",
+                "description": "### Summary\n\n\n\n`qs.stringify` throws a `TypeError` when it serializes an object whose own `constructor` property has a truthy, non-callable `isBuffer` member. `utils.isBuffer` duck-types buffers by calling `obj.constructor.isBuffer(obj)` after checking only that the property is truthy, so a value such as `{ constructor: { isBuffer: \"x\" } }` makes the call throw `TypeError: obj.constructor.isBuffer is not a function`.\n\n\n\n### Details\n\n\n\n`lib/stringify.js:127` calls `utils.isBuffer` on every non-primitive value it serializes. `utils.isBuffer` (`lib/utils.js:332`) reads `obj.constructor.isBuffer` and invokes it without verifying that it is a function. `constructor` and `isBuffer` are ordinary property names, so any object carrying them as own properties reaches the unchecked call.\n\n\n\nSuch an object can be built from untrusted input. `qs.parse(\"x[constructor][isBuffer]=y\", { plainObjects: true })` or `{ allowPrototypes: true }` keeps the `constructor` key as an own property (the default parse options drop it), and `JSON.parse(\"{\\\"a\\\":{\\\"constructor\\\":{\\\"isBuffer\\\":\\\"x\\\"}}}\")` produces the same shape with no qs option involved. Express 4 with its default `query parser` setting and body-parser with `extended: true` both call `qs.parse` with `allowPrototypes: true`, so on those stacks `req.query` and `req.body` can carry the shape directly.\n\n\n\n#### PoC\n\n\n\n```js\n\n\n\nvar qs = require(\"qs\");\n\n\n\nqs.stringify(qs.parse(\"x[constructor][isBuffer]=y\", { plainObjects: true }));\n\n\n\nqs.stringify(JSON.parse(\"{\\\"a\\\":{\\\"constructor\\\":{\\\"isBuffer\\\":\\\"x\\\"}}}\"));\n\n\n\n// TypeError: obj.constructor.isBuffer is not a function\n\n\n\n//     at Object.isBuffer (lib/utils.js:332:78)\n\n\n\n//     at stringify (lib/stringify.js:127:45)\n\n\n\n```\n\n\n\n#### Fix\n\n\n\n`lib/utils.js`, applied in e83d321 on `main` and released as v6.16.0:\n\n\n\n```diff\n\n\n\n- return !!(obj.constructor && obj.constructor.isBuffer && obj.constructor.isBuffer(obj));\n\n\n\n+ return !!(obj.constructor && typeof obj.constructor.isBuffer === \"function\" && obj.constructor.isBuffer(obj));\n\n\n\n```\n\n\n\nReal `Buffer`, `safer-buffer`, and browserify `buffer` polyfill instances serialize exactly as before; only the throw is removed.\n\n\n\n### Affected versions\n\n\n\n`>=2.2.5 <6.16.0`, fixed in v6.16.0.\n\n\n\nThe unguarded duck-type was introduced in 3768a75 and first shipped in v2.2.5 (September 2014). v2.2.4 and earlier used `Buffer.isBuffer` and are not affected. Every release from v2.2.5 through v6.15.3 contains the unguarded call.\n\n\n\n### Impact\n\n\n\nAn unauthenticated request can make any code path that re-serializes attacker-influenced data with `qs.stringify` (for example, rebuilding a query string from `req.query` for a redirect or an upstream request, or serializing a parsed JSON body) throw synchronously. In a typical Node.js HTTP framework the throw is caught by the framework error boundary and the affected request returns a 500; the process survives and other requests are unaffected. Where the call runs outside an error boundary, such as an `async` Express 4 handler (where the throw becomes an unhandled promise rejection) or a background job, the process exits, so the impact in that case depends on the application error handling rather than on qs.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-82556": {
                 "cve_id": "CVE-2026-82556",
                 "title": "A vulnerability was found in Forgejo up to 15.0.4. This issue aff ...",
@@ -5694,6 +5783,23 @@
                 "title": "xmldom is a pure JavaScript W3C standard-based (XML DOM Level 2 C ...",
                 "description": "xmldom is a pure JavaScript W3C standard-based (XML DOM Level 2 Core) DOMParser and XMLSerializer module. From 0.7.0 until 0.8.15, the release-0.8.x parser in lib/sax.js trims captured end-tag names with the unanchored global expression /[ \\t\\n\\r]+$/g. For an end tag containing a long whitespace run followed by a non-whitespace character, the expression retries from each possible starting position and backtracks quadratically before failing its end anchor. DOMParser.parseFromString() reaches the path under default options, allowing a small unauthenticated XML input to stall the Node.js event loop; the 0.9.x and unscoped npm lines do not contain this expression. This issue is fixed in @xmldom/xmldom version 0.8.15.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-84368": {
+                "cve_id": "CVE-2026-84368",
+                "title": "joi is a schema description language and data validator for JavaS ...",
+                "description": "joi is a schema description language and data validator for JavaScript. From 16.0.0 until 17.13.6 and 18.2.5, the @hapi/joi package through 17.1.1 and the successor joi package contain prototype pollution in lib/messages.js, where exports.compile() and exports.merge() reuse inherited objects for attacker-controlled language keys supplied through messages(), message(), prefs({ messages }), Joi.extend({ messages }), or rule({ message }). A language key named __proto__ writes properties onto Object.prototype, and constructor writes to the Object function's static properties. A consuming application that gates on the presence of an inherited property can take the wrong branch for every inspected object. The flaw is not reachable from data that joi validates and requires an application to feed untrusted input directly into schema-construction configuration. This issue is fixed in joi versions 17.13.6 and 18.2.5; no fixed @hapi/joi version is available.",
+                "severity": "LOW",
                 "status": "open",
                 "events": [
                     {
@@ -6098,7 +6204,7 @@
             "CVE-2025-29923": {
                 "cve_id": "CVE-2025-29923",
                 "title": "go-redis is the official Redis client library for the Go programm ...",
-                "description": "go-redis is the official Redis client library for the Go programming language. Prior to 9.5.5, 9.6.3, and 9.7.2, go-redis potentially responds out of order when `CLIENT SETINFO` times out during connection establishment. This can happen when the client is configured to transmit its identity, there are network connectivity issues, or the client was configured with aggressive timeouts. The problem occurs for multiple use cases. For sticky connections, you receive persistent out-of-order responses for the lifetime of the connection. All commands in the pipeline receive incorrect responses. When used with the default ConnPool once a connection is returned after use with ConnPool#Put the read buffer will be checked and the connection will be marked as bad due to the unread data. This means that at most one out-of-order response before the connection is discarded. This issue is fixed in 9.5.5, 9.6.3, and 9.7.2; however, 9.7.2 has been retracted and 9.7.3 is the lowest available patched version on the 9.7.x branch. As a workaround, set the flag `DisableIndentity` to `true` when constructing the client instance.",
+                "description": "go-redis is the official Redis client library for the Go programming language. Prior to 9.5.5, 9.6.3, and 9.7.2, go-redis potentially responds out of order when `CLIENT SETINFO` times out during connection establishment. This can happen when the client is configured to transmit its identity, there are network connectivity issues, or the client was configured with aggressive timeouts. The problem occurs for multiple use cases. For sticky connections, you receive persistent out-of-order responses for the lifetime of the connection. All commands in the pipeline receive incorrect responses. When used with the default ConnPool once a connection is returned after use with ConnPool#Put the read buffer will be checked and the connection will be marked as bad due to the unread data. This means that at most one out-of-order response before the connection is discarded. This issue is fixed in 9.5.5, 9.6.3, and 9.7.2; however, 9.7.2 has been yanked and 9.7.3 is the lowest available patched version on the 9.7.x branch. As a workaround, set the flag `DisableIndentity` to `true` when constructing the client instance.",
                 "severity": "LOW",
                 "status": "open",
                 "events": [
@@ -6953,32 +7059,6 @@
                     }
                 ]
             },
-            "CVE-2026-33818": {
-                "cve_id": "CVE-2026-33818",
-                "title": "Enforce a recursion limit in Unmarshal to prevent stack exhaustio ...",
-                "description": "Enforce a recursion limit in Unmarshal to prevent stack exhaustion when parsing deeply-nested, recursive structures.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-39820": {
-                "cve_id": "CVE-2026-39820",
-                "title": "Well-crafted inputs reaching ParseAddress, ParseAddressList, and  ...",
-                "description": "Well-crafted inputs reaching ParseAddress, ParseAddressList, and ParseDate were able to trigger excessive CPU exhaustion and memory allocations.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-39823": {
                 "cve_id": "CVE-2026-39823",
                 "title": "CVE-2026-27142 fixed a vulnerability in which URLs were not corre ...",
@@ -7124,19 +7204,6 @@
                     }
                 ]
             },
-            "CVE-2026-42499": {
-                "cve_id": "CVE-2026-42499",
-                "title": "Pathological inputs could cause DoS through consumePhrase when pa ...",
-                "description": "Pathological inputs could cause DoS through consumePhrase when parsing an email address according to RFC 5322.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-42502": {
                 "cve_id": "CVE-2026-42502",
                 "title": "Parsing arbitrary HTML which is then rendered using Render can re ...",
@@ -7262,71 +7329,6 @@
                     {
                         "introduced": "10.2.6-19.fc43",
                         "identifier": "fc43"
-                    }
-                ]
-            },
-            "CVE-2026-56853": {
-                "cve_id": "CVE-2026-56853",
-                "title": "When a server is configured to support unencrypted HTTP/2, it rea ...",
-                "description": "When a server is configured to support unencrypted HTTP/2, it reads a few bytes from each new connection to see if they contain the HTTP/2 client preface. ReadHeaderTimeout is unexpectedly not being applied when doing this.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-56858": {
-                "cve_id": "CVE-2026-56858",
-                "title": "Previously, pathological inputs could close an unescaped '/' earl ...",
-                "description": "Previously, pathological inputs could close an unescaped '/' early, allowing for attack-controlled data to inject arbitrary content, potentially leading to XSS.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-56859": {
-                "cve_id": "CVE-2026-56859",
-                "title": "Previously, DecodeElement would reset the depth counter causing i ...",
-                "description": "Previously, DecodeElement would reset the depth counter causing it to never fire; this could lead to stack exhaustion.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-56860": {
-                "cve_id": "CVE-2026-56860",
-                "title": "Previously, resolving relative paths containing parent directory  ...",
-                "description": "Previously, resolving relative paths containing parent directory ('..') segments performed string conversions and buffer rewrites on each step, resulting in quadratic time complexity and high memory allocation overhead. Now, path resolution operates on a byte buffer using index-based backtracking for '..' segments, eliminating the quadratic time complexity and significantly reducing memory allocations.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-56862": {
-                "cve_id": "CVE-2026-56862",
-                "title": "Handshake messages, such as KeyUpdate, are always considered as s ...",
-                "description": "Handshake messages, such as KeyUpdate, are always considered as state-advancing, regardless of whether a handshake has been completed or not. As a result, a malicious client can keep sending KeyUpdate messages to force the server to keep performing key derivation operations indefinitely.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
                     }
                 ]
             },
@@ -7624,6 +7626,40 @@
                     }
                 ]
             },
+            "CVE-2026-81521": {
+                "cve_id": "CVE-2026-81521",
+                "title": "The MongoDB Go Driver's client-level bulk write operation may acc ...",
+                "description": "The MongoDB Go Driver's client-level bulk write operation may accept a caller-supplied database name containing a reserved separator character without escaping it before the name is used to build the target namespace for the operation. An application that passes untrusted input as a database name could therefore have the write directed at a database and collection other than the ones it intended. Only the Client.BulkWrite API is affected.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-82417": {
+                "cve_id": "CVE-2026-82417",
+                "title": "### Summary\n\n\n\n`qs.stringify` throws a `TypeError` when it serial ...",
+                "description": "### Summary\n\n\n\n`qs.stringify` throws a `TypeError` when it serializes an object whose own `constructor` property has a truthy, non-callable `isBuffer` member. `utils.isBuffer` duck-types buffers by calling `obj.constructor.isBuffer(obj)` after checking only that the property is truthy, so a value such as `{ constructor: { isBuffer: \"x\" } }` makes the call throw `TypeError: obj.constructor.isBuffer is not a function`.\n\n\n\n### Details\n\n\n\n`lib/stringify.js:127` calls `utils.isBuffer` on every non-primitive value it serializes. `utils.isBuffer` (`lib/utils.js:332`) reads `obj.constructor.isBuffer` and invokes it without verifying that it is a function. `constructor` and `isBuffer` are ordinary property names, so any object carrying them as own properties reaches the unchecked call.\n\n\n\nSuch an object can be built from untrusted input. `qs.parse(\"x[constructor][isBuffer]=y\", { plainObjects: true })` or `{ allowPrototypes: true }` keeps the `constructor` key as an own property (the default parse options drop it), and `JSON.parse(\"{\\\"a\\\":{\\\"constructor\\\":{\\\"isBuffer\\\":\\\"x\\\"}}}\")` produces the same shape with no qs option involved. Express 4 with its default `query parser` setting and body-parser with `extended: true` both call `qs.parse` with `allowPrototypes: true`, so on those stacks `req.query` and `req.body` can carry the shape directly.\n\n\n\n#### PoC\n\n\n\n```js\n\n\n\nvar qs = require(\"qs\");\n\n\n\nqs.stringify(qs.parse(\"x[constructor][isBuffer]=y\", { plainObjects: true }));\n\n\n\nqs.stringify(JSON.parse(\"{\\\"a\\\":{\\\"constructor\\\":{\\\"isBuffer\\\":\\\"x\\\"}}}\"));\n\n\n\n// TypeError: obj.constructor.isBuffer is not a function\n\n\n\n//     at Object.isBuffer (lib/utils.js:332:78)\n\n\n\n//     at stringify (lib/stringify.js:127:45)\n\n\n\n```\n\n\n\n#### Fix\n\n\n\n`lib/utils.js`, applied in e83d321 on `main` and released as v6.16.0:\n\n\n\n```diff\n\n\n\n- return !!(obj.constructor && obj.constructor.isBuffer && obj.constructor.isBuffer(obj));\n\n\n\n+ return !!(obj.constructor && typeof obj.constructor.isBuffer === \"function\" && obj.constructor.isBuffer(obj));\n\n\n\n```\n\n\n\nReal `Buffer`, `safer-buffer`, and browserify `buffer` polyfill instances serialize exactly as before; only the throw is removed.\n\n\n\n### Affected versions\n\n\n\n`>=2.2.5 <6.16.0`, fixed in v6.16.0.\n\n\n\nThe unguarded duck-type was introduced in 3768a75 and first shipped in v2.2.5 (September 2014). v2.2.4 and earlier used `Buffer.isBuffer` and are not affected. Every release from v2.2.5 through v6.15.3 contains the unguarded call.\n\n\n\n### Impact\n\n\n\nAn unauthenticated request can make any code path that re-serializes attacker-influenced data with `qs.stringify` (for example, rebuilding a query string from `req.query` for a redirect or an upstream request, or serializing a parsed JSON body) throw synchronously. In a typical Node.js HTTP framework the throw is caught by the framework error boundary and the affected request returns a 500; the process survives and other requests are unaffected. Where the call runs outside an error boundary, such as an `async` Express 4 handler (where the throw becomes an unhandled promise rejection) or a background job, the process exits, so the impact in that case depends on the application error handling rather than on qs.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-82556": {
                 "cve_id": "CVE-2026-82556",
                 "title": "A vulnerability was found in Forgejo up to 15.0.4. This issue aff ...",
@@ -7799,6 +7835,23 @@
                 "title": "xmldom is a pure JavaScript W3C standard-based (XML DOM Level 2 C ...",
                 "description": "xmldom is a pure JavaScript W3C standard-based (XML DOM Level 2 Core) DOMParser and XMLSerializer module. From 0.7.0 until 0.8.15, the release-0.8.x parser in lib/sax.js trims captured end-tag names with the unanchored global expression /[ \\t\\n\\r]+$/g. For an end tag containing a long whitespace run followed by a non-whitespace character, the expression retries from each possible starting position and backtracks quadratically before failing its end anchor. DOMParser.parseFromString() reaches the path under default options, allowing a small unauthenticated XML input to stall the Node.js event loop; the 0.9.x and unscoped npm lines do not contain this expression. This issue is fixed in @xmldom/xmldom version 0.8.15.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "10.2.6-19.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-84368": {
+                "cve_id": "CVE-2026-84368",
+                "title": "joi is a schema description language and data validator for JavaS ...",
+                "description": "joi is a schema description language and data validator for JavaScript. From 16.0.0 until 17.13.6 and 18.2.5, the @hapi/joi package through 17.1.1 and the successor joi package contain prototype pollution in lib/messages.js, where exports.compile() and exports.merge() reuse inherited objects for attacker-controlled language keys supplied through messages(), message(), prefs({ messages }), Joi.extend({ messages }), or rule({ message }). A language key named __proto__ writes properties onto Object.prototype, and constructor writes to the Object function's static properties. A consuming application that gates on the presence of an inherited property can take the wrong branch for every inspected object. The flaw is not reachable from data that joi validates and requires an application to feed untrusted input directly into schema-construction configuration. This issue is fixed in joi versions 17.13.6 and 18.2.5; no fixed @hapi/joi version is available.",
+                "severity": "LOW",
                 "status": "open",
                 "events": [
                     {
