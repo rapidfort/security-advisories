@@ -57414,6 +57414,23 @@
                     }
                 ]
             },
+            "CVE-2026-80726": {
+                "cve_id": "CVE-2026-80726",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: x86/mmu: WARN and clear role.invalid when creating a child shadow page\n\nExplicitly clear role.invalid when deriving a child shadow page's role from\nits parent to harden against bugs elsewhere in KVM, as violating KVM's\ninvariant that invalid pages are NOT on the list of active MMU pages leads\nto use-after-free due to __kvm_mmu_prepare_zap_page() using list_add()\ninstead of list_move() when processing an invalid shadow page, i.e. makes a\nbad situation far worse.\n\nYell loudly if the parent is invalid, as it means KVM has missed a validity\ncheck, i.e. KVM is attempting to map memory using an invalid/obsolete root,\nbut continue on as the child is otherwise still a valid shadow page.\n\n  ==================================================================\n  BUG: KASAN: slab-use-after-free in __kvm_mmu_get_shadow_page+0x1817/0x1860 [kvm]\n  Write of size 8 at addr ff11000153dd1368 by task repro/853\n\n  CPU: 1 UID: 1000 PID: 853 Comm: repro Not tainted 7.2.0-rc2-3aec122bdcaf-next-vm #5 PREEMPT\n  Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x4b/0x70\n   print_report+0x153/0x49c\n   kasan_report+0xbc/0xf0\n   __kvm_mmu_get_shadow_page+0x1817/0x1860 [kvm]\n   mmu_alloc_root+0x141/0x320 [kvm]\n   kvm_mmu_load+0x612/0x20f0 [kvm]\n   kvm_arch_vcpu_ioctl_run+0x3dd5/0x6150 [kvm]\n   kvm_vcpu_ioctl+0x5e4/0x10d0 [kvm]\n   __x64_sys_ioctl+0x131/0x1b0\n   do_syscall_64+0x67/0x5f0\n   entry_SYSCALL_64_after_hwframe+0x4b/0x53\n   </TASK>\n\n  Allocated by task 853:\n   kasan_save_stack+0x20/0x40\n   kasan_save_track+0x14/0x30\n   __kasan_slab_alloc+0x5f/0x70\n   kmem_cache_alloc_noprof+0xfe/0x2e0\n   __kvm_mmu_topup_memory_cache+0x135/0x530 [kvm]\n   paging64_page_fault+0x318/0x1e30 [kvm]\n   kvm_mmu_do_page_fault+0x21d/0x630 [kvm]\n   kvm_mmu_page_fault+0x18c/0x17b0 [kvm]\n   kvm_arch_vcpu_ioctl_run+0x1f35/0x6150 [kvm]\n   kvm_vcpu_ioctl+0x5e4/0x10d0 [kvm]\n   __x64_sys_ioctl+0x131/0x1b0\n   do_syscall_64+0x67/0x5f0\n   entry_SYSCALL_64_after_hwframe+0x4b/0x53\n\n  Freed by task 853:\n   kasan_save_stack+0x20/0x40\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kmem_cache_free+0xe2/0x400\n   kvm_mmu_commit_zap_page.part.0+0x1e2/0x310 [kvm]\n   kvm_mmu_free_roots+0x283/0x560 [kvm]\n   kvm_arch_vcpu_ioctl_run+0x33c8/0x6150 [kvm]\n   kvm_vcpu_ioctl+0x5e4/0x10d0 [kvm]\n   __x64_sys_ioctl+0x131/0x1b0\n   do_syscall_64+0x67/0x5f0\n   entry_SYSCALL_64_after_hwframe+0x4b/0x53",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2022-49920": {
                 "cve_id": "CVE-2022-49920",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -125871,6 +125888,23 @@
                 "cve_id": "CVE-2026-80725",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: properly validate BIG TCP aggregation criteria\n\nWhen GRO attempts to aggregate packets beyond GRO_LEGACY_MAX_SIZE (64KB),\nBIG TCP should only be permitted for plain IPv4 TCP and plain IPv6 TCP\n(with sufficient MAC header room to insert the temporary HBH jumbo header).\n\nHowever, commit b1a78b9b9886 (\"net: add support for ipv4 big tcp\")\nloosened the check in skb_gro_receive(), leading to several issues:\n\n1. skb_gro_receive() checked skb_headroom(p) instead of the actual space\n   before the MAC header (p->mac_header). Because skb_headroom(p) includes\n   mac_len, crafted frames (e.g. injected via AF_PACKET) can pass the check\n   with p->mac_header < 8 bytes. When ipv6_gro_complete() inserts the\n   temporary HBH jumbo header, the memmove() starts before skb->head,\n   causing an out-of-bounds write and wrapping skb->mac_header.\n2. It allowed non-IP protocols such as software VLAN (ETH_P_8021Q /\n   ETH_P_8021AD) to aggregate beyond 64KB because\n   p->protocol != ETH_P_IPV6 was true.\n3. It checked p->encapsulation instead of NAPI_GRO_CB(skb)->encap_mark,\n   allowing encapsulated flows (e.g. SIT / IPv6-in-IPv4) to aggregate\n   beyond 64KB.\n\nFix skb_gro_receive() to strictly enforce:\n- NAPI_GRO_CB(skb)->proto == IPPROTO_TCP\n- Not encapsulated (!NAPI_GRO_CB(skb)->encap_mark && !p->encapsulation)\n- Protocol must be either ETH_P_IP or ETH_P_IPV6\n- If ETH_P_IPV6, p->mac_header must be at least\n  sizeof(struct hop_jumbo_hdr)\n\nReturning -E2BIG from skb_gro_receive() ensures that packets which cannot\nbecome BIG TCP are cleanly flushed at <= 64KB and delivered intact without\ndropping.\n\nThis issue does not exist in mainline (7.0+) because the subsystem was\nrewritten in commit 81be30c1f5f2 (\"net/ipv6: Drop HBH for BIG TCP on RX\nside\"), making this fix relevant only for older stable branches like\n6.18.y.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80726": {
+                "cve_id": "CVE-2026-80726",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: x86/mmu: WARN and clear role.invalid when creating a child shadow page\n\nExplicitly clear role.invalid when deriving a child shadow page's role from\nits parent to harden against bugs elsewhere in KVM, as violating KVM's\ninvariant that invalid pages are NOT on the list of active MMU pages leads\nto use-after-free due to __kvm_mmu_prepare_zap_page() using list_add()\ninstead of list_move() when processing an invalid shadow page, i.e. makes a\nbad situation far worse.\n\nYell loudly if the parent is invalid, as it means KVM has missed a validity\ncheck, i.e. KVM is attempting to map memory using an invalid/obsolete root,\nbut continue on as the child is otherwise still a valid shadow page.\n\n  ==================================================================\n  BUG: KASAN: slab-use-after-free in __kvm_mmu_get_shadow_page+0x1817/0x1860 [kvm]\n  Write of size 8 at addr ff11000153dd1368 by task repro/853\n\n  CPU: 1 UID: 1000 PID: 853 Comm: repro Not tainted 7.2.0-rc2-3aec122bdcaf-next-vm #5 PREEMPT\n  Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 0.0.0 02/06/2015\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x4b/0x70\n   print_report+0x153/0x49c\n   kasan_report+0xbc/0xf0\n   __kvm_mmu_get_shadow_page+0x1817/0x1860 [kvm]\n   mmu_alloc_root+0x141/0x320 [kvm]\n   kvm_mmu_load+0x612/0x20f0 [kvm]\n   kvm_arch_vcpu_ioctl_run+0x3dd5/0x6150 [kvm]\n   kvm_vcpu_ioctl+0x5e4/0x10d0 [kvm]\n   __x64_sys_ioctl+0x131/0x1b0\n   do_syscall_64+0x67/0x5f0\n   entry_SYSCALL_64_after_hwframe+0x4b/0x53\n   </TASK>\n\n  Allocated by task 853:\n   kasan_save_stack+0x20/0x40\n   kasan_save_track+0x14/0x30\n   __kasan_slab_alloc+0x5f/0x70\n   kmem_cache_alloc_noprof+0xfe/0x2e0\n   __kvm_mmu_topup_memory_cache+0x135/0x530 [kvm]\n   paging64_page_fault+0x318/0x1e30 [kvm]\n   kvm_mmu_do_page_fault+0x21d/0x630 [kvm]\n   kvm_mmu_page_fault+0x18c/0x17b0 [kvm]\n   kvm_arch_vcpu_ioctl_run+0x1f35/0x6150 [kvm]\n   kvm_vcpu_ioctl+0x5e4/0x10d0 [kvm]\n   __x64_sys_ioctl+0x131/0x1b0\n   do_syscall_64+0x67/0x5f0\n   entry_SYSCALL_64_after_hwframe+0x4b/0x53\n\n  Freed by task 853:\n   kasan_save_stack+0x20/0x40\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kmem_cache_free+0xe2/0x400\n   kvm_mmu_commit_zap_page.part.0+0x1e2/0x310 [kvm]\n   kvm_mmu_free_roots+0x283/0x560 [kvm]\n   kvm_arch_vcpu_ioctl_run+0x33c8/0x6150 [kvm]\n   kvm_vcpu_ioctl+0x5e4/0x10d0 [kvm]\n   __x64_sys_ioctl+0x131/0x1b0\n   do_syscall_64+0x67/0x5f0\n   entry_SYSCALL_64_after_hwframe+0x4b/0x53",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
