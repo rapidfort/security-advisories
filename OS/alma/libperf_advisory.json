@@ -17124,7 +17124,7 @@
                 "cve_id": "CVE-2025-40181",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/kvm: Force legacy PCI hole to UC when overriding MTRRs for TDX/SNP\n\nWhen running as an SNP or TDX guest under KVM, force the legacy PCI hole,\ni.e. memory between Top of Lower Usable DRAM and 4GiB, to be mapped as UC\nvia a forced variable MTRR range.\n\nIn most KVM-based setups, legacy devices such as the HPET and TPM are\nenumerated via ACPI.  ACPI enumeration includes a Memory32Fixed entry, and\noptionally a SystemMemory descriptor for an OperationRegion, e.g. if the\ndevice needs to be accessed via a Control Method.\n\nIf a SystemMemory entry is present, then the kernel's ACPI driver will\nauto-ioremap the region so that it can be accessed at will.  However, the\nACPI spec doesn't provide a way to enumerate the memory type of\nSystemMemory regions, i.e. there's no way to tell software that a region\nmust be mapped as UC vs. WB, etc.  As a result, Linux's ACPI driver always\nmaps SystemMemory regions using ioremap_cache(), i.e. as WB on x86.\n\nThe dedicated device drivers however, e.g. the HPET driver and TPM driver,\nwant to map their associated memory as UC or WC, as accessing PCI devices\nusing WB is unsupported.\n\nOn bare metal and non-CoCO, the conflicting requirements \"work\" as firmware\nconfigures the PCI hole (and other device memory) to be UC in the MTRRs.\nSo even though the ACPI mappings request WB, they are forced to UC- in the\nkernel's tracking due to the kernel properly handling the MTRR overrides,\nand thus are compatible with the drivers' requested WC/UC-.\n\nWith force WB MTRRs on SNP and TDX guests, the ACPI mappings get their\nrequested WB if the ACPI mappings are established before the dedicated\ndriver code attempts to initialize the device.  E.g. if acpi_init()\nruns before the corresponding device driver is probed, ACPI's WB mapping\nwill \"win\", and result in the driver's ioremap() failing because the\nexisting WB mapping isn't compatible with the requested WC/UC-.\n\nE.g. when a TPM is emulated by the hypervisor (ignoring the security\nimplications of relying on what is allegedly an untrusted entity to store\nmeasurements), the TPM driver will request UC and fail:\n\n  [  1.730459] ioremap error for 0xfed40000-0xfed45000, requested 0x2, got 0x0\n  [  1.732780] tpm_tis MSFT0101:00: probe with driver tpm_tis failed with error -12\n\nNote, the '0x2' and '0x0' values refer to \"enum page_cache_mode\", not x86's\nmemtypes (which frustratingly are an almost pure inversion; 2 == WB, 0 == UC).\nE.g. tracing mapping requests for TPM TIS yields:\n\n Mapping TPM TIS with req_type = 0\n WARNING: CPU: 22 PID: 1 at arch/x86/mm/pat/memtype.c:530 memtype_reserve+0x2ab/0x460\n Modules linked in:\n CPU: 22 UID: 0 PID: 1 Comm: swapper/0 Tainted: G        W           6.16.0-rc7+ #2 VOLUNTARY\n Tainted: [W]=WARN\n Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 05/29/2025\n RIP: 0010:memtype_reserve+0x2ab/0x460\n  __ioremap_caller+0x16d/0x3d0\n  ioremap_cache+0x17/0x30\n  x86_acpi_os_ioremap+0xe/0x20\n  acpi_os_map_iomem+0x1f3/0x240\n  acpi_os_map_memory+0xe/0x20\n  acpi_ex_system_memory_space_handler+0x273/0x440\n  acpi_ev_address_space_dispatch+0x176/0x4c0\n  acpi_ex_access_region+0x2ad/0x530\n  acpi_ex_field_datum_io+0xa2/0x4f0\n  acpi_ex_extract_from_field+0x296/0x3e0\n  acpi_ex_read_data_from_field+0xd1/0x460\n  acpi_ex_resolve_node_to_value+0x2ee/0x530\n  acpi_ex_resolve_to_value+0x1f2/0x540\n  acpi_ds_evaluate_name_path+0x11b/0x190\n  acpi_ds_exec_end_op+0x456/0x960\n  acpi_ps_parse_loop+0x27a/0xa50\n  acpi_ps_parse_aml+0x226/0x600\n  acpi_ps_execute_method+0x172/0x3e0\n  acpi_ns_evaluate+0x175/0x5f0\n  acpi_evaluate_object+0x213/0x490\n  acpi_evaluate_integer+0x6d/0x140\n  acpi_bus_get_status+0x93/0x150\n  acpi_add_single_object+0x43a/0x7c0\n  acpi_bus_check_add+0x149/0x3a0\n  acpi_bus_check_add_1+0x16/0x30\n  acpi_ns_walk_namespace+0x22c/0x360\n  acpi_walk_namespace+0x15c/0x170\n  acpi_bus_scan+0x1dd/0x200\n  acpi_scan_init+0xe5/0x2b0\n  acpi_init+0x264/0x5b0\n  do_one_i\n---truncated---",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "open",
                 "events": [
                     {
@@ -59859,6 +59859,23 @@
                     }
                 ]
             },
+            "CVE-2026-89482": {
+                "cve_id": "CVE-2026-89482",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-tcp: do not accept C2HData based on blk_rq_payload_bytes() alone\n\nCommit 25e5cb780e62 (\"nvme-tcp: fix possible crash in write_zeroes\nprocessing\") established that blk_rq_payload_bytes() must not be read\nwithout first checking blk_rq_nr_phys_segments(), and recorded the\nresult in nvme_tcp_setup_cmd_pdu() as req->data_len. The receive side\nwas left as it was.\n\nThe two differ for REQ_OP_WRITE_ZEROES, which has no physical segments\nbut a non-zero blk_rq_bytes(), so setup leaves req->iter untouched\nwhile the receive gate lets a C2HData through and nvme_tcp_recv_data()\ncopies into whatever the previous command on that tag left there. The\ndriver-private area is zeroed only when the tag set is allocated.\n\nReproduced with a test target that leaves a residual iterator on a tag\nand then sends a C2HData for a WRITE_ZEROES command on the same tag:\n\nBUG: KASAN: wild-memory-access in _copy_to_iter+0x642/0x1330\nWrite of size 512 at addr ffe728c2175dfa81 by task kworker/0:1H/103\n\nCPU: 0 UID: 0 PID: 103 Comm: kworker/0:1H Not tainted 7.2.0-rc5-NVMETCP-gf5098b6bae76 #1 PREEMPT(lazy)\nHardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\nWorkqueue: nvme_tcp_wq nvme_tcp_io_work\nCall Trace:\n <TASK>\n dump_stack_lvl+0x53/0x70\n kasan_report+0xce/0x100\n ? _copy_to_iter+0x642/0x1330\n kasan_check_range+0x105/0x1b0\n __asan_memcpy+0x3c/0x60\n _copy_to_iter+0x642/0x1330\n ? __pfx_sock_has_perm+0x10/0x10\n ? worker_thread+0x45b/0xd10\n ? __pfx__copy_to_iter+0x10/0x10\n ? _raw_spin_lock_bh+0x83/0xe0\n ? __pfx__raw_spin_lock_bh+0x10/0x10\n __skb_datagram_iter+0xf3/0x820\n ? __pfx_simple_copy_to_iter+0x10/0x10\n ? __asan_memcpy+0x3c/0x60\n ? skb_copy_bits+0x58d/0x830\n skb_copy_datagram_iter+0x37/0x120\n nvme_tcp_recv_skb+0xa07/0x4320\n ? __pfx_nvme_tcp_recv_skb+0x10/0x10\n __tcp_read_sock+0x1ab/0x810\n ? __pfx_nvme_tcp_recv_skb+0x10/0x10\n ? __pfx_lock_sock_nested+0x10/0x10\n ? __pfx___tcp_read_sock+0x10/0x10\n nvme_tcp_try_recv+0x152/0x1e0\n ? __pfx_nvme_tcp_try_recv+0x10/0x10\n ? __pfx_mutex_unlock+0x10/0x10\n nvme_tcp_io_work+0x1e4/0x6c0\n ? __schedule+0x181a/0x49f0\n ? __pfx_nvme_tcp_io_work+0x10/0x10\n process_one_work+0x633/0x1030\n\nKeep the blk_rq_payload_bytes() test and add req->data_len to it. The\nold test is what rejects a C2HData naming a tag that is no longer in\nflight, because blk_update_request() zeroes rq->__data_len on\ncompletion; req->data_len and req->curr_bio are driver-private and\nsurvive completion, so they cannot stand in for it. Setup initialises\nthe iterator only when both req->curr_bio and req->data_len are set, so\nthe gate now tests the same two.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89487": {
                 "cve_id": "CVE-2026-89487",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60012,6 +60029,23 @@
                     }
                 ]
             },
+            "CVE-2026-89540": {
+                "cve_id": "CVE-2026-89540",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsunrpc: init gssp_lock before publishing proc entry\n\ncreate_use_gss_proxy_proc_entry() publishes /proc/net/rpc/use-gss-proxy\nvia proc_create_data() before init_gssp_clnt() runs mutex_init() on\nsn->gssp_lock.  Once the dentry is linked under proc_subdir_lock it is\nimmediately reachable from userspace, so a write that lands in the\nwindow drives set_gssp_clnt() into mutex_lock() on a zero-initialized\nstruct mutex.\n\n    create_use_gss_proxy_proc_entry(net)\n      proc_create_data(\"use-gss-proxy\", ...)   /* dentry live */\n      init_gssp_clnt(sn)\n        mutex_init(&sn->gssp_lock)             /* too late */\n\n    write_gssp()\n      set_gssp_clnt(net)\n        mutex_lock(&sn->gssp_lock)             /* uninitialized */\n        gssp_rpc_create(...)\n        sn->gssp_clnt = clnt\n        mutex_unlock(&sn->gssp_lock)\n\nThe window spans only the two statements between proc_create_data()\nreturning and init_gssp_clnt(), so a writer reaches it only if the\nregistering thread is preempted there while another task is already\nopening the freshly published file.  register_pernet_subsys() runs in\npreemptible context under pernet_ops_rwsem, so that preemption is\npossible, and the window widens on auth_rpcgss module load, when the\nproc entry is created for every live net namespace whose tasks are\nalready running.  A writer that wins the race locks a zero-filled\nstruct mutex.  On CONFIG_DEBUG_MUTEXES the missing magic value trips a\n\"lock used without init\" splat; on a production kernel the fast path\nacquires the lock via CMPXCHG(owner, 0, current).  In the latter case\na second writer that arrives before init_gssp_clnt() re-zeroes owner\ncan enter set_gssp_clnt() concurrently, shut down the first writer's\nclnt while it is still in use, and leak the loser's clnt.\n\nFix by initializing sn->gssp_lock in sunrpc_init_net() so its lifetime\nmatches the sunrpc_net it lives in.  sn->gssp_clnt is already NULL from\nthe kzalloc that backs net_generic storage, so the lazy helper is no\nlonger needed; drop init_gssp_clnt(), its prototype, and the call from\ncreate_use_gss_proxy_proc_entry().  sunrpc.ko is a build-time\ndependency of auth_rpcgss.ko, so sunrpc_init_net() has always run on\nevery netns before any auth_gss pernet init can publish the proc\nentry.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89543": {
                 "cve_id": "CVE-2026-89543",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60131,6 +60165,40 @@
                     }
                 ]
             },
+            "CVE-2026-89559": {
+                "cve_id": "CVE-2026-89559",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nlibnvdimm/labels: Prevent integer overflow in __nd_label_validate()\n\nThe on-media namespace index field nslot is a u32 read from the DIMM\nlabel storage area.  __nd_label_validate() bounds it against the config\narea size, but sizeof_namespace_label() returns unsigned, so the product\nnslot * label_size is evaluated in 32-bit and wraps modulo 2^32 before\nthe comparison.  A crafted nslot passes the bound and is then used as the\nloop trip count in nd_label_data_init(), whose memset() walks off the end\nof the config_size buffer: an out-of-bounds write.\n\nThe field is not trusted -- it comes from the medium, or from userspace\nvia ND_CMD_SET_CONFIG_DATA.  Evaluate the product in 64-bit so the bound\ncheck is exact; conforming labels are unaffected.\n\nThe check was safe when introduced by commit 4a826c83db4e (\"libnvdimm:\nnamespace indices: read and validate\"): it multiplied by sizeof(struct\nnd_namespace_label), a size_t, so on a 64-bit build the product did not\nwrap.  Commit 564e871aa66f (\"libnvdimm, label: add v1.2 nvdimm label\ndefinitions\") narrowed it to 32 bits when the label size became a runtime\nvalue read via sizeof_namespace_label().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89561": {
+                "cve_id": "CVE-2026-89561",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: rpl: fix NULL dereference of idev in ipv6_rpl_srh_rcv()\n\nipv6_rpl_srh_rcv() dereferences idev from __in6_dev_get() without a NULL\ncheck when reading idev->cnf.rpl_seg_enabled.\n\nWhen the device's MTU drops below IPV6_MIN_MTU, addrconf_ifdown() clears\ndev->ip6_ptr through RCU_INIT_POINTER(). A packet that passed the idev\ncheck in ip6_rcv_core() can then reach ipv6_rpl_srh_rcv() with\ndev->ip6_ptr already NULL.\n\nReproduced by flooding the receiving interface with ping6 traffic while\nflapping its MTU between 1500 and 1200:\n\n BUG: KASAN: null-ptr-deref in ipv6_rpl_srh_rcv+0xb3/0x1070\n Read of size 4 at addr 00000000000006b4 by task ping6/394\n\n CPU: 2 UID: 0 PID: 394 Comm: ping6 Not tainted 7.2.0-rc7-micro-vm-dev-00095-g24ef02f934ee #240 PREEMPT(full)\n Call Trace:\n  <IRQ>\n  kasan_report+0xc6/0x100\n  ipv6_rpl_srh_rcv+0xb3/0x1070\n  ip6_protocol_deliver_rcu+0x759/0x9a0\n  ip6_input_finish+0xa8/0x1b0\n  ip6_input+0xe1/0x490\n  ipv6_rcv+0x33d/0x460\n  __netif_receive_skb_one_core+0xd6/0x130\n  process_backlog+0x2cc/0xa00\n  __napi_poll.constprop.0+0x56/0x270\n  net_rx_action+0x327/0x730\n  handle_softirqs+0x11e/0x630\n  do_softirq+0xb3/0xf0\n  </IRQ>\n\nBoth ipv6_rpl_srh_rcv() and ipv6_srh_rcv() are called only from\nipv6_rthdr_rcv(), which already has an idev lookup.\n\nFix the NULL dereference on the RPL path by checking idev in\nipv6_rthdr_rcv(), before it calls either function. The callees take idev as\nan argument and no longer call __in6_dev_get(), so the packet is now\ndropped in one place, with SKB_DROP_REASON_IPV6DISABLED on both paths.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89566": {
                 "cve_id": "CVE-2026-89566",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60148,10 +60216,44 @@
                     }
                 ]
             },
+            "CVE-2026-89567": {
+                "cve_id": "CVE-2026-89567",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\njbd2: bound shrinker scans by examined checkpoint buffers\n\nThe jbd2 shrinker currently accounts only checkpoint buffers that it\nsuccessfully releases against nr_to_scan.  Busy buffers therefore do not\nconsume the scan budget.\n\nIf a checkpoint transaction contains mostly busy buffers, the shrinker\ncan scan its entire checkpoint list while holding journal->j_list_lock.\nLarge checkpoint lists can result in excessive lock hold times and leave\nother CPUs spinning on j_list_lock, causing soft lockups or RCU stalls.\n\nPass nr_to_scan into journal_shrink_one_cp_list() and decrement it for\nevery buffer examined, including busy buffers.  Pass NULL from checkpoint\ncleanup paths so their existing full-list behavior is preserved.\n\nThis restores the scan-budget semantics that existed before\njournal_shrink_one_cp_list() was changed to always scan a complete\ncheckpoint list.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89569": {
                 "cve_id": "CVE-2026-89569",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: RFCOMM: serialize security confirmation handling\n\nrfcomm_security_cfm() looks up a session on session_list and then walks\nits DLC list without holding rfcomm_mutex. Since RFCOMM session teardown\nuses rfcomm_mutex, krfcommd can close and free the same session and DLCs\nconcurrently:\n\n  hci_rx_work                    krfcommd\n  -----------                    ---------\n  rfcomm_session_get()\n                                 rfcomm_lock()\n                                 rfcomm_session_close()\n                                   rfcomm_dlc_unlink()\n                                   rfcomm_session_del()\n                                     kfree(s)\n                                 rfcomm_unlock()\n  walk s->dlcs\n\nThe callback can then read a freed session list head and touch freed DLCs\nwhile updating their flags or timers.\n\nSerialize the session lookup and DLC traversal in rfcomm_security_cfm()\nwith rfcomm_mutex. This matches the existing RFCOMM session lifetime\nrules and prevents concurrent rfcomm_session_del() / rfcomm_dlc_unlink()\nfrom tearing the objects down while the callback is using them.\n\nKASAN reported:\n\n  BUG: KASAN: slab-use-after-free in rfcomm_security_cfm+0x41c/0x440\n  Read of size 8 at addr ffff888111fb3960 by task kworker/u17:1/89\n  Workqueue: hci0 hci_rx_work\n  Call Trace:\n   rfcomm_security_cfm+0x41c/0x440\n   hci_encrypt_cfm+0x139/0x590\n   hci_encrypt_change_evt+0x37b/0xc40\n   hci_event_packet+0x71b/0xb20\n   hci_rx_work+0x293/0x730\n  Allocated by task 69:\n   rfcomm_session_add+0x9e/0x2f0\n   rfcomm_run+0x44b/0x41e0\n  Freed by task 69:\n   kfree+0x131/0x3c0\n   rfcomm_session_del+0x188/0x220\n   rfcomm_run+0x1985/0x41e0",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89579": {
+                "cve_id": "CVE-2026-89579",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Harden bloom filter sizing and indexing on 32-bit kernels\n\nbloom_map_alloc() has two 32-bit-specific problems when the computed\nbitmap reaches the U32_MAX fallback case.\n\nFirst, BITS_TO_BYTES(U32_MAX) is evaluated with 32-bit arithmetic. The\naddition performed by DIV_ROUND_UP wraps, so the map allocates only the\nfixed-size bloom filter object while keeping bitset_mask == U32_MAX.\nSubsequent updates can then write past the allocated object.\n\nSecond, fixing only the allocation size is not sufficient. The bloom hash\nis a u32, but set_bit() takes a signed long bit number and x86 test_bit()\neventually feeds the index to variable_test_bit(long, ...). On 32-bit\nkernels, hashes in [0x80000000, U32_MAX] therefore become negative bit\noffsets. x86 bt/bts with a memory operand interpret those offsets relative\nto the supplied base, so a map with bitset_mask == U32_MAX can read or\nwrite before bloom->bitset even after allocating the full 512 MiB bitmap.\n\nKeep the U32_MAX fallback, but split each hash into a word pointer and an\nin-word bit number before calling test_bit() or set_bit(). The bitops\nargument is then always in [0, BITS_PER_LONG - 1], while BIT_WORD(h) still\nselects the intended word in the full bitmap.\n\nCompute the bitset size from (u64)bitset_mask + 1 before passing the final\nsize to bpf_map_area_alloc(). This fixes the original under-allocation and\nkeeps the allocated storage consistent with the addressable bitset.\n\nExploitation note: local privilege escalation is possible on a 32-bit x86\nkernel using the under-allocation bug from a binary with CAP_BPF.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -60267,6 +60369,23 @@
                     }
                 ]
             },
+            "CVE-2026-89627": {
+                "cve_id": "CVE-2026-89627",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: roccat: free buffered reports when destroying device\n\nroccat_report_event() duplicates each report with kmemdup() and stores\nthe allocation in a circular-buffer slot. The allocation is released only\nwhen that slot is reused.\n\nThe device destruction paths free struct roccat_device without releasing\nreports still stored in cbuf[]. This makes those allocations unreachable\nand leaks up to ROCCAT_CBUF_SIZE report buffers per device.\n\nAdd a small destructor that frees every buffered report before freeing the\ndevice, and use it in both paths that can destroy a registered device.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89630": {
                 "cve_id": "CVE-2026-89630",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60289,6 +60408,23 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix ALIGN() overflow in symlink_data() error context loop\n\nThe check added by commit 7d9a7f1f96cd (\"smb/client: fix possible\ninfinite loop and oob read in symlink_data()\") compared the post-ALIGN\nlength against the remaining buffer, but ALIGN() itself can overflow:\nfor ErrorDataLength near UINT32_MAX (e.g. 0xFFFFFFF9), ALIGN(x, 8)\nwraps to 0, so the subsequent bounds check passes, and the loop\nadvances by zero bytes leaving 'p' pointing into stale data.\n\nFix by checking the raw ErrorDataLength against the remaining space\nbefore applying ALIGN(), then checking again after.  Since raw_len is\nbounded by the buffer, raw_len + 7 cannot overflow, so the second check\nis an exact post-alignment bounds guard.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89638": {
+                "cve_id": "CVE-2026-89638",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: clear setuid/setgid bit on write with cifsacl/modefromsid/posix extensions\n\nWhen a file has the setuid or setgid bit set and is written to, the VFS\nstrips those bits and issues a setattr with ATTR_KILL_SUID/ATTR_KILL_SGID\ntogether with an ATTR_MODE carrying the already-cleared mode.\n\nBoth cifs_setattr_unix() and cifs_setattr_nounix() unconditionally dropped\nATTR_MODE in that case:\n\n\t/* skip mode change if it's just for clearing setuid/setgid */\n\tif (attrs->ia_valid & (ATTR_KILL_SUID|ATTR_KILL_SGID))\n\t\tattrs->ia_valid &= ~ATTR_MODE;\n\nThis is fine for the default mount, where the mode is only emulated via\nthe DOS read-only attribute and cannot represent the setuid/setgid bits\nanyway.  However, with the \"cifsacl\" or \"modefromsid\" mount options the\nmode is stored on the server through an ACL (id_mode_to_cifs_acl()), with\nthe SMB3.1.1 POSIX extensions the mode is sent to the server directly,\nand with the SMB1 Unix extensions (cifs_setattr_unix) the mode is sent\nvia CIFSSMBUnixSetPathInfo().  In all those cases dropping ATTR_MODE means\nthe cleared mode is never pushed to the server, so the setuid/setgid bit\nsurvives the write.\n\nThis is a security issue: on local filesystems the setuid bit is stripped\nwhen a file is written, but over these cifs.ko mounts the bit persists on\nthe server, potentially allowing an unexpected privilege escalation on\nsubsequent execution.\n\nFix this in two places:\n\n  1. cifs_setattr_nounix(): only take the \"skip mode change\" shortcut\n     when the mode is emulated via the DOS read-only attribute (i.e.\n     neither cifsacl/modefromsid nor the SMB3.1.1 POSIX extensions are\n     in effect), so that the cleared mode is propagated to the server\n     in the ACL / POSIX cases.\n\n  2. cifs_setattr_unix(): this function is only called when Unix\n     extensions are in effect, so the mode is always stored on the\n     server.  Remove the shortcut entirely so that the cleared mode is\n     always pushed.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -60373,6 +60509,57 @@
                 "cve_id": "CVE-2026-89654",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nceph: fix UAF in check_new_map() on session freed during unlock\n\ncheck_new_map() iterates mdsc->sessions[] and for each active session\ndrops mdsc->mutex to perform per-session operations.  The forced-close\npath (rank removed from map) correctly takes a reference on s via\nceph_get_mds_session() before releasing mdsc->mutex, but three other\npaths do not:\n\n  Path A (address changed):  mutex_unlock \u2192 mutex_lock(&s->s_mutex)\n  Path B (reconnect):        mutex_unlock \u2192 send_mds_reconnect(mdsc, s)\n  Path C (active transition): mutex_unlock \u2192 mutex_lock(&s->s_mutex)\n\nWithout the extra reference, another thread can acquire mdsc->mutex\nduring the unlock window, call __unregister_session() which drops the\nlast reference on s, and free it.  The original thread then accesses\nfreed memory via s->s_mutex.\n\nFix by adding ceph_get_mds_session(s) before each mutex_unlock and\nceph_put_mds_session(s) after the corresponding mutex_lock, matching\nthe pattern already used in the forced-close path.\n\nRace timeline (Path A):\n\n  Thread A (check_new_map)             Thread B (another map update\n    holds mdsc->mutex                      or session teardown)\n  --------------------------           --------------------------\n  s = mdsc->sessions[i]\n  (refcount == 1, held only by\n   sessions[] array)\n\n  mutex_unlock(&mdsc->mutex)\n                               --->    acquires mdsc->mutex\n                                       __unregister_session(mdsc, s)\n                                         sessions[i] = NULL\n                                         ceph_put_mds_session(s)\n                                           refcount: 1 -> 0\n                                           kfree(s)  <--- freed!\n\n  mutex_lock(&s->s_mutex)\n  UAF on freed s->s_mutex",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89655": {
+                "cve_id": "CVE-2026-89655",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nceph: fix UAF in __kick_flushing_caps() on cf entry freed during unlock\n\nlist_for_each_entry() iterates ci->i_cap_flush_list but drops\ni_ceph_lock to send cap messages.  During the unlock window,\nhandle_cap_flush_ack() can acquire i_ceph_lock, detach cf entries\nwith tid <= flush_tid from the list, release i_ceph_lock, and free\nthem via ceph_free_cap_flush() outside any lock.  When the original\nthread reacquires i_ceph_lock and the for-loop macro advances via\ncf = list_next_entry(cf, i_list), it dereferences cf->i_list.next\non freed memory.\n\nThe race timeline:\n\n  __kick_flushing_caps()              handle_cap_flush_ack()\n  -----------------------             -----------------------\n  holds i_ceph_lock        <---\n  iterates to cf (tid=10)\n  prepares FLUSH message\n  drops i_ceph_lock        <---\n  __send_cap() \u2500\u2500 FLUSH(tid=10)\n\t                              MDS sends FLUSH_ACK(tid=10)\n                           --->       acquires i_ceph_lock\n                                      cf->tid(10) <= flush_tid(10),\n                                      detaches cf from i_cap_flush_list\n                                      drops i_ceph_lock\n                                      ceph_free_cap_flush(cf) <- frees it!\n  acquires i_ceph_lock     <---\n  for-loop advances:\n    cf = list_next_entry(cf, i_list)\n      -- UAF on freed cf->i_list.next\n\nThe cf was just sent by __kick_flushing_caps itself via __send_cap().\nThe MDS may respond with FLUSH_ACK quickly enough that\nhandle_cap_flush_ack() frees cf before __kick_flushing_caps can\nfinish the iteration.\n\nFix by converting to a manual while loop: save the next pointer\nunder i_ceph_lock before dropping it, then use the saved pointer\nafter reacquiring, so the potentially-freed cf is never accessed again.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89658": {
+                "cve_id": "CVE-2026-89658",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during NFSv4.0 revoked-state cleanup\n\nnfs40_clean_admin_revoked() takes a stateid reference under\nclp->cl_lock, drops nn->client_lock, and calls\nnfsd4_drop_revoked_stid(), which dereferences the stateid's client\nthrough s->sc_client->cl_lock.  The stateid reference does not pin the\nclient, so a teardown racing the dropped lock can free the client\nwhile nfsd4_drop_revoked_stid() is still using it.\n\nThis cleanup runs from the laundromat, so a periodic sweep can race\nforce_expire_client() driven by a write to the clients/<id>/ctl file.\n\nSkip a client that is already expiring and otherwise pin it with\ncl_rpc_users under client_lock before dropping the lock, matching\nnfsd4_revoke_states().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89659": {
+                "cve_id": "CVE-2026-89659",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during delegation revoke\n\nA delegation stateid holds only a bare pointer to its owning\nnfs4_client and does not keep it alive.  The client survives its\nstateids only because __destroy_client() drains cl_delegations and\ncl_revoked before free_client() runs.\n\nnfs4_laundromat() breaks that invariant: it unhashes an\nexpired delegation from cl_delegations, drops deleg_lock, then\nrevoke_delegation() relinks it onto cl_revoked under cl_lock.  In that\nwindow the delegation is on neither list, so client_has_state() can\nreport no remaining state.\n\nEvery teardown path first requires cl_rpc_users to be zero, but\nthe laundromat holds no such reference.  A client whose recalled\ndelegation has just timed out can therefore reach free_client()\nwhile revoke_delegation() is still about to dereference cl_lock,\na use-after-free.\n\nPin the client with cl_rpc_users across the revoke so teardown blocks\nuntil it completes, then reap the delegation from cl_revoked.  A client\nalready expiring reaps its own, so skip it and leave the delegation on\ndel_recall_lru.",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -60471,6 +60658,40 @@
                     }
                 ]
             },
+            "CVE-2026-89702": {
+                "cve_id": "CVE-2026-89702",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: size fh_verify server sockaddr slot by xpt_locallen\n\nThe nfsd_fh_verify and nfsd_fh_verify_err tracepoints declare the\nserver sockaddr slot sized by xpt_remotelen but fill it from\nxpt_local using xpt_locallen:\n\n    TP_STRUCT__entry(\n            ...\n            __sockaddr(server, rqstp->rq_xprt->xpt_remotelen)\n            ...\n    )\n    TP_fast_assign(\n            ...\n            __assign_sockaddr(server, &rqstp->rq_xprt->xpt_local,\n                              rqstp->rq_xprt->xpt_locallen);\n            ...\n    )\n\nWhen xpt_locallen exceeds xpt_remotelen, __assign_sockaddr's memcpy\nwrites past the reserved ring-buffer slot. In the reverse direction\n(xpt_locallen < xpt_remotelen) the slot is oversized and the\nunwritten tail leaks prior ring-buffer contents to trace consumers.\n\nThe write-past-end case is reachable on NFS/UDP. svc_xprt_set_remote()\nis only called from svc_tcp_accept() (net/sunrpc/svcsock.c) and from\nthe RDMA connect path; svc_create_socket() for UDP calls only\nsvc_xprt_set_local(), so xpt_remotelen stays 0 for the xprt's\nlifetime. Every fh_verify trace for an NFSv2/v3-over-UDP request\nthen copies 16 or 28 bytes from xpt_local into a zero-byte slot.\n\nThe other NFSD tracepoints that record the server address\n(NFSD_TRACE_PROC_CALL_FIELDS, NFSD_TRACE_PROC_RES_FIELDS,\nSVC_RQST_ENDPOINT_FIELDS) already size the server slot by\nxpt_locallen; nfsd_fh_verify and nfsd_fh_verify_err were the only\nexceptions.\n\nFix by sizing the server slot with xpt_locallen so the declared slot\nmatches the copy length. The client slot and its assignment already\nagree on xpt_remotelen and are left untouched.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89703": {
+                "cve_id": "CVE-2026-89703",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: set SC_STATUS_FREED in nfsd4_drop_revoked_stid for delegations\n\nnfsd4_drop_revoked_stid() handles FREE_STATEID for admin-revoked\ndelegations but does not set SC_STATUS_FREED before releasing cl_lock.\nrevoke_delegation() uses this flag to detect whether FREE_STATEID has\nalready processed the delegation -- without it, the freed delegation is\nadded to cl_revoked via list_add(), producing a use-after-free when\ncl_revoked is later traversed in __destroy_client().\n\nThe SC_STATUS_REVOKED path in nfsd4_free_stateid() (line 7983) already\nsets SC_STATUS_FREED correctly. Apply the same pattern to the\nSC_STATUS_ADMIN_REVOKED path in nfsd4_drop_revoked_stid().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89705": {
                 "cve_id": "CVE-2026-89705",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60522,11 +60743,45 @@
                     }
                 ]
             },
+            "CVE-2026-89710": {
+                "cve_id": "CVE-2026-89710",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSv4.1: fix layout segment leak on the pnfs_layout_process() forget path\n\nWhen the server returns a new layout stateid while a valid one is still\nheld, pnfs_layout_process() calls pnfs_mark_matching_lsegs_return() on\nthe on-stack free_me list and jumps to out_forget. Segments whose\nreference count drops to zero are unlinked from lo->plh_segs and moved\nto free_me by mark_lseg_invalid(); for an idle cached segment the layout\nheader holds the only reference, so this happens on the first decrement.\n\nout_forget never drains free_me -- only the success path calls\npnfs_free_lseg_list().\n\nCommit 814b84971388 (\"pNFS/NFSv4: Fix a layout segment leak in\npnfs_layout_process()\") added the drain; commit 08bd8dbe8882\n(\"pNFS/NFSv4: Try to return invalid layout in pnfs_layout_process()\")\nremoved it while switching the destination to lo->plh_return_segs, which\nis drained elsewhere. Commit fb700ef02676 (\"NFSv4.1: Simplify layout\nreturn in pnfs_layout_process()\") switched the destination back to\nfree_me without restoring the drain.\n\nRestore the pnfs_free_lseg_list() call.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89711": {
                 "cve_id": "CVE-2026-89711",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: remove flawed WARN_ON_ONCE from nfsd_mode_check\n\nThe header for commit e75b23f9e323 (\"nfsd: check d_can_lookup in\nfh_verify of directories\") details the assumption that justified\nadding the WARN_ON_ONCE to nfsd_mode_check(), that assumption is\ninvalid (in the case of NFS reexport).\n\nWhen NFSD exports an NFS filesystem it is very possible for\nnfsd_mode_check() to encounter a @dentry that doesn't have\ni_op->lookup (see nfs_fhget()'s NFS_ATTR_FATTR_MOUNTPOINT and\nNFS_ATTR_FATTR_V4_REFERRAL handling, and d_flags_for_inode()).\n\nSo remove nfsd_mode_check()'s WARN_ON_ONCE(). The nfserr_notdir\nreturn on that branch must stay. It guards the subsequent\nlookup_one_unlocked() -> __lookup_slow() path, which calls\ninode->i_op->lookup() with no NULL check, so returning nfserr_notdir\nis what keeps a client LOOKUP into such a @dentry from dereferencing\na NULL method pointer.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89722": {
+                "cve_id": "CVE-2026-89722",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI/sysfs: Fix out-of-bounds read in pci_write_legacy_io()\n\npci_write_legacy_io() loads 4 bytes from the kernfs write buffer\nregardless of how many bytes userspace wrote:\n\n  if (count != 1 && count != 2 && count != 4)\n          return -EINVAL;\n\n  return pci_legacy_write(bus, off, *(u32 *)buf, count);\n\nkernfs_fop_write_iter() allocates the buffer with kmalloc(len + 1),\nso a 1-byte write to the legacy_io sysfs file allocates 2 bytes and\nthe unconditional u32 load reads up to 2 bytes past the end of the\nallocation, which KASAN reports as a slab-out-of-bounds read.\nSimilarly, a 2-byte write overreads by 1 byte.\n\nThus, read only the number of bytes requested using get_unaligned_le16()\nand get_unaligned_le32() for the 2 and 4 byte cases, interpreting the\nbuffer as little-endian to match the byte ordering of PCI I/O port\nspace.\n\nThe PowerPC implementation previously compensated for the generic\ncode's native-endian 32-bit load by shifting the value into place\nfor the 1 and 2 byte cases.  The shifts were only correct on\nbig-endian kernels.\n\nOn little-endian PowerPC (POWER8 and later), they extracted the wrong\nbytes, so a 1-byte write wrote an out-of-bounds byte instead of the\nrequested value.  On big-endian, the native load also caused out_le16()\nand out_le32() to reverse the user's bytes on the wire for 2 and 4 byte\nwrites.  The little-endian helpers resolve both issues, so the shifts\nare removed.\n\nNo changes are needed for the Alpha platform.\n\nThe legacy_io file is root-only and exists only on Alpha and PowerPC,\nthe two architectures that define HAVE_PCI_LEGACY.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -60561,6 +60816,40 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Fix crash passing ERR_PTR to kthread_stop()\n\nevent_test_stuff() calls kthread_run() and unconditionally passes the\nreturned task_struct pointer to kthread_stop(). kthread_run() returns an\nerror pointer such as ERR_PTR(-ENOMEM) when kthread creation fails, for\nexample under memory pressure during the boot-time event self-test.\nkthread_stop() then dereferences the invalid pointer, crashing the kernel.\n\nCheck the result of kthread_run() before passing it to kthread_stop(). Use\nWARN_ON() so that a failure to create the self-test thread does not go\nunnoticed, matching the ring-buffer self-test fix in commit\n91542863abad (\"ring-buffer: Fix crash passing ERR_PTR to kthread_stop()\").",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89756": {
+                "cve_id": "CVE-2026-89756",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/migrate: report RCU-tasks quiescent states in migrate_pages_batch()\n\nmigrate_pages_batch() unmaps each folio before moving it, and every\nunmap runs the mmu_notifier invalidate callbacks.  On KVM hosts\ntry_to_migrate() ends up in kvm_mmu_notifier_invalidate_range_start() ->\ntdp_mmu_zap_leafs(), which is expensive, so unmapping a large batch keeps\nthe CPU busy for a long time.\n\nThe loop already calls cond_resched(), but on PREEMPTION kernels that is\na no-op, and involuntary preemption is not a Tasks-RCU quiescent state.\n\nA long batch therefore never reports a quiescent state, and the\nmigrating task (e.g. kcompactd) becomes a Tasks-RCU holdout, stalling the\nTasks-RCU grace period for minutes, which is common at Meta fleet:\n\n  INFO: rcu_tasks detected stalls on tasks:\n  0000000055349ecc: .. nvcsw: 1157401/1157401 holdout: 1 idle_cpu: -1/56 task:kcompactd0      state:R  running task\n  Call Trace:\n   tdp_mmu_zap_leafs\n   tdp_mmu_next_root\n   gfn_to_pfn_cache_invalidate_start\n   kvm_mmu_notifier_invalidate_range_start\n   __mmu_notifier_invalidate_range_start\n   try_to_migrate_one\n   try_to_migrate\n   migrate_pages_batch\n   migrate_pages\n   compact_zone\n   compact_node\n   kcompactd\n   kthread\n\nUse cond_resched_tasks_rcu_qs() so a quiescent state is reported even\nwhen cond_resched() does nothing.\n\nThis has also been discussed at [1]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89757": {
+                "cve_id": "CVE-2026-89757",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/mglru: fix and remove redundant unevictable folio handling\n\nsort_folio() has a shortcut for moving folios that are no longer evictable\nbut are still sitting on a generation list.  However, this shortcut is\nbuggy.  It does not follow the PG_lru usage convention, and it has a more\nserious issue.\n\nUnevictable folios are not threaded on lists[LRU_UNEVICTABLE], so that\nfolio->lru can be reused to hold folio->mlock_count (see the comment in\nlruvec_init()).  Hence lruvec_add_folio() skips the list_add() for them,\nand every other place that turns a folio unevictable initialises\nmlock_count explicitly: lru_add() sets it to 0, __mlock_folio() and\n__mlock_new_folio() set it to !!folio_test_mlocked(folio).  sort_folio()\nsets nothing, and the lru_gen_del_folio() right above it may have already\npoisoned folio->lru via list_del(), so mlock_count ends up aliasing\nLIST_POISON2, which reads as 0x122, i.e.  290.  The result is user\nvisible.  On munlock, __munlock_folio() decrements that bogus count, finds\nit still non-zero and bails out before clearing PG_mlocked, so the folio\nremains unevictable and the Mlocked accounting stays inflated until the\nfolio is freed.\n\nThe shortcut also touches the LRU flags in the wrong order.  It calls\nlru_gen_del_folio() while PG_lru is still set, so a concurrent\nfolio_test_clear_lru() (e.g.  compaction, folio_isolate_lru()) can succeed\non a folio that has already been taken off the generation list, which may\nlead to unexpected behavior.\n\nSo fix it by isolating them as common folios and letting the generic\nshrink path cull them.  This matches the classical LRU behavior, and there\nshould be no visible effect on the generic eviction or isolation behavior.\n\nThere is no performance concern either, such a folio goes through this\nonce, and then it is off the generation lists for good.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -70163,6 +70452,19 @@
                     }
                 ]
             },
+            "CVE-2026-89692": {
+                "cve_id": "CVE-2026-89692",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: clear CALLBACK_RUNNING on failed delegation recall queue\n\nnfsd_break_one_deleg() sets NFSD4_CALLBACK_RUNNING via test_and_set_bit\nat entry to serialize recall work, then calls nfsd4_run_cb() to queue\nthe recall.  When the queue attempt fails the refcount bump is undone,\nbut the RUNNING bit is left set.  The only site that clears the bit is\nnfsd41_destroy_cb() (fs/nfsd/nfs4callback.c), which runs from the\nworkqueue and is therefore unreachable when nothing was queued.\n\nThe bit becomes a permanent latch on dp->dl_recall.cb_flags: every\nsubsequent break_lease() on the same delegation hits the early-return\nguard in nfsd_break_one_deleg() and silently skips the recall, so the\ndelegation is never broken and the conflicting open or lock stalls.\n\nFix by clearing NFSD4_CALLBACK_RUNNING on the !queued branch alongside\nthe refcount_dec.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-89715": {
                 "cve_id": "CVE-2026-89715",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -70181,6 +70483,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: GICv2: Don't WARN on out-of-range GICV_DIR INTID\n\nvgic_v2_deactivate() passes the INTID a guest wrote to GICV_DIR straight\nto vgic_get_vcpu_irq(), and treats a failed lookup as a \"can't happen\"\ncondition with WARN_ON_ONCE().\n\nThe guest can make it happen at will, though: for any INTID outside of\nthe implemented SGI, PPI and SPI ranges the lookup returns NULL, since\nGICv2 has no LPIs. A guest running with EOImode==1 writing such an INTID\nto GICV_DIR triggers the WARN, and panics hosts running with\npanic_on_warn.\n\nDrop the WARN and ignore failed lookups.",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-89771": {
+                "cve_id": "CVE-2026-89771",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nring-buffer: Fix subbuf resize race with ring buffer readers\n\ntrace_buffer subbuf_size is read lockless in ring_buffer_read_page() and\nring_buffer_read_start(), while it can simultaneously be resized with\nring_buffer_subbuf_order_set().\n\nInstead of trace_buffer::subbuf_size, use bpage::order in\nring_buffer_read_start() and ring_buffer_read_page().\n\nIn ring_buffer_read_start(), even with resize_disabled, there is still a\npossibility of a race with a buffer modification. Hold the trace_buffer\nmutex to synchronise with any pending ring buffer order modification.\n\ntrace_buffer::subbuf_size is now actually useless, remove it. Also,\ncreate accessors rb_subbuf_capacity() and rb_page_capacity() which\nreturn the actual size available for storing events, while\nrb_subbuf_size() returns the actual subbuf page-size.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -82855,7 +83170,7 @@
                 "cve_id": "CVE-2025-40181",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/kvm: Force legacy PCI hole to UC when overriding MTRRs for TDX/SNP\n\nWhen running as an SNP or TDX guest under KVM, force the legacy PCI hole,\ni.e. memory between Top of Lower Usable DRAM and 4GiB, to be mapped as UC\nvia a forced variable MTRR range.\n\nIn most KVM-based setups, legacy devices such as the HPET and TPM are\nenumerated via ACPI.  ACPI enumeration includes a Memory32Fixed entry, and\noptionally a SystemMemory descriptor for an OperationRegion, e.g. if the\ndevice needs to be accessed via a Control Method.\n\nIf a SystemMemory entry is present, then the kernel's ACPI driver will\nauto-ioremap the region so that it can be accessed at will.  However, the\nACPI spec doesn't provide a way to enumerate the memory type of\nSystemMemory regions, i.e. there's no way to tell software that a region\nmust be mapped as UC vs. WB, etc.  As a result, Linux's ACPI driver always\nmaps SystemMemory regions using ioremap_cache(), i.e. as WB on x86.\n\nThe dedicated device drivers however, e.g. the HPET driver and TPM driver,\nwant to map their associated memory as UC or WC, as accessing PCI devices\nusing WB is unsupported.\n\nOn bare metal and non-CoCO, the conflicting requirements \"work\" as firmware\nconfigures the PCI hole (and other device memory) to be UC in the MTRRs.\nSo even though the ACPI mappings request WB, they are forced to UC- in the\nkernel's tracking due to the kernel properly handling the MTRR overrides,\nand thus are compatible with the drivers' requested WC/UC-.\n\nWith force WB MTRRs on SNP and TDX guests, the ACPI mappings get their\nrequested WB if the ACPI mappings are established before the dedicated\ndriver code attempts to initialize the device.  E.g. if acpi_init()\nruns before the corresponding device driver is probed, ACPI's WB mapping\nwill \"win\", and result in the driver's ioremap() failing because the\nexisting WB mapping isn't compatible with the requested WC/UC-.\n\nE.g. when a TPM is emulated by the hypervisor (ignoring the security\nimplications of relying on what is allegedly an untrusted entity to store\nmeasurements), the TPM driver will request UC and fail:\n\n  [  1.730459] ioremap error for 0xfed40000-0xfed45000, requested 0x2, got 0x0\n  [  1.732780] tpm_tis MSFT0101:00: probe with driver tpm_tis failed with error -12\n\nNote, the '0x2' and '0x0' values refer to \"enum page_cache_mode\", not x86's\nmemtypes (which frustratingly are an almost pure inversion; 2 == WB, 0 == UC).\nE.g. tracing mapping requests for TPM TIS yields:\n\n Mapping TPM TIS with req_type = 0\n WARNING: CPU: 22 PID: 1 at arch/x86/mm/pat/memtype.c:530 memtype_reserve+0x2ab/0x460\n Modules linked in:\n CPU: 22 UID: 0 PID: 1 Comm: swapper/0 Tainted: G        W           6.16.0-rc7+ #2 VOLUNTARY\n Tainted: [W]=WARN\n Hardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 05/29/2025\n RIP: 0010:memtype_reserve+0x2ab/0x460\n  __ioremap_caller+0x16d/0x3d0\n  ioremap_cache+0x17/0x30\n  x86_acpi_os_ioremap+0xe/0x20\n  acpi_os_map_iomem+0x1f3/0x240\n  acpi_os_map_memory+0xe/0x20\n  acpi_ex_system_memory_space_handler+0x273/0x440\n  acpi_ev_address_space_dispatch+0x176/0x4c0\n  acpi_ex_access_region+0x2ad/0x530\n  acpi_ex_field_datum_io+0xa2/0x4f0\n  acpi_ex_extract_from_field+0x296/0x3e0\n  acpi_ex_read_data_from_field+0xd1/0x460\n  acpi_ex_resolve_node_to_value+0x2ee/0x530\n  acpi_ex_resolve_to_value+0x1f2/0x540\n  acpi_ds_evaluate_name_path+0x11b/0x190\n  acpi_ds_exec_end_op+0x456/0x960\n  acpi_ps_parse_loop+0x27a/0xa50\n  acpi_ps_parse_aml+0x226/0x600\n  acpi_ps_execute_method+0x172/0x3e0\n  acpi_ns_evaluate+0x175/0x5f0\n  acpi_evaluate_object+0x213/0x490\n  acpi_evaluate_integer+0x6d/0x140\n  acpi_bus_get_status+0x93/0x150\n  acpi_add_single_object+0x43a/0x7c0\n  acpi_bus_check_add+0x149/0x3a0\n  acpi_bus_check_add_1+0x16/0x30\n  acpi_ns_walk_namespace+0x22c/0x360\n  acpi_walk_namespace+0x15c/0x170\n  acpi_bus_scan+0x1dd/0x200\n  acpi_scan_init+0xe5/0x2b0\n  acpi_init+0x264/0x5b0\n  do_one_i\n---truncated---",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "open",
                 "events": [
                     {
@@ -125590,6 +125905,23 @@
                     }
                 ]
             },
+            "CVE-2026-89482": {
+                "cve_id": "CVE-2026-89482",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-tcp: do not accept C2HData based on blk_rq_payload_bytes() alone\n\nCommit 25e5cb780e62 (\"nvme-tcp: fix possible crash in write_zeroes\nprocessing\") established that blk_rq_payload_bytes() must not be read\nwithout first checking blk_rq_nr_phys_segments(), and recorded the\nresult in nvme_tcp_setup_cmd_pdu() as req->data_len. The receive side\nwas left as it was.\n\nThe two differ for REQ_OP_WRITE_ZEROES, which has no physical segments\nbut a non-zero blk_rq_bytes(), so setup leaves req->iter untouched\nwhile the receive gate lets a C2HData through and nvme_tcp_recv_data()\ncopies into whatever the previous command on that tag left there. The\ndriver-private area is zeroed only when the tag set is allocated.\n\nReproduced with a test target that leaves a residual iterator on a tag\nand then sends a C2HData for a WRITE_ZEROES command on the same tag:\n\nBUG: KASAN: wild-memory-access in _copy_to_iter+0x642/0x1330\nWrite of size 512 at addr ffe728c2175dfa81 by task kworker/0:1H/103\n\nCPU: 0 UID: 0 PID: 103 Comm: kworker/0:1H Not tainted 7.2.0-rc5-NVMETCP-gf5098b6bae76 #1 PREEMPT(lazy)\nHardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\nWorkqueue: nvme_tcp_wq nvme_tcp_io_work\nCall Trace:\n <TASK>\n dump_stack_lvl+0x53/0x70\n kasan_report+0xce/0x100\n ? _copy_to_iter+0x642/0x1330\n kasan_check_range+0x105/0x1b0\n __asan_memcpy+0x3c/0x60\n _copy_to_iter+0x642/0x1330\n ? __pfx_sock_has_perm+0x10/0x10\n ? worker_thread+0x45b/0xd10\n ? __pfx__copy_to_iter+0x10/0x10\n ? _raw_spin_lock_bh+0x83/0xe0\n ? __pfx__raw_spin_lock_bh+0x10/0x10\n __skb_datagram_iter+0xf3/0x820\n ? __pfx_simple_copy_to_iter+0x10/0x10\n ? __asan_memcpy+0x3c/0x60\n ? skb_copy_bits+0x58d/0x830\n skb_copy_datagram_iter+0x37/0x120\n nvme_tcp_recv_skb+0xa07/0x4320\n ? __pfx_nvme_tcp_recv_skb+0x10/0x10\n __tcp_read_sock+0x1ab/0x810\n ? __pfx_nvme_tcp_recv_skb+0x10/0x10\n ? __pfx_lock_sock_nested+0x10/0x10\n ? __pfx___tcp_read_sock+0x10/0x10\n nvme_tcp_try_recv+0x152/0x1e0\n ? __pfx_nvme_tcp_try_recv+0x10/0x10\n ? __pfx_mutex_unlock+0x10/0x10\n nvme_tcp_io_work+0x1e4/0x6c0\n ? __schedule+0x181a/0x49f0\n ? __pfx_nvme_tcp_io_work+0x10/0x10\n process_one_work+0x633/0x1030\n\nKeep the blk_rq_payload_bytes() test and add req->data_len to it. The\nold test is what rejects a C2HData naming a tag that is no longer in\nflight, because blk_update_request() zeroes rq->__data_len on\ncompletion; req->data_len and req->curr_bio are driver-private and\nsurvive completion, so they cannot stand in for it. Setup initialises\nthe iterator only when both req->curr_bio and req->data_len are set, so\nthe gate now tests the same two.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89487": {
                 "cve_id": "CVE-2026-89487",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -125743,6 +126075,23 @@
                     }
                 ]
             },
+            "CVE-2026-89540": {
+                "cve_id": "CVE-2026-89540",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsunrpc: init gssp_lock before publishing proc entry\n\ncreate_use_gss_proxy_proc_entry() publishes /proc/net/rpc/use-gss-proxy\nvia proc_create_data() before init_gssp_clnt() runs mutex_init() on\nsn->gssp_lock.  Once the dentry is linked under proc_subdir_lock it is\nimmediately reachable from userspace, so a write that lands in the\nwindow drives set_gssp_clnt() into mutex_lock() on a zero-initialized\nstruct mutex.\n\n    create_use_gss_proxy_proc_entry(net)\n      proc_create_data(\"use-gss-proxy\", ...)   /* dentry live */\n      init_gssp_clnt(sn)\n        mutex_init(&sn->gssp_lock)             /* too late */\n\n    write_gssp()\n      set_gssp_clnt(net)\n        mutex_lock(&sn->gssp_lock)             /* uninitialized */\n        gssp_rpc_create(...)\n        sn->gssp_clnt = clnt\n        mutex_unlock(&sn->gssp_lock)\n\nThe window spans only the two statements between proc_create_data()\nreturning and init_gssp_clnt(), so a writer reaches it only if the\nregistering thread is preempted there while another task is already\nopening the freshly published file.  register_pernet_subsys() runs in\npreemptible context under pernet_ops_rwsem, so that preemption is\npossible, and the window widens on auth_rpcgss module load, when the\nproc entry is created for every live net namespace whose tasks are\nalready running.  A writer that wins the race locks a zero-filled\nstruct mutex.  On CONFIG_DEBUG_MUTEXES the missing magic value trips a\n\"lock used without init\" splat; on a production kernel the fast path\nacquires the lock via CMPXCHG(owner, 0, current).  In the latter case\na second writer that arrives before init_gssp_clnt() re-zeroes owner\ncan enter set_gssp_clnt() concurrently, shut down the first writer's\nclnt while it is still in use, and leak the loser's clnt.\n\nFix by initializing sn->gssp_lock in sunrpc_init_net() so its lifetime\nmatches the sunrpc_net it lives in.  sn->gssp_clnt is already NULL from\nthe kzalloc that backs net_generic storage, so the lazy helper is no\nlonger needed; drop init_gssp_clnt(), its prototype, and the call from\ncreate_use_gss_proxy_proc_entry().  sunrpc.ko is a build-time\ndependency of auth_rpcgss.ko, so sunrpc_init_net() has always run on\nevery netns before any auth_gss pernet init can publish the proc\nentry.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89543": {
                 "cve_id": "CVE-2026-89543",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -125862,6 +126211,40 @@
                     }
                 ]
             },
+            "CVE-2026-89559": {
+                "cve_id": "CVE-2026-89559",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nlibnvdimm/labels: Prevent integer overflow in __nd_label_validate()\n\nThe on-media namespace index field nslot is a u32 read from the DIMM\nlabel storage area.  __nd_label_validate() bounds it against the config\narea size, but sizeof_namespace_label() returns unsigned, so the product\nnslot * label_size is evaluated in 32-bit and wraps modulo 2^32 before\nthe comparison.  A crafted nslot passes the bound and is then used as the\nloop trip count in nd_label_data_init(), whose memset() walks off the end\nof the config_size buffer: an out-of-bounds write.\n\nThe field is not trusted -- it comes from the medium, or from userspace\nvia ND_CMD_SET_CONFIG_DATA.  Evaluate the product in 64-bit so the bound\ncheck is exact; conforming labels are unaffected.\n\nThe check was safe when introduced by commit 4a826c83db4e (\"libnvdimm:\nnamespace indices: read and validate\"): it multiplied by sizeof(struct\nnd_namespace_label), a size_t, so on a 64-bit build the product did not\nwrap.  Commit 564e871aa66f (\"libnvdimm, label: add v1.2 nvdimm label\ndefinitions\") narrowed it to 32 bits when the label size became a runtime\nvalue read via sizeof_namespace_label().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89561": {
+                "cve_id": "CVE-2026-89561",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: rpl: fix NULL dereference of idev in ipv6_rpl_srh_rcv()\n\nipv6_rpl_srh_rcv() dereferences idev from __in6_dev_get() without a NULL\ncheck when reading idev->cnf.rpl_seg_enabled.\n\nWhen the device's MTU drops below IPV6_MIN_MTU, addrconf_ifdown() clears\ndev->ip6_ptr through RCU_INIT_POINTER(). A packet that passed the idev\ncheck in ip6_rcv_core() can then reach ipv6_rpl_srh_rcv() with\ndev->ip6_ptr already NULL.\n\nReproduced by flooding the receiving interface with ping6 traffic while\nflapping its MTU between 1500 and 1200:\n\n BUG: KASAN: null-ptr-deref in ipv6_rpl_srh_rcv+0xb3/0x1070\n Read of size 4 at addr 00000000000006b4 by task ping6/394\n\n CPU: 2 UID: 0 PID: 394 Comm: ping6 Not tainted 7.2.0-rc7-micro-vm-dev-00095-g24ef02f934ee #240 PREEMPT(full)\n Call Trace:\n  <IRQ>\n  kasan_report+0xc6/0x100\n  ipv6_rpl_srh_rcv+0xb3/0x1070\n  ip6_protocol_deliver_rcu+0x759/0x9a0\n  ip6_input_finish+0xa8/0x1b0\n  ip6_input+0xe1/0x490\n  ipv6_rcv+0x33d/0x460\n  __netif_receive_skb_one_core+0xd6/0x130\n  process_backlog+0x2cc/0xa00\n  __napi_poll.constprop.0+0x56/0x270\n  net_rx_action+0x327/0x730\n  handle_softirqs+0x11e/0x630\n  do_softirq+0xb3/0xf0\n  </IRQ>\n\nBoth ipv6_rpl_srh_rcv() and ipv6_srh_rcv() are called only from\nipv6_rthdr_rcv(), which already has an idev lookup.\n\nFix the NULL dereference on the RPL path by checking idev in\nipv6_rthdr_rcv(), before it calls either function. The callees take idev as\nan argument and no longer call __in6_dev_get(), so the packet is now\ndropped in one place, with SKB_DROP_REASON_IPV6DISABLED on both paths.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89566": {
                 "cve_id": "CVE-2026-89566",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -125879,10 +126262,44 @@
                     }
                 ]
             },
+            "CVE-2026-89567": {
+                "cve_id": "CVE-2026-89567",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\njbd2: bound shrinker scans by examined checkpoint buffers\n\nThe jbd2 shrinker currently accounts only checkpoint buffers that it\nsuccessfully releases against nr_to_scan.  Busy buffers therefore do not\nconsume the scan budget.\n\nIf a checkpoint transaction contains mostly busy buffers, the shrinker\ncan scan its entire checkpoint list while holding journal->j_list_lock.\nLarge checkpoint lists can result in excessive lock hold times and leave\nother CPUs spinning on j_list_lock, causing soft lockups or RCU stalls.\n\nPass nr_to_scan into journal_shrink_one_cp_list() and decrement it for\nevery buffer examined, including busy buffers.  Pass NULL from checkpoint\ncleanup paths so their existing full-list behavior is preserved.\n\nThis restores the scan-budget semantics that existed before\njournal_shrink_one_cp_list() was changed to always scan a complete\ncheckpoint list.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89569": {
                 "cve_id": "CVE-2026-89569",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: RFCOMM: serialize security confirmation handling\n\nrfcomm_security_cfm() looks up a session on session_list and then walks\nits DLC list without holding rfcomm_mutex. Since RFCOMM session teardown\nuses rfcomm_mutex, krfcommd can close and free the same session and DLCs\nconcurrently:\n\n  hci_rx_work                    krfcommd\n  -----------                    ---------\n  rfcomm_session_get()\n                                 rfcomm_lock()\n                                 rfcomm_session_close()\n                                   rfcomm_dlc_unlink()\n                                   rfcomm_session_del()\n                                     kfree(s)\n                                 rfcomm_unlock()\n  walk s->dlcs\n\nThe callback can then read a freed session list head and touch freed DLCs\nwhile updating their flags or timers.\n\nSerialize the session lookup and DLC traversal in rfcomm_security_cfm()\nwith rfcomm_mutex. This matches the existing RFCOMM session lifetime\nrules and prevents concurrent rfcomm_session_del() / rfcomm_dlc_unlink()\nfrom tearing the objects down while the callback is using them.\n\nKASAN reported:\n\n  BUG: KASAN: slab-use-after-free in rfcomm_security_cfm+0x41c/0x440\n  Read of size 8 at addr ffff888111fb3960 by task kworker/u17:1/89\n  Workqueue: hci0 hci_rx_work\n  Call Trace:\n   rfcomm_security_cfm+0x41c/0x440\n   hci_encrypt_cfm+0x139/0x590\n   hci_encrypt_change_evt+0x37b/0xc40\n   hci_event_packet+0x71b/0xb20\n   hci_rx_work+0x293/0x730\n  Allocated by task 69:\n   rfcomm_session_add+0x9e/0x2f0\n   rfcomm_run+0x44b/0x41e0\n  Freed by task 69:\n   kfree+0x131/0x3c0\n   rfcomm_session_del+0x188/0x220\n   rfcomm_run+0x1985/0x41e0",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89579": {
+                "cve_id": "CVE-2026-89579",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Harden bloom filter sizing and indexing on 32-bit kernels\n\nbloom_map_alloc() has two 32-bit-specific problems when the computed\nbitmap reaches the U32_MAX fallback case.\n\nFirst, BITS_TO_BYTES(U32_MAX) is evaluated with 32-bit arithmetic. The\naddition performed by DIV_ROUND_UP wraps, so the map allocates only the\nfixed-size bloom filter object while keeping bitset_mask == U32_MAX.\nSubsequent updates can then write past the allocated object.\n\nSecond, fixing only the allocation size is not sufficient. The bloom hash\nis a u32, but set_bit() takes a signed long bit number and x86 test_bit()\neventually feeds the index to variable_test_bit(long, ...). On 32-bit\nkernels, hashes in [0x80000000, U32_MAX] therefore become negative bit\noffsets. x86 bt/bts with a memory operand interpret those offsets relative\nto the supplied base, so a map with bitset_mask == U32_MAX can read or\nwrite before bloom->bitset even after allocating the full 512 MiB bitmap.\n\nKeep the U32_MAX fallback, but split each hash into a word pointer and an\nin-word bit number before calling test_bit() or set_bit(). The bitops\nargument is then always in [0, BITS_PER_LONG - 1], while BIT_WORD(h) still\nselects the intended word in the full bitmap.\n\nCompute the bitset size from (u64)bitset_mask + 1 before passing the final\nsize to bpf_map_area_alloc(). This fixes the original under-allocation and\nkeeps the allocated storage consistent with the addressable bitset.\n\nExploitation note: local privilege escalation is possible on a 32-bit x86\nkernel using the under-allocation bug from a binary with CAP_BPF.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -125998,6 +126415,23 @@
                     }
                 ]
             },
+            "CVE-2026-89627": {
+                "cve_id": "CVE-2026-89627",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: roccat: free buffered reports when destroying device\n\nroccat_report_event() duplicates each report with kmemdup() and stores\nthe allocation in a circular-buffer slot. The allocation is released only\nwhen that slot is reused.\n\nThe device destruction paths free struct roccat_device without releasing\nreports still stored in cbuf[]. This makes those allocations unreachable\nand leaks up to ROCCAT_CBUF_SIZE report buffers per device.\n\nAdd a small destructor that frees every buffered report before freeing the\ndevice, and use it in both paths that can destroy a registered device.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89630": {
                 "cve_id": "CVE-2026-89630",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -126020,6 +126454,23 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix ALIGN() overflow in symlink_data() error context loop\n\nThe check added by commit 7d9a7f1f96cd (\"smb/client: fix possible\ninfinite loop and oob read in symlink_data()\") compared the post-ALIGN\nlength against the remaining buffer, but ALIGN() itself can overflow:\nfor ErrorDataLength near UINT32_MAX (e.g. 0xFFFFFFF9), ALIGN(x, 8)\nwraps to 0, so the subsequent bounds check passes, and the loop\nadvances by zero bytes leaving 'p' pointing into stale data.\n\nFix by checking the raw ErrorDataLength against the remaining space\nbefore applying ALIGN(), then checking again after.  Since raw_len is\nbounded by the buffer, raw_len + 7 cannot overflow, so the second check\nis an exact post-alignment bounds guard.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89638": {
+                "cve_id": "CVE-2026-89638",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: clear setuid/setgid bit on write with cifsacl/modefromsid/posix extensions\n\nWhen a file has the setuid or setgid bit set and is written to, the VFS\nstrips those bits and issues a setattr with ATTR_KILL_SUID/ATTR_KILL_SGID\ntogether with an ATTR_MODE carrying the already-cleared mode.\n\nBoth cifs_setattr_unix() and cifs_setattr_nounix() unconditionally dropped\nATTR_MODE in that case:\n\n\t/* skip mode change if it's just for clearing setuid/setgid */\n\tif (attrs->ia_valid & (ATTR_KILL_SUID|ATTR_KILL_SGID))\n\t\tattrs->ia_valid &= ~ATTR_MODE;\n\nThis is fine for the default mount, where the mode is only emulated via\nthe DOS read-only attribute and cannot represent the setuid/setgid bits\nanyway.  However, with the \"cifsacl\" or \"modefromsid\" mount options the\nmode is stored on the server through an ACL (id_mode_to_cifs_acl()), with\nthe SMB3.1.1 POSIX extensions the mode is sent to the server directly,\nand with the SMB1 Unix extensions (cifs_setattr_unix) the mode is sent\nvia CIFSSMBUnixSetPathInfo().  In all those cases dropping ATTR_MODE means\nthe cleared mode is never pushed to the server, so the setuid/setgid bit\nsurvives the write.\n\nThis is a security issue: on local filesystems the setuid bit is stripped\nwhen a file is written, but over these cifs.ko mounts the bit persists on\nthe server, potentially allowing an unexpected privilege escalation on\nsubsequent execution.\n\nFix this in two places:\n\n  1. cifs_setattr_nounix(): only take the \"skip mode change\" shortcut\n     when the mode is emulated via the DOS read-only attribute (i.e.\n     neither cifsacl/modefromsid nor the SMB3.1.1 POSIX extensions are\n     in effect), so that the cleared mode is propagated to the server\n     in the ACL / POSIX cases.\n\n  2. cifs_setattr_unix(): this function is only called when Unix\n     extensions are in effect, so the mode is always stored on the\n     server.  Remove the shortcut entirely so that the cleared mode is\n     always pushed.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -126104,6 +126555,57 @@
                 "cve_id": "CVE-2026-89654",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nceph: fix UAF in check_new_map() on session freed during unlock\n\ncheck_new_map() iterates mdsc->sessions[] and for each active session\ndrops mdsc->mutex to perform per-session operations.  The forced-close\npath (rank removed from map) correctly takes a reference on s via\nceph_get_mds_session() before releasing mdsc->mutex, but three other\npaths do not:\n\n  Path A (address changed):  mutex_unlock \u2192 mutex_lock(&s->s_mutex)\n  Path B (reconnect):        mutex_unlock \u2192 send_mds_reconnect(mdsc, s)\n  Path C (active transition): mutex_unlock \u2192 mutex_lock(&s->s_mutex)\n\nWithout the extra reference, another thread can acquire mdsc->mutex\nduring the unlock window, call __unregister_session() which drops the\nlast reference on s, and free it.  The original thread then accesses\nfreed memory via s->s_mutex.\n\nFix by adding ceph_get_mds_session(s) before each mutex_unlock and\nceph_put_mds_session(s) after the corresponding mutex_lock, matching\nthe pattern already used in the forced-close path.\n\nRace timeline (Path A):\n\n  Thread A (check_new_map)             Thread B (another map update\n    holds mdsc->mutex                      or session teardown)\n  --------------------------           --------------------------\n  s = mdsc->sessions[i]\n  (refcount == 1, held only by\n   sessions[] array)\n\n  mutex_unlock(&mdsc->mutex)\n                               --->    acquires mdsc->mutex\n                                       __unregister_session(mdsc, s)\n                                         sessions[i] = NULL\n                                         ceph_put_mds_session(s)\n                                           refcount: 1 -> 0\n                                           kfree(s)  <--- freed!\n\n  mutex_lock(&s->s_mutex)\n  UAF on freed s->s_mutex",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89655": {
+                "cve_id": "CVE-2026-89655",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nceph: fix UAF in __kick_flushing_caps() on cf entry freed during unlock\n\nlist_for_each_entry() iterates ci->i_cap_flush_list but drops\ni_ceph_lock to send cap messages.  During the unlock window,\nhandle_cap_flush_ack() can acquire i_ceph_lock, detach cf entries\nwith tid <= flush_tid from the list, release i_ceph_lock, and free\nthem via ceph_free_cap_flush() outside any lock.  When the original\nthread reacquires i_ceph_lock and the for-loop macro advances via\ncf = list_next_entry(cf, i_list), it dereferences cf->i_list.next\non freed memory.\n\nThe race timeline:\n\n  __kick_flushing_caps()              handle_cap_flush_ack()\n  -----------------------             -----------------------\n  holds i_ceph_lock        <---\n  iterates to cf (tid=10)\n  prepares FLUSH message\n  drops i_ceph_lock        <---\n  __send_cap() \u2500\u2500 FLUSH(tid=10)\n\t                              MDS sends FLUSH_ACK(tid=10)\n                           --->       acquires i_ceph_lock\n                                      cf->tid(10) <= flush_tid(10),\n                                      detaches cf from i_cap_flush_list\n                                      drops i_ceph_lock\n                                      ceph_free_cap_flush(cf) <- frees it!\n  acquires i_ceph_lock     <---\n  for-loop advances:\n    cf = list_next_entry(cf, i_list)\n      -- UAF on freed cf->i_list.next\n\nThe cf was just sent by __kick_flushing_caps itself via __send_cap().\nThe MDS may respond with FLUSH_ACK quickly enough that\nhandle_cap_flush_ack() frees cf before __kick_flushing_caps can\nfinish the iteration.\n\nFix by converting to a manual while loop: save the next pointer\nunder i_ceph_lock before dropping it, then use the saved pointer\nafter reacquiring, so the potentially-freed cf is never accessed again.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89658": {
+                "cve_id": "CVE-2026-89658",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during NFSv4.0 revoked-state cleanup\n\nnfs40_clean_admin_revoked() takes a stateid reference under\nclp->cl_lock, drops nn->client_lock, and calls\nnfsd4_drop_revoked_stid(), which dereferences the stateid's client\nthrough s->sc_client->cl_lock.  The stateid reference does not pin the\nclient, so a teardown racing the dropped lock can free the client\nwhile nfsd4_drop_revoked_stid() is still using it.\n\nThis cleanup runs from the laundromat, so a periodic sweep can race\nforce_expire_client() driven by a write to the clients/<id>/ctl file.\n\nSkip a client that is already expiring and otherwise pin it with\ncl_rpc_users under client_lock before dropping the lock, matching\nnfsd4_revoke_states().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89659": {
+                "cve_id": "CVE-2026-89659",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during delegation revoke\n\nA delegation stateid holds only a bare pointer to its owning\nnfs4_client and does not keep it alive.  The client survives its\nstateids only because __destroy_client() drains cl_delegations and\ncl_revoked before free_client() runs.\n\nnfs4_laundromat() breaks that invariant: it unhashes an\nexpired delegation from cl_delegations, drops deleg_lock, then\nrevoke_delegation() relinks it onto cl_revoked under cl_lock.  In that\nwindow the delegation is on neither list, so client_has_state() can\nreport no remaining state.\n\nEvery teardown path first requires cl_rpc_users to be zero, but\nthe laundromat holds no such reference.  A client whose recalled\ndelegation has just timed out can therefore reach free_client()\nwhile revoke_delegation() is still about to dereference cl_lock,\na use-after-free.\n\nPin the client with cl_rpc_users across the revoke so teardown blocks\nuntil it completes, then reap the delegation from cl_revoked.  A client\nalready expiring reaps its own, so skip it and leave the delegation on\ndel_recall_lru.",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -126202,6 +126704,40 @@
                     }
                 ]
             },
+            "CVE-2026-89702": {
+                "cve_id": "CVE-2026-89702",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: size fh_verify server sockaddr slot by xpt_locallen\n\nThe nfsd_fh_verify and nfsd_fh_verify_err tracepoints declare the\nserver sockaddr slot sized by xpt_remotelen but fill it from\nxpt_local using xpt_locallen:\n\n    TP_STRUCT__entry(\n            ...\n            __sockaddr(server, rqstp->rq_xprt->xpt_remotelen)\n            ...\n    )\n    TP_fast_assign(\n            ...\n            __assign_sockaddr(server, &rqstp->rq_xprt->xpt_local,\n                              rqstp->rq_xprt->xpt_locallen);\n            ...\n    )\n\nWhen xpt_locallen exceeds xpt_remotelen, __assign_sockaddr's memcpy\nwrites past the reserved ring-buffer slot. In the reverse direction\n(xpt_locallen < xpt_remotelen) the slot is oversized and the\nunwritten tail leaks prior ring-buffer contents to trace consumers.\n\nThe write-past-end case is reachable on NFS/UDP. svc_xprt_set_remote()\nis only called from svc_tcp_accept() (net/sunrpc/svcsock.c) and from\nthe RDMA connect path; svc_create_socket() for UDP calls only\nsvc_xprt_set_local(), so xpt_remotelen stays 0 for the xprt's\nlifetime. Every fh_verify trace for an NFSv2/v3-over-UDP request\nthen copies 16 or 28 bytes from xpt_local into a zero-byte slot.\n\nThe other NFSD tracepoints that record the server address\n(NFSD_TRACE_PROC_CALL_FIELDS, NFSD_TRACE_PROC_RES_FIELDS,\nSVC_RQST_ENDPOINT_FIELDS) already size the server slot by\nxpt_locallen; nfsd_fh_verify and nfsd_fh_verify_err were the only\nexceptions.\n\nFix by sizing the server slot with xpt_locallen so the declared slot\nmatches the copy length. The client slot and its assignment already\nagree on xpt_remotelen and are left untouched.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89703": {
+                "cve_id": "CVE-2026-89703",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: set SC_STATUS_FREED in nfsd4_drop_revoked_stid for delegations\n\nnfsd4_drop_revoked_stid() handles FREE_STATEID for admin-revoked\ndelegations but does not set SC_STATUS_FREED before releasing cl_lock.\nrevoke_delegation() uses this flag to detect whether FREE_STATEID has\nalready processed the delegation -- without it, the freed delegation is\nadded to cl_revoked via list_add(), producing a use-after-free when\ncl_revoked is later traversed in __destroy_client().\n\nThe SC_STATUS_REVOKED path in nfsd4_free_stateid() (line 7983) already\nsets SC_STATUS_FREED correctly. Apply the same pattern to the\nSC_STATUS_ADMIN_REVOKED path in nfsd4_drop_revoked_stid().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89705": {
                 "cve_id": "CVE-2026-89705",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -126253,11 +126789,45 @@
                     }
                 ]
             },
+            "CVE-2026-89710": {
+                "cve_id": "CVE-2026-89710",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSv4.1: fix layout segment leak on the pnfs_layout_process() forget path\n\nWhen the server returns a new layout stateid while a valid one is still\nheld, pnfs_layout_process() calls pnfs_mark_matching_lsegs_return() on\nthe on-stack free_me list and jumps to out_forget. Segments whose\nreference count drops to zero are unlinked from lo->plh_segs and moved\nto free_me by mark_lseg_invalid(); for an idle cached segment the layout\nheader holds the only reference, so this happens on the first decrement.\n\nout_forget never drains free_me -- only the success path calls\npnfs_free_lseg_list().\n\nCommit 814b84971388 (\"pNFS/NFSv4: Fix a layout segment leak in\npnfs_layout_process()\") added the drain; commit 08bd8dbe8882\n(\"pNFS/NFSv4: Try to return invalid layout in pnfs_layout_process()\")\nremoved it while switching the destination to lo->plh_return_segs, which\nis drained elsewhere. Commit fb700ef02676 (\"NFSv4.1: Simplify layout\nreturn in pnfs_layout_process()\") switched the destination back to\nfree_me without restoring the drain.\n\nRestore the pnfs_free_lseg_list() call.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89711": {
                 "cve_id": "CVE-2026-89711",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: remove flawed WARN_ON_ONCE from nfsd_mode_check\n\nThe header for commit e75b23f9e323 (\"nfsd: check d_can_lookup in\nfh_verify of directories\") details the assumption that justified\nadding the WARN_ON_ONCE to nfsd_mode_check(), that assumption is\ninvalid (in the case of NFS reexport).\n\nWhen NFSD exports an NFS filesystem it is very possible for\nnfsd_mode_check() to encounter a @dentry that doesn't have\ni_op->lookup (see nfs_fhget()'s NFS_ATTR_FATTR_MOUNTPOINT and\nNFS_ATTR_FATTR_V4_REFERRAL handling, and d_flags_for_inode()).\n\nSo remove nfsd_mode_check()'s WARN_ON_ONCE(). The nfserr_notdir\nreturn on that branch must stay. It guards the subsequent\nlookup_one_unlocked() -> __lookup_slow() path, which calls\ninode->i_op->lookup() with no NULL check, so returning nfserr_notdir\nis what keeps a client LOOKUP into such a @dentry from dereferencing\na NULL method pointer.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89722": {
+                "cve_id": "CVE-2026-89722",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI/sysfs: Fix out-of-bounds read in pci_write_legacy_io()\n\npci_write_legacy_io() loads 4 bytes from the kernfs write buffer\nregardless of how many bytes userspace wrote:\n\n  if (count != 1 && count != 2 && count != 4)\n          return -EINVAL;\n\n  return pci_legacy_write(bus, off, *(u32 *)buf, count);\n\nkernfs_fop_write_iter() allocates the buffer with kmalloc(len + 1),\nso a 1-byte write to the legacy_io sysfs file allocates 2 bytes and\nthe unconditional u32 load reads up to 2 bytes past the end of the\nallocation, which KASAN reports as a slab-out-of-bounds read.\nSimilarly, a 2-byte write overreads by 1 byte.\n\nThus, read only the number of bytes requested using get_unaligned_le16()\nand get_unaligned_le32() for the 2 and 4 byte cases, interpreting the\nbuffer as little-endian to match the byte ordering of PCI I/O port\nspace.\n\nThe PowerPC implementation previously compensated for the generic\ncode's native-endian 32-bit load by shifting the value into place\nfor the 1 and 2 byte cases.  The shifts were only correct on\nbig-endian kernels.\n\nOn little-endian PowerPC (POWER8 and later), they extracted the wrong\nbytes, so a 1-byte write wrote an out-of-bounds byte instead of the\nrequested value.  On big-endian, the native load also caused out_le16()\nand out_le32() to reverse the user's bytes on the wire for 2 and 4 byte\nwrites.  The little-endian helpers resolve both issues, so the shifts\nare removed.\n\nNo changes are needed for the Alpha platform.\n\nThe legacy_io file is root-only and exists only on Alpha and PowerPC,\nthe two architectures that define HAVE_PCI_LEGACY.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -126292,6 +126862,40 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Fix crash passing ERR_PTR to kthread_stop()\n\nevent_test_stuff() calls kthread_run() and unconditionally passes the\nreturned task_struct pointer to kthread_stop(). kthread_run() returns an\nerror pointer such as ERR_PTR(-ENOMEM) when kthread creation fails, for\nexample under memory pressure during the boot-time event self-test.\nkthread_stop() then dereferences the invalid pointer, crashing the kernel.\n\nCheck the result of kthread_run() before passing it to kthread_stop(). Use\nWARN_ON() so that a failure to create the self-test thread does not go\nunnoticed, matching the ring-buffer self-test fix in commit\n91542863abad (\"ring-buffer: Fix crash passing ERR_PTR to kthread_stop()\").",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89756": {
+                "cve_id": "CVE-2026-89756",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/migrate: report RCU-tasks quiescent states in migrate_pages_batch()\n\nmigrate_pages_batch() unmaps each folio before moving it, and every\nunmap runs the mmu_notifier invalidate callbacks.  On KVM hosts\ntry_to_migrate() ends up in kvm_mmu_notifier_invalidate_range_start() ->\ntdp_mmu_zap_leafs(), which is expensive, so unmapping a large batch keeps\nthe CPU busy for a long time.\n\nThe loop already calls cond_resched(), but on PREEMPTION kernels that is\na no-op, and involuntary preemption is not a Tasks-RCU quiescent state.\n\nA long batch therefore never reports a quiescent state, and the\nmigrating task (e.g. kcompactd) becomes a Tasks-RCU holdout, stalling the\nTasks-RCU grace period for minutes, which is common at Meta fleet:\n\n  INFO: rcu_tasks detected stalls on tasks:\n  0000000055349ecc: .. nvcsw: 1157401/1157401 holdout: 1 idle_cpu: -1/56 task:kcompactd0      state:R  running task\n  Call Trace:\n   tdp_mmu_zap_leafs\n   tdp_mmu_next_root\n   gfn_to_pfn_cache_invalidate_start\n   kvm_mmu_notifier_invalidate_range_start\n   __mmu_notifier_invalidate_range_start\n   try_to_migrate_one\n   try_to_migrate\n   migrate_pages_batch\n   migrate_pages\n   compact_zone\n   compact_node\n   kcompactd\n   kthread\n\nUse cond_resched_tasks_rcu_qs() so a quiescent state is reported even\nwhen cond_resched() does nothing.\n\nThis has also been discussed at [1]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89757": {
+                "cve_id": "CVE-2026-89757",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/mglru: fix and remove redundant unevictable folio handling\n\nsort_folio() has a shortcut for moving folios that are no longer evictable\nbut are still sitting on a generation list.  However, this shortcut is\nbuggy.  It does not follow the PG_lru usage convention, and it has a more\nserious issue.\n\nUnevictable folios are not threaded on lists[LRU_UNEVICTABLE], so that\nfolio->lru can be reused to hold folio->mlock_count (see the comment in\nlruvec_init()).  Hence lruvec_add_folio() skips the list_add() for them,\nand every other place that turns a folio unevictable initialises\nmlock_count explicitly: lru_add() sets it to 0, __mlock_folio() and\n__mlock_new_folio() set it to !!folio_test_mlocked(folio).  sort_folio()\nsets nothing, and the lru_gen_del_folio() right above it may have already\npoisoned folio->lru via list_del(), so mlock_count ends up aliasing\nLIST_POISON2, which reads as 0x122, i.e.  290.  The result is user\nvisible.  On munlock, __munlock_folio() decrements that bogus count, finds\nit still non-zero and bails out before clearing PG_mlocked, so the folio\nremains unevictable and the Mlocked accounting stays inflated until the\nfolio is freed.\n\nThe shortcut also touches the LRU flags in the wrong order.  It calls\nlru_gen_del_folio() while PG_lru is still set, so a concurrent\nfolio_test_clear_lru() (e.g.  compaction, folio_isolate_lru()) can succeed\non a folio that has already been taken off the generation list, which may\nlead to unexpected behavior.\n\nSo fix it by isolating them as common folios and letting the generic\nshrink path cull them.  This matches the classical LRU behavior, and there\nshould be no visible effect on the generic eviction or isolation behavior.\n\nThere is no performance concern either, such a folio goes through this\nonce, and then it is off the generation lists for good.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
