@@ -60185,6 +60185,23 @@
                     }
                 ]
             },
+            "CVE-2026-89532": {
+                "cve_id": "CVE-2026-89532",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Fix pcl_for_each_segment for empty chunks\n\nWhen a parsed chunk list contains a chunk whose ch_segcount is zero,\npcl_for_each_segment computes its inclusive upper bound as\n&chunk->ch_segments[ch_segcount - 1]. ch_segcount is u32, so the\nsubtraction wraps to 0xFFFFFFFF and the bound lands far past the\nch_segments flex array. The loop body then walks unrelated memory at\nsizeof(struct svc_rdma_segment) stride until it faults.\n\nA zero-segcount chunk is reachable from the wire:\nxdr_check_write_chunk() only rejects segcount values greater than\nrc_maxpages, and pcl_alloc_write() links a freshly allocated chunk\nonto rc_write_pcl/rc_reply_pcl before its segment-fill loop runs,\nso a Write or Reply chunk advertising zero segments leaves\nch_segcount == 0 on the list. When the transport has negotiated\nSend-With-Invalidate, svc_rdma_get_inv_rkey() iterates all four\nPCLs with pcl_for_each_segment and dereferences segment->rs_handle\non each iteration, turning the underflow into an out-of-bounds read\nand a general protection fault.\n\n    xdr_check_write_list / xdr_check_reply_chunk\n      pcl_alloc_write()\n        chunk = pcl_alloc_chunk(...)  /* ch_segcount = 0 */\n        list_add_tail(&chunk->ch_list, &pcl->cl_chunks)\n        /* fill loop iterates zero times for wire segcount 0 */\n\n    svc_rdma_get_inv_rkey()\n      pcl_for_each_chunk(rc_write_pcl)\n        pcl_for_each_segment(segment, chunk)\n          pos <= &ch_segments[0u - 1u]  /* 0xFFFFFFFF */\n          segment->rs_handle            /* OOB read -> GPF */\n\nFix by switching the macro to a half-open upper bound that uses\nch_segcount directly. For ch_segcount == 0 the loop start equals the\nloop end and the body is skipped; for ch_segcount > 0 the iteration\nrange is unchanged. All six existing call sites in\nnet/sunrpc/xprtrdma/svc_rdma_recvfrom.c and\nnet/sunrpc/xprtrdma/svc_rdma_rw.c remain correct under the new bound,\nso no caller changes are needed.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89533": {
                 "cve_id": "CVE-2026-89533",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60257,6 +60274,23 @@
                 "cve_id": "CVE-2026-89547",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nSUNRPC: Check svc pool percpu counter allocation\n\n__svc_create() initializes three per-pool percpu_counter stats and\nignores every return value. On SMP, percpu_counter_init() fails when\n__alloc_percpu_gfp() cannot satisfy the allocation, leaving the failed\ncounter with fbc->counters == NULL and its embedded raw_spinlock_t,\nlist_head, and count never initialized. __svc_create() returns the\nhalf-constructed svc_serv to nfsd, lockd, or the NFS callback service\nanyway.\n\nOnce that service is live, the hot-path increments in\nsvc_xprt_enqueue(), svc_handle_xprt(), and\nsvc_pool_wake_idle_thread() reach a counter whose backing pointer is\nNULL. The pointer is a per-cpu offset, so the access does not fault:\nit resolves to offset zero of the current CPU's per-cpu area and\nsilently corrupts whatever variable lives there. A\n/proc/fs/nfsd/pool_stats read walks the same NULL per-cpu storage and\nreturns garbage, and on CONFIG_DEBUG_SPINLOCK or lockdep it splats on\nthe never-initialized lock.\n\nCreating the broken service requires a percpu allocation failure during\nRPC server startup, so it is reachable only by a local administrator\nunder memory pressure or fault injection; a remote peer cannot induce\nthe bad state on its own.\n\nCheck each percpu_counter_init() return value in __svc_create() and\nfail when an allocation fails, unwinding the counters already set up\nin the current pool and in every pool initialized before it. A\ndiscrete percpu_counter_destroy() per counter at teardown frees each\nper-cpu allocation exactly once.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89548": {
+                "cve_id": "CVE-2026-89548",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nSUNRPC: always drain cache_cleaner before destroying a cache_detail\n\nsunrpc_destroy_cache_detail() only cancels the global cache_cleaner\ndelayed_work when cache_list is empty.  During per-netns teardown\ncache_list is never empty because init_net's caches remain registered,\nso the cancel never fires.  After unlink, the caller proceeds to\ncache_destroy_net() which kfrees the cache_detail while cache_clean()\nmay still hold a dangling pointer to it.  The result is a\nuse-after-free: cache_dequeue() takes cd->queue_lock on freed memory,\nand cache_put() dereferences cd->cache_put as a function pointer from\nfreed slab.\n\nDrop the list_empty guard so that cancel_delayed_work_sync() always\nruns, ensuring any in-flight cache_clean() completes before the\ncache_detail is freed.  Re-arm the cleaner afterwards if other caches\nare still registered.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -60576,11 +60610,45 @@
                     }
                 ]
             },
+            "CVE-2026-89662": {
+                "cve_id": "CVE-2026-89662",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent lock owner use-after-free during client teardown\n\n__destroy_client() releases a client's open owners, but a lock owner\nwhose only reference is a blocked lock (nbl) stays on\ncl_ownerstr_hashtbl.  client_has_state() does not count a bare owner,\nso DESTROY_CLIENTID can reach __destroy_client() with such owners\npresent.\n\n__destroy_client() then walks the table, calling remove_blocked_locks()\non each owner without a reference.  Freeing a blocked lock drops the\nowner reference held via flc_owner.  The per-net laundromat reaps\nblocked locks from nn->blocked_locks_lru independently of client state.\nThe two paths share blocked_locks_lock only for the list splice, not\nthe owner's lifetime.  The laundromat therefore frees the owner as\n__destroy_client() dereferences it, a NULL dereference in\nremove_blocked_locks().\n\nnfsd4_release_lockowner() holds a reference across the same call;\n__destroy_client() does not.  Hold cl_lock across the walk, taking a\nreference and unhashing each owner, then drop it before\nremove_blocked_locks() and nfs4_put_stateowner(), which take\nblocked_locks_lock and cl_lock.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89666": {
                 "cve_id": "CVE-2026-89666",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: reject out-of-range nseconds in NFSv3 SETATTR and create ops\n\nA client can send an NFSv3 SETATTR, CREATE, MKDIR, SYMLINK or MKNOD\ncarrying an atime or mtime whose nseconds field is out of range. The\nvalue is well-formed on the wire and decodes cleanly into a valid\nuint32, but it is not a valid timespec64: tv_nsec must be less than\nNSEC_PER_SEC.\n\nNothing in the setattr path clamps it. notify_change() runs the time\nthrough timestamp_truncate(), which does not reduce tv_nsec below\nNSEC_PER_SEC when the filesystem supports nanosecond granularity\n(s_time_gran == 1), and the inode atime/mtime setters store it verbatim\n(only ctime is normalized, via inode_set_ctime_to_ts()). The\nun-normalized value then corrupts on-disk metadata: ext4's\next4_encode_extra_time() shifts tv_nsec left by EXT4_EPOCH_BITS, which\noverflows the 32-bit extra field and clobbers the seconds-epoch bits, so\nthe stored seconds (and thus the year) are wrong on read-back. XFS with\nbigtime mis-stores the timestamp for the same reason.\n\nValidate the client-supplied atime/mtime in the proc handlers and return\nNFS3ERR_INVAL before anything is changed. RFC 1813 lists NFS3ERR_INVAL\nfor SETATTR and describes it as the error for a value the server 'can\nnot store ... in its own representation'; the client maps it to EINVAL.\n\nChecking in the proc handlers, rather than in nfsd_setattr(), keeps the\nrejection in front of object creation. The create operations create the\nobject before nfsd_create_setattr() runs, so a late failure would leave\nthe new object behind and turn a non-idempotent request into a namespace\nchange that reports failure. The check is therefore done up front, for\nthe create operations before the object is created.\n\ntv_nsec is a long, so the comparison casts it to unsigned long (the same\nwidth) rather than to u32, matching timespec64_valid(). A u32 cast would\ntruncate on 64-bit; the unsigned long cast also rejects a value that\nbecame negative when an out-of-range u32 wire nseconds was assigned to a\n32-bit long.\n\nOnly client-supplied times are checked: SET_TO_SERVER_TIME requests\ncarry no client value. The sattrguard3 ctime is deliberately left alone:\nan out-of-range guard simply never matches the object's ctime and yields\nNFS3ERR_NOT_SYNC via the existing guardtime comparison, which is the\nprotocol-correct outcome rather than rejecting the request.",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89667": {
+                "cve_id": "CVE-2026-89667",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: close shrinker/GC/fsnotify vs per-net shutdown race in filecache\n\nThe shrinker, GC worker, and fsnotify/lease callbacks can unhash an\nnfsd_file from the rhashtable and then call\nnfsd_file_dispose_list_delayed() to move it to the per-net dispose list.\nIf nfsd_file_cache_shutdown_net() runs concurrently, its rhashtable walk\nmisses the already-unhashed file, and its drain of the per-net dispose\nlist can run before the file has been queued.  The file then sits on\nthe per-net list with no thread to drain it, leaking both the file and\nits associated state.\n\nThe GC worker and shrinker already hold nfsd_gc_lock while walking the\nLRU, but in the original code they release it before calling\nnfsd_file_dispose_list_delayed().  The fsnotify/lease path\n(nfsd_file_close_inode) has no synchronization at all.\n\nFix this by:\n\n  1. Widening nfsd_gc_lock in both nfsd_file_gc() and nfsd_file_lru_scan()\n     to cover the nfsd_file_dispose_list_delayed() call.\n\n  2. Wrapping nfsd_file_close_inode() in nfsd_gc_lock so that all three\n     callers of nfsd_file_dispose_list_delayed() hold the lock.\n\n  3. Adding a spin_lock/unlock(nfsd_gc_lock) barrier in\n     nfsd_file_cache_shutdown_net() after the purge, so that any\n     in-progress disposal has fully completed before the per-net list\n     is drained.\n\nAll operations inside the lock are non-sleeping (rhashtable lookups,\natomic bit/refcount ops, list moves, svc_wake_up), so the spinlock is\nappropriate.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -60627,11 +60695,45 @@
                     }
                 ]
             },
+            "CVE-2026-89705": {
+                "cve_id": "CVE-2026-89705",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: restore rq_status_counter to even on all nfsd_dispatch() exit paths\n\nnfsd_dispatch() sets rq_status_counter to an odd value once a request has\nbeen decoded, and back to an even value once it has been fully processed,\nforming a seq-lock like protocol with the lockless reader in\nnfsd_nl_rpc_status_get_dumpit().\n\nOnly the fully successful path restored the counter to even. The cache-hit\n(RC_REPLY), drop (RC_DROPIT / RQ_DROPME) and encode-error paths all return\nafter the odd-valued store without ever bringing the counter back to even.\nOnce one of those paths is taken, rq_status_counter is left odd: the next\nrequest's decode ORs in 1 (still odd) and only a subsequent successful\nencode restores even. While stuck odd, the dumpit reader treats the rqstp\nfields as stable and its retry check compares against the same unchanging\nodd value, so it never detects concurrent mutation. This exposes actively\nmutating fields (e.g. args->ops / args->opcnt during compound decode and\nrelease) to the lockless reader, which can read past the end of the\n8-element inline ops array.\n\nAdd a helper that advances the counter to the next even value and call it\non every return path that follows the odd-valued store. The decode-error\npath is left untouched as it is reached before the counter is set odd.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89707": {
                 "cve_id": "CVE-2026-89707",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: release path refs on follow_down() error\n\nnfsd_cross_mnt() initializes a local struct path with mntget() and\ndget() before calling follow_down(). On a negative return the error\narm jumps to out without releasing those references:\n\n    err = follow_down(&path, follow_flags);\n    if (err < 0)\n            goto out;\n\nfollow_down() never drops the caller's entry-time refs on any error\nsub-case; for example a pre-cross d_manage() failure leaves path\nuntouched, so the mntget()/dget() taken on entry survive the call.\n\nEvery other early-exit arm in nfsd_cross_mnt() (other-namespace\nreturn, IS_ERR(exp2), and the success tail after the swap) already\ncalls path_put(&path); the err < 0 arm is the lone omission. The\nleak inflates mnt_count and d_count on each failed cross-mount,\nblocking umount and pinning dentries against the shrinker, and is\nreachable by any authenticated NFS client through nfsd_lookup_dentry\nor the NFSv4 READDIR encode path.\n\nFix by calling path_put(&path) before the goto out in the err < 0\narm so the entry-time refs are released on all follow_down() error\nreturns.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89708": {
+                "cve_id": "CVE-2026-89708",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: RCU-protect cl_cb_session to fix use-after-free on session teardown\n\nAfter a DESTROY_SESSION the per-session teardown path can free a\nsession while rpciod still holds an inflight callback rpc_task that\ndereferences clp->cl_cb_session.  nfsd4_probe_callback_sync() flushes\ncl_callback_wq, but once nfsd4_run_cb_work() has called\nrpc_call_async() the rpc_task lives on rpciod; flushing the workqueue\ndoes not wait for it.  rpc_shutdown_client() does drain rpciod tasks,\nbut uses a 1-second wait_event_timeout \u2014 tasks stuck in rpc_delay()\n(e.g. 2-second NFS4ERR_DELAY retries) can outlive the drain.\n\n    destroy path                       rpciod\n    ------------                       ------\n    unhash_session(ses)\n    nfsd4_probe_callback_sync(clp)\n      flush_workqueue(cl_callback_wq)\n      /* returns; rpc_task still live */\n    nfsd4_put_session_locked(ses)\n    free_session(ses) -> kfree(ses)\n                                       nfsd4_cb_sequence_done()\n                                         reads cb_clp->cl_cb_session\n                                         /* freed slab */\n\nA second window exists in nfsd4_process_cb_update().  When\n__nfsd4_find_backchannel() returns NULL because unhash_session() has\nalready removed the destroyed session from cl_sessions,\nsetup_callback_client() takes the v4.1 early return so\nclp->cl_cb_session = ses never fires and the field retains a pointer\nto the about-to-be-freed session.\n\nFix both by converting cl_cb_session to an RCU-protected pointer:\n\n  - Move the cl_cb_session = ses assignment in setup_callback_client()\n    to after rpc_create() succeeds, so it is only published when a\n    working backchannel exists.  Clear cl_cb_session on the error\n    return in nfsd4_process_cb_update().  Both stores use\n    rcu_assign_pointer().\n\n  - Annotate cl_cb_session with __rcu.  All rpciod-side readers use\n    rcu_read_lock()/rcu_dereference() and check for NULL, bailing to\n    the appropriate error or requeue path:\n    encode_cb_sequence4args(), decode_cb_sequence4resok(),\n    nfsd41_cb_get_slot(), nfsd41_cb_release_slot(),\n    nfsd4_cb_prepare(), and nfsd4_cb_sequence_done().\n\n  - Switch __free_session() from kfree() to kfree_rcu() so the\n    session slab is not reclaimed until after an RCU grace period,\n    guaranteeing that rpciod readers inside rcu_read_lock() never\n    dereference freed memory.\n\n  - Pass the session pointer to the nfsd_cb_seq_status and\n    nfsd_cb_free_slot tracepoints instead of having them re-read\n    cl_cb_session.\n\n  - nfsd4_cb_prepare() calls rpc_exit() when the session is NULL,\n    routing through the done/release path to requeue the callback.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -70277,6 +70379,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: don't free session slots that are still in use\n\nnfsd4_sequence() can free the very slot it is currently processing.\nWhen the session shrinker has reduced se_target_maxslots below\nse_fchannel.maxreqs, the shrink path checks three conditions before\ncalling free_session_slots():\n\n  1. se_target_maxslots < maxreqs  (shrink was advertised)\n  2. slot->sl_generation == se_slot_gen  (slot is up-to-date)\n  3. seq->maxslots <= se_target_maxslots  (client acknowledges)\n\nHowever, seq->slotid is never checked against se_target_maxslots.\nA client using a slot in the range [se_target_maxslots, maxreqs) can\nsatisfy all three conditions: its slot has the current generation\n(set by a prior SEQUENCE), and it sends sa_highest_slotid <=\nse_target_maxslots to acknowledge the reduction.\n\nfree_session_slots() then kfrees every slot at index >=\nse_target_maxslots, including the caller's own slot. The function\ncontinues to write sl_seqid, sl_flags, sl_generation, and stores the\ndangling pointer in cstate->slot. Later, nfsd4_store_cache_entry()\ncopies up to maxresp_cached bytes of the compound reply into the freed\nsl_data[] array, corrupting whatever slab object now occupies that\naddress.\n\nAdditionally, a concurrent thread processing SEQUENCE on a different\nhigh-numbered slot can have its slot freed out from under it.\nNFSD4_SLOT_INUSE is set under nn->client_lock before the lock is\nreleased, so any concurrent thread past SEQUENCE will have its slot\nmarked. However, free_session_slots() does not check NFSD4_SLOT_INUSE\nbefore freeing.\n\nFix both problems by:\n 1. Checking that the current request's slotid is below the shrink\n    boundary.\n 2. Scanning slots in the to-be-freed range for NFSD4_SLOT_INUSE and\n    deferring the shrink if any are active.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-89715": {
+                "cve_id": "CVE-2026-89715",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFS/localio: fix ref leak on nfs_uuid_add_file failure\n\nWhen nfs_uuid_add_file() races with nfs_uuid_put() tearing down\nuuid->net, it returns -ENXIO without publishing nfl->nfs_uuid via\nrcu_assign_pointer().  nfs_open_local_fh() then enters its error\nbranch and only releases the slot's file ref and its paired net\nref plus its own entry-time net ref, while the close path is a\nno-op:\n\n    nfs_close_local_fh()\n      nfs_uuid = rcu_dereference(nfl->nfs_uuid);\n      if (!nfs_uuid) { rcu_read_unlock(); return; }  /* always */\n\nnfsd_open_local_fh() returns localio holding a caller-owned +1\nnfsd_file reference (from nfsd_file_get() after\nnfsd_file_acquire_local()) and an entry-time nfsd_net reference\n(from its first nfsd_net_try_get()) embedded as nf->nf_net.  Both\nare leaked on the failure path, pinning one nfsd_file (and the\nunderlying struct file, dentry, inode) and one nfsd_net_ref per\noccurrence, which blocks nfsd_net and netns teardown.\n\nFix by releasing the caller-owned file ref and its net ref through\nthe existing helper, using a stack-local RCU pointer so the helper\ncan xchg it out, then returning -ENXIO so callers do not\ndereference a localio whose slot has been cleared:\n\n    struct nfsd_file __rcu *tmp = RCU_INITIALIZER(localio);\n\n    nfs_to_nfsd_file_put_local(pnf);\n    nfs_to_nfsd_file_put_local(&tmp);\n    localio = ERR_PTR(-ENXIO);\n\nThe trailing nfs_to_nfsd_net_put(net) continues to release the\nouter net ref, so all three nfsd_net_try_get() increments are\nbalanced on the error branch.",
+                "severity": "LOW",
                 "status": "open",
                 "events": [
                     {
@@ -130233,6 +130348,23 @@
                     }
                 ]
             },
+            "CVE-2026-89532": {
+                "cve_id": "CVE-2026-89532",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Fix pcl_for_each_segment for empty chunks\n\nWhen a parsed chunk list contains a chunk whose ch_segcount is zero,\npcl_for_each_segment computes its inclusive upper bound as\n&chunk->ch_segments[ch_segcount - 1]. ch_segcount is u32, so the\nsubtraction wraps to 0xFFFFFFFF and the bound lands far past the\nch_segments flex array. The loop body then walks unrelated memory at\nsizeof(struct svc_rdma_segment) stride until it faults.\n\nA zero-segcount chunk is reachable from the wire:\nxdr_check_write_chunk() only rejects segcount values greater than\nrc_maxpages, and pcl_alloc_write() links a freshly allocated chunk\nonto rc_write_pcl/rc_reply_pcl before its segment-fill loop runs,\nso a Write or Reply chunk advertising zero segments leaves\nch_segcount == 0 on the list. When the transport has negotiated\nSend-With-Invalidate, svc_rdma_get_inv_rkey() iterates all four\nPCLs with pcl_for_each_segment and dereferences segment->rs_handle\non each iteration, turning the underflow into an out-of-bounds read\nand a general protection fault.\n\n    xdr_check_write_list / xdr_check_reply_chunk\n      pcl_alloc_write()\n        chunk = pcl_alloc_chunk(...)  /* ch_segcount = 0 */\n        list_add_tail(&chunk->ch_list, &pcl->cl_chunks)\n        /* fill loop iterates zero times for wire segcount 0 */\n\n    svc_rdma_get_inv_rkey()\n      pcl_for_each_chunk(rc_write_pcl)\n        pcl_for_each_segment(segment, chunk)\n          pos <= &ch_segments[0u - 1u]  /* 0xFFFFFFFF */\n          segment->rs_handle            /* OOB read -> GPF */\n\nFix by switching the macro to a half-open upper bound that uses\nch_segcount directly. For ch_segcount == 0 the loop start equals the\nloop end and the body is skipped; for ch_segcount > 0 the iteration\nrange is unchanged. All six existing call sites in\nnet/sunrpc/xprtrdma/svc_rdma_recvfrom.c and\nnet/sunrpc/xprtrdma/svc_rdma_rw.c remain correct under the new bound,\nso no caller changes are needed.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89533": {
                 "cve_id": "CVE-2026-89533",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -130305,6 +130437,23 @@
                 "cve_id": "CVE-2026-89547",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nSUNRPC: Check svc pool percpu counter allocation\n\n__svc_create() initializes three per-pool percpu_counter stats and\nignores every return value. On SMP, percpu_counter_init() fails when\n__alloc_percpu_gfp() cannot satisfy the allocation, leaving the failed\ncounter with fbc->counters == NULL and its embedded raw_spinlock_t,\nlist_head, and count never initialized. __svc_create() returns the\nhalf-constructed svc_serv to nfsd, lockd, or the NFS callback service\nanyway.\n\nOnce that service is live, the hot-path increments in\nsvc_xprt_enqueue(), svc_handle_xprt(), and\nsvc_pool_wake_idle_thread() reach a counter whose backing pointer is\nNULL. The pointer is a per-cpu offset, so the access does not fault:\nit resolves to offset zero of the current CPU's per-cpu area and\nsilently corrupts whatever variable lives there. A\n/proc/fs/nfsd/pool_stats read walks the same NULL per-cpu storage and\nreturns garbage, and on CONFIG_DEBUG_SPINLOCK or lockdep it splats on\nthe never-initialized lock.\n\nCreating the broken service requires a percpu allocation failure during\nRPC server startup, so it is reachable only by a local administrator\nunder memory pressure or fault injection; a remote peer cannot induce\nthe bad state on its own.\n\nCheck each percpu_counter_init() return value in __svc_create() and\nfail when an allocation fails, unwinding the counters already set up\nin the current pool and in every pool initialized before it. A\ndiscrete percpu_counter_destroy() per counter at teardown frees each\nper-cpu allocation exactly once.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89548": {
+                "cve_id": "CVE-2026-89548",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nSUNRPC: always drain cache_cleaner before destroying a cache_detail\n\nsunrpc_destroy_cache_detail() only cancels the global cache_cleaner\ndelayed_work when cache_list is empty.  During per-netns teardown\ncache_list is never empty because init_net's caches remain registered,\nso the cancel never fires.  After unlink, the caller proceeds to\ncache_destroy_net() which kfrees the cache_detail while cache_clean()\nmay still hold a dangling pointer to it.  The result is a\nuse-after-free: cache_dequeue() takes cd->queue_lock on freed memory,\nand cache_put() dereferences cd->cache_put as a function pointer from\nfreed slab.\n\nDrop the list_empty guard so that cancel_delayed_work_sync() always\nruns, ensuring any in-flight cache_clean() completes before the\ncache_detail is freed.  Re-arm the cleaner afterwards if other caches\nare still registered.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -130624,11 +130773,45 @@
                     }
                 ]
             },
+            "CVE-2026-89662": {
+                "cve_id": "CVE-2026-89662",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent lock owner use-after-free during client teardown\n\n__destroy_client() releases a client's open owners, but a lock owner\nwhose only reference is a blocked lock (nbl) stays on\ncl_ownerstr_hashtbl.  client_has_state() does not count a bare owner,\nso DESTROY_CLIENTID can reach __destroy_client() with such owners\npresent.\n\n__destroy_client() then walks the table, calling remove_blocked_locks()\non each owner without a reference.  Freeing a blocked lock drops the\nowner reference held via flc_owner.  The per-net laundromat reaps\nblocked locks from nn->blocked_locks_lru independently of client state.\nThe two paths share blocked_locks_lock only for the list splice, not\nthe owner's lifetime.  The laundromat therefore frees the owner as\n__destroy_client() dereferences it, a NULL dereference in\nremove_blocked_locks().\n\nnfsd4_release_lockowner() holds a reference across the same call;\n__destroy_client() does not.  Hold cl_lock across the walk, taking a\nreference and unhashing each owner, then drop it before\nremove_blocked_locks() and nfs4_put_stateowner(), which take\nblocked_locks_lock and cl_lock.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89666": {
                 "cve_id": "CVE-2026-89666",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: reject out-of-range nseconds in NFSv3 SETATTR and create ops\n\nA client can send an NFSv3 SETATTR, CREATE, MKDIR, SYMLINK or MKNOD\ncarrying an atime or mtime whose nseconds field is out of range. The\nvalue is well-formed on the wire and decodes cleanly into a valid\nuint32, but it is not a valid timespec64: tv_nsec must be less than\nNSEC_PER_SEC.\n\nNothing in the setattr path clamps it. notify_change() runs the time\nthrough timestamp_truncate(), which does not reduce tv_nsec below\nNSEC_PER_SEC when the filesystem supports nanosecond granularity\n(s_time_gran == 1), and the inode atime/mtime setters store it verbatim\n(only ctime is normalized, via inode_set_ctime_to_ts()). The\nun-normalized value then corrupts on-disk metadata: ext4's\next4_encode_extra_time() shifts tv_nsec left by EXT4_EPOCH_BITS, which\noverflows the 32-bit extra field and clobbers the seconds-epoch bits, so\nthe stored seconds (and thus the year) are wrong on read-back. XFS with\nbigtime mis-stores the timestamp for the same reason.\n\nValidate the client-supplied atime/mtime in the proc handlers and return\nNFS3ERR_INVAL before anything is changed. RFC 1813 lists NFS3ERR_INVAL\nfor SETATTR and describes it as the error for a value the server 'can\nnot store ... in its own representation'; the client maps it to EINVAL.\n\nChecking in the proc handlers, rather than in nfsd_setattr(), keeps the\nrejection in front of object creation. The create operations create the\nobject before nfsd_create_setattr() runs, so a late failure would leave\nthe new object behind and turn a non-idempotent request into a namespace\nchange that reports failure. The check is therefore done up front, for\nthe create operations before the object is created.\n\ntv_nsec is a long, so the comparison casts it to unsigned long (the same\nwidth) rather than to u32, matching timespec64_valid(). A u32 cast would\ntruncate on 64-bit; the unsigned long cast also rejects a value that\nbecame negative when an out-of-range u32 wire nseconds was assigned to a\n32-bit long.\n\nOnly client-supplied times are checked: SET_TO_SERVER_TIME requests\ncarry no client value. The sattrguard3 ctime is deliberately left alone:\nan out-of-range guard simply never matches the object's ctime and yields\nNFS3ERR_NOT_SYNC via the existing guardtime comparison, which is the\nprotocol-correct outcome rather than rejecting the request.",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89667": {
+                "cve_id": "CVE-2026-89667",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: close shrinker/GC/fsnotify vs per-net shutdown race in filecache\n\nThe shrinker, GC worker, and fsnotify/lease callbacks can unhash an\nnfsd_file from the rhashtable and then call\nnfsd_file_dispose_list_delayed() to move it to the per-net dispose list.\nIf nfsd_file_cache_shutdown_net() runs concurrently, its rhashtable walk\nmisses the already-unhashed file, and its drain of the per-net dispose\nlist can run before the file has been queued.  The file then sits on\nthe per-net list with no thread to drain it, leaking both the file and\nits associated state.\n\nThe GC worker and shrinker already hold nfsd_gc_lock while walking the\nLRU, but in the original code they release it before calling\nnfsd_file_dispose_list_delayed().  The fsnotify/lease path\n(nfsd_file_close_inode) has no synchronization at all.\n\nFix this by:\n\n  1. Widening nfsd_gc_lock in both nfsd_file_gc() and nfsd_file_lru_scan()\n     to cover the nfsd_file_dispose_list_delayed() call.\n\n  2. Wrapping nfsd_file_close_inode() in nfsd_gc_lock so that all three\n     callers of nfsd_file_dispose_list_delayed() hold the lock.\n\n  3. Adding a spin_lock/unlock(nfsd_gc_lock) barrier in\n     nfsd_file_cache_shutdown_net() after the purge, so that any\n     in-progress disposal has fully completed before the per-net list\n     is drained.\n\nAll operations inside the lock are non-sleeping (rhashtable lookups,\natomic bit/refcount ops, list moves, svc_wake_up), so the spinlock is\nappropriate.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -130675,11 +130858,45 @@
                     }
                 ]
             },
+            "CVE-2026-89705": {
+                "cve_id": "CVE-2026-89705",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: restore rq_status_counter to even on all nfsd_dispatch() exit paths\n\nnfsd_dispatch() sets rq_status_counter to an odd value once a request has\nbeen decoded, and back to an even value once it has been fully processed,\nforming a seq-lock like protocol with the lockless reader in\nnfsd_nl_rpc_status_get_dumpit().\n\nOnly the fully successful path restored the counter to even. The cache-hit\n(RC_REPLY), drop (RC_DROPIT / RQ_DROPME) and encode-error paths all return\nafter the odd-valued store without ever bringing the counter back to even.\nOnce one of those paths is taken, rq_status_counter is left odd: the next\nrequest's decode ORs in 1 (still odd) and only a subsequent successful\nencode restores even. While stuck odd, the dumpit reader treats the rqstp\nfields as stable and its retry check compares against the same unchanging\nodd value, so it never detects concurrent mutation. This exposes actively\nmutating fields (e.g. args->ops / args->opcnt during compound decode and\nrelease) to the lockless reader, which can read past the end of the\n8-element inline ops array.\n\nAdd a helper that advances the counter to the next even value and call it\non every return path that follows the odd-valued store. The decode-error\npath is left untouched as it is reached before the counter is set odd.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-89707": {
                 "cve_id": "CVE-2026-89707",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: release path refs on follow_down() error\n\nnfsd_cross_mnt() initializes a local struct path with mntget() and\ndget() before calling follow_down(). On a negative return the error\narm jumps to out without releasing those references:\n\n    err = follow_down(&path, follow_flags);\n    if (err < 0)\n            goto out;\n\nfollow_down() never drops the caller's entry-time refs on any error\nsub-case; for example a pre-cross d_manage() failure leaves path\nuntouched, so the mntget()/dget() taken on entry survive the call.\n\nEvery other early-exit arm in nfsd_cross_mnt() (other-namespace\nreturn, IS_ERR(exp2), and the success tail after the swap) already\ncalls path_put(&path); the err < 0 arm is the lone omission. The\nleak inflates mnt_count and d_count on each failed cross-mount,\nblocking umount and pinning dentries against the shrinker, and is\nreachable by any authenticated NFS client through nfsd_lookup_dentry\nor the NFSv4 READDIR encode path.\n\nFix by calling path_put(&path) before the goto out in the err < 0\narm so the entry-time refs are released on all follow_down() error\nreturns.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89708": {
+                "cve_id": "CVE-2026-89708",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: RCU-protect cl_cb_session to fix use-after-free on session teardown\n\nAfter a DESTROY_SESSION the per-session teardown path can free a\nsession while rpciod still holds an inflight callback rpc_task that\ndereferences clp->cl_cb_session.  nfsd4_probe_callback_sync() flushes\ncl_callback_wq, but once nfsd4_run_cb_work() has called\nrpc_call_async() the rpc_task lives on rpciod; flushing the workqueue\ndoes not wait for it.  rpc_shutdown_client() does drain rpciod tasks,\nbut uses a 1-second wait_event_timeout \u2014 tasks stuck in rpc_delay()\n(e.g. 2-second NFS4ERR_DELAY retries) can outlive the drain.\n\n    destroy path                       rpciod\n    ------------                       ------\n    unhash_session(ses)\n    nfsd4_probe_callback_sync(clp)\n      flush_workqueue(cl_callback_wq)\n      /* returns; rpc_task still live */\n    nfsd4_put_session_locked(ses)\n    free_session(ses) -> kfree(ses)\n                                       nfsd4_cb_sequence_done()\n                                         reads cb_clp->cl_cb_session\n                                         /* freed slab */\n\nA second window exists in nfsd4_process_cb_update().  When\n__nfsd4_find_backchannel() returns NULL because unhash_session() has\nalready removed the destroyed session from cl_sessions,\nsetup_callback_client() takes the v4.1 early return so\nclp->cl_cb_session = ses never fires and the field retains a pointer\nto the about-to-be-freed session.\n\nFix both by converting cl_cb_session to an RCU-protected pointer:\n\n  - Move the cl_cb_session = ses assignment in setup_callback_client()\n    to after rpc_create() succeeds, so it is only published when a\n    working backchannel exists.  Clear cl_cb_session on the error\n    return in nfsd4_process_cb_update().  Both stores use\n    rcu_assign_pointer().\n\n  - Annotate cl_cb_session with __rcu.  All rpciod-side readers use\n    rcu_read_lock()/rcu_dereference() and check for NULL, bailing to\n    the appropriate error or requeue path:\n    encode_cb_sequence4args(), decode_cb_sequence4resok(),\n    nfsd41_cb_get_slot(), nfsd41_cb_release_slot(),\n    nfsd4_cb_prepare(), and nfsd4_cb_sequence_done().\n\n  - Switch __free_session() from kfree() to kfree_rcu() so the\n    session slab is not reclaimed until after an RCU grace period,\n    guaranteeing that rpciod readers inside rcu_read_lock() never\n    dereference freed memory.\n\n  - Pass the session pointer to the nfsd_cb_seq_status and\n    nfsd_cb_free_slot tracepoints instead of having them re-read\n    cl_cb_session.\n\n  - nfsd4_cb_prepare() calls rpc_exit() when the session is NULL,\n    routing through the done/release path to requeue the callback.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
