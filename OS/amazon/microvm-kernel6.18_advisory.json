@@ -3730,7 +3730,7 @@
                 "cve_id": "CVE-2026-64591",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\niommu/vt-d: Avoid WARNING in sva unbind path\n\nThe Intel IOMMU driver allows SVA on devices even if they do not support\nPCI/PRI. Commit 39c20c4e83b9 (\"iommu/vt-d: Only handle IOPF for SVA when\nPRI is supported\") modified the SVA bind path to allow this configuration\nby skipping IOPF enablement when PRI is missing. However, it failed to\nupdate the unbind path.\n\nThis creates an imbalance: the unbind path attempts to disable IOPF for\na device that never had it enabled, triggering a WARNING in\nintel_iommu_disable_iopf():\n\n WARNING: drivers/iommu/intel/iommu.c:3475 at intel_iommu_disable_iopf+0x4f/0x90d\n Call Trace:\n  <TASK>\n  blocking_domain_set_dev_pasid+0x50/0x70\n  iommu_detach_device_pasid+0x89/0xc0\n  iommu_sva_unbind_device+0x73/0x150\n  xe_vm_close_and_put+0x4d2/0x1200 [xe]\n\nFix this by bypassing IOPF operations for SVA domains on non-PRI hardware\nin both the bind and unbind paths.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -3744,7 +3744,7 @@
                 "cve_id": "CVE-2026-64593",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: do not trim a device which is not writeable\n\n[BUG]\nThere is a bug report that btrfs/242 can randomly fail with the\nfollowing NULL pointer dereference:\n\n  run fstests btrfs/242 at 2026-06-01 10:25:08\n  BTRFS: device fsid d4d7f234-487c-4787-88e4-47a8b68c9874 devid 1 transid 9 /dev/sdc (8:32) scanned by mount (122609)\n  BTRFS info (device sdc): first mount of filesystem d4d7f234-487c-4787-88e4-47a8b68c9874\n  BTRFS info (device sdc): using crc32c checksum algorithm\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS info (device sdc): allowing degraded mounts\n  BTRFS info (device sdc): turning on async discard\n  BTRFS info (device sdc): enabling free space tree\n  Unable to handle kernel NULL pointer dereference at virtual address 0000000000000018\n  user pgtable: 4k pages, 48-bit VAs, pgdp=000000013fd6b000\n  CPU: 4 UID: 0 PID: 122625 Comm: fstrim Not tainted 7.0.10-2-default #1 PREEMPT(full) openSUSE Tumbleweed e9a5f6b24978fba3bf015a992f865837fdfff3dd\n  Hardware name: QEMU KVM Virtual Machine, BIOS edk2-20250812-19.fc42 08/12/2025\n  pstate: 01400005 (nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)\n  pc : btrfs_trim_fs+0x34c/0xa00 [btrfs]\n  lr : btrfs_trim_fs+0x1f0/0xa00 [btrfs]\n  Call trace:\n   btrfs_trim_fs+0x34c/0xa00 [btrfs f02c1d570ceea621c69d302ba75dd61868083840] (P)\n   btrfs_ioctl_fitrim+0xe8/0x178 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   btrfs_ioctl+0xdd4/0x2bd8 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   __arm64_sys_ioctl+0xac/0x108\n   invoke_syscall.constprop.0+0x5c/0xd0\n   el0_svc_common.constprop.0+0x40/0xf0\n   do_el0_svc+0x24/0x40\n   el0_svc+0x40/0x1d0\n   el0t_64_sync_handler+0xa0/0xe8\n   el0t_64_sync+0x1b0/0x1b8\n  Code: 17ffff83 f94017e0 f9002be0 f9402ea0 (f9400c00)\n  ---[ end trace 0000000000000000  ]---\n\nAlso the reporter is very kind to test the following ASSERT() added to\nbtrfs_trim_free_extents_throttle():\n\n\tASSERT(device->bdev,\n\t       \"devid=%llu path=%s dev_state=0x%lx\\n\",\n\t       device->devid, btrfs_dev_name(device), device->dev_state);\n\nAnd it shows the following output:\n\n  assertion failed: device->bdev, in extent-tree.c:6630 (devid=2 path=/dev/sdd dev_state=0x82)\n\nWhich means the device->bdev is NULL, and the dev_state is\nBTRFS_DEV_STATE_IN_FS_METADATA | BTRFS_DEV_STATE_ITEM_FOUND, without\nBTRFS_DEV_STATE_WRITEABLE flag set.\n\n[CAUSE]\nThe pc points to the following call chain:\n\n  btrfs_trim_fs()\n  |- btrfs_trim_free_extents()\n     |- btrfs_trim_free_extents_throttle()\n        |- bdev_max_discard_sectors(device->bdev)\n\nSo the NULL pointer dereference is caused by device->bdev being NULL.\n\nThis looks impossible by a quick glance, as just before calling\nbtrfs_trim_free_extents_throttle(), we have skipped any device that has\nBTRFS_DEV_STATE_MISSING flag set.\n\nHowever in this particular case, there is a window where the missing\ndevice is later re-scanned, causing btrfs to remove the\nBTRFS_DEV_STATE_MISSING flag:\n\n  btrfs_control_ioctl()\n  |- btrfs_scan_one_device()\n     |- device_list_add()\n        |- rcu_assign_pointer(device->name, name);\n        |  This updates the missing device's path to the new good path.\n        |\n        |- clear_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state)\n           This removes the BTRFS_DEV_STATE_MISSING flag.\n\nThis allows the missing device to re-appear and clear the\nBTRFS_DEV_STATE_MISSING flag.  However the device still does not have\nthe BTRFS_DEV_STATE_WRITEABLE flag set, nor is its bdev pointer updated.\n\nThe bdev pointer remains NULL, triggering the crash later.\n\n[FIX]\nThis is a big de-synchronization between BTRFS_DEV_STATE_MISSING and\ndevice->bdev pointer, and shows a gap in btrfs's re-appearing-device\nhandling.\n\nThe proper handling of re-appearing device will need quite some extra\nwork, which is out of the context of this small\n---truncated---",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -3758,7 +3758,7 @@
                 "cve_id": "CVE-2026-64596",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nlibfs: set SB_I_NOEXEC and SB_I_NODEV by default in init_pseudo()\n\nSince commit 1e7ab6f67824 (\"anon_inode: rework assertions\"),\npath_noexec() warns when an anonymous-inode file is mmap'd from a\nsuperblock that has not set SB_I_NOEXEC. dma-buf backs its files this\nway and never set the flag, so mmap of any exported buffer trips the\nwarning on a CONFIG_DEBUG_VFS=y kernel:\n\n  WARNING: CPU: 11 PID: 121813 at fs/exec.c:118 path_noexec+0x47/0x50\n   do_mmap+0x2b5/0x680\n   vm_mmap_pgoff+0x129/0x210\n   ksys_mmap_pgoff+0x177/0x240\n   __x64_sys_mmap+0x33/0x70\n\ninit_pseudo() sets up internal SB_NOUSER mounts that are never\npath-reachable. Set both flags here so every pseudo filesystem gets\nthem by default instead of each caller setting them.\n\nSB_I_NODEV is inert for unreachable mounts. SB_I_NOEXEC has one\nvisible effect: an executable mapping of a pseudo-fs fd, such as a\ndma-buf, now fails with -EPERM, which is the invariant the assertion\nenforces. No in-tree caller maps these executable.\n\nReproduce on CONFIG_DEBUG_VFS=y:\n\n  make -C tools/testing/selftests/dmabuf-heaps\n  sudo ./tools/testing/selftests/dmabuf-heaps/dmabuf-heap -t system",
-                "severity": "HIGH",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -4178,7 +4178,7 @@
                 "cve_id": "CVE-2026-68150",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/super: fix emergency thaw double-unlock of s_umount\n\ndo_thaw_all() iterates over all superblocks via __iterate_supers()\nwith SUPER_ITER_EXCL, which acquires s_umount exclusively before\ncalling the callback and releases it afterwards. However, the\ncallback do_thaw_all_callback() calls thaw_super_locked() which\nunconditionally releases s_umount on every code path. This results\nin a second unlock attempt in __iterate_supers() that corrupts the\nrwsem state, triggering a DEBUG_RWSEMS warning:\n\n[  182.601148] sysrq: Emergency Thaw of all frozen filesystems\n[  182.601865] ------------[ cut here ]------------\n[  182.602375] DEBUG_RWSEMS_WARN_ON((rwsem_owner(sem) != current) && !rwsem_test_oflags(sem, RWSEM_NONSPINNABLE)): count = 0x0, magic = 0xffff99b1011e5870, owner = 0x0, curr 0xffff99b101b06c80, list not empty\n[  182.603817] WARNING: kernel/locking/rwsem.c:1412 at up_write+0xa3/0x170, CPU#2: kworker/2:1/53\n[  182.604578] Modules linked in:\n[  182.604864] CPU: 2 UID: 0 PID: 53 Comm: kworker/2:1 Not tainted 7.2.0-rc4-00001-gbd3bd93ea98a-dirty #4 PREEMPT(lazy)\n[  182.605711] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS 1.13.0-1kylin1 04/01/2014\n[  182.606417] Workqueue: events do_thaw_all\n[  182.606750] RIP: 0010:up_write+0xaf/0x170\n[  182.607076] Code: 19 3a 92 48 0f 44 c2 48 8b 55 08 48 8b 55 00 4c 8b 45 08 48 8b 55 00 48 8d 3d ad 91 e0 01 48 8b 4d 20 50 48 c7 c6 f0 8c 26 92 <67> 48 0f b9 3a e8 d7 93 4e 00 58 eb 81 48 83 7f 18 00 48 c7 c2 8d\n[  182.608563] RSP: 0018:ffffb670001d7e08 EFLAGS: 00010246\n[  182.609007] RAX: ffffffff92349e8d RBX: 0000000000000000 RCX: ffff99b1011e5870\n[  182.609595] RDX: 0000000000000000 RSI: ffffffff92268cf0 RDI: ffffffff92914d10\n[  182.610283] RBP: ffff99b1011e5870 R08: 0000000000000000 R09: ffff99b101b06c80\n[  182.610847] R10: ffff99b10139a808 R11: fefefefefefefeff R12: 0000000000000000\n[  182.611414] R13: ffffffff90cf74d0 R14: 0000000000000000 R15: ffff99b1011e5800\n[  182.612009] FS:  0000000000000000(0000) GS:ffff99b1eaaee000(0000) knlGS:0000000000000000\n[  182.612670] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[  182.613146] CR2: 00000000005c631c CR3: 00000000013ee000 CR4: 00000000000006f0\n[  182.613722] Call Trace:\n[  182.613946]  <TASK>\n[  182.614130]  __iterate_supers+0x128/0x150\n[  182.614463]  do_thaw_all+0x1b/0x30\n[  182.614759]  process_scheduled_works+0xbb/0x3f0\n[  182.615150]  ? __pfx_worker_thread+0x10/0x10\n[  182.615499]  worker_thread+0x129/0x270\n[  182.615816]  ? __pfx_worker_thread+0x10/0x10\n[  182.616201]  kthread+0xe2/0x120\n[  182.616469]  ? __pfx_kthread+0x10/0x10\n[  182.616792]  ret_from_fork+0x15b/0x240\n[  182.617115]  ? __pfx_kthread+0x10/0x10\n[  182.617426]  ret_from_fork_asm+0x1a/0x30\n[  182.617761]  </TASK>\n[  182.617968] ---[ end trace 0000000000000000 ]---\n[  182.618412] Emergency Thaw complete\n\nFix this by switching to SUPER_ITER_UNLOCKED and acquiring s_umount\nin the callback via super_lock_excl() before calling\nthaw_super_locked(). This matches the locking pattern expected by\nthaw_super_locked() and eliminates the double unlock.\n\nWhile at it, remove the dead 'return;' at the end of\ndo_thaw_all_callback().",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -5046,7 +5046,7 @@
                 "cve_id": "CVE-2026-68421",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsched_ext: Don't warn on core-sched forced idle in put_prev_task_scx()\n\nput_prev_task_scx() warns when a runnable task drops to a lower sched_class\nwithout SCX_OPS_ENQ_LAST, on the assumption that balance_one() would have\nkept it running. Core scheduling breaks that: a forced-idle SMT sibling\nreschedules through the core_pick fast path in pick_next_task(), which skips\npick_task_scx() and thus balance_one(), so a runnable task can drop to idle\nwith ENQ_LAST unset.\n\nGate the warning on sched_cpu_cookie_match(): a cookie mismatch means core\nscheduling forced the idle, while a match (or core scheduling off) still\ncatches a genuine missing-ENQ_LAST drop.",
-                "severity": "HIGH",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -5354,7 +5354,7 @@
                 "cve_id": "CVE-2026-72016",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncpu/hotplug: Fix NULL kobject warning in cpuhp_smt_enable()\n\nOn arm64, when booting with `maxcpus` greater than the number of present\nCPUs (e.g., QEMU -smp cpus=4,maxcpus=8), some CPUs are marked as 'present'\nbut have not yet been registered via register_cpu(). Consequently,\nthe per-cpu device objects for these CPUs are not yet initialized.\n\nIn cpuhp_smt_enable(), the code iterates over all present CPUs. Calling\n_cpu_up() for these unregistered CPUs eventually leads to\nsysfs_create_group() being called with a NULL kobject (or a kobject\nwithout a directory), triggering the following warning in\nfs/sysfs/group.c:\n\n  WARNING: fs/sysfs/group.c:137 at internal_create_group+0x41c/0x4bc, CPU#2: sh/181\n  [...]\n  Call trace:\n    internal_create_group+0x41c/0x4bc (P)\n    sysfs_create_group+0x18/0x24\n    topology_add_dev+0x1c/0x28\n    cpuhp_invoke_callback+0x104/0x20c\n    __cpuhp_invoke_callback_range+0x94/0x11c\n    _cpu_up+0x200/0x37c\n\nWhen booting with ACPI, arm64 smp_prepare_cpus() currently sets all\nenumerated CPUs as \"present\" regardless of their status in the MADT. This\ncauses issues with SMT hotplug control. For instance, with QEMU's\n\"-smp 4,maxcpus=8\" configuration, the MADT GICC entries are populated as\nfollows:\n\n1. The first four CPUs: `Enabled` set but `Online Capable` not set.\n\n2. The remaining four CPUs: `Online Capable` set but `Enabled` not set\n   to support potential hot-plugging.\n\nFix this by:\n\n1. When booting with ACPI, checking the ACPI_MADT_ENABLED flag in the GICC\n   entry before calling set_cpu_present() during SMP initialization.\n\n2. Properly managing the present mask in acpi_map_cpu() and\n   acpi_unmap_cpu() to support actual CPU hotplug events, This aligns with\n   other architectures like x86 and LoongArch.\n\n3. Update the arm64 CPU hotplug documentation to no longer state that all\n   online-capable vCPUs are marked as present by the kernel at boot time.\n\nThis ensures that only physically available or explicitly enabled CPUs\nare in the present mask, keeping the SMT control logic consistent with\nthe actual hardware state.",
-                "severity": "HIGH",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -5760,7 +5760,7 @@
                 "cve_id": "CVE-2026-72097",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndm-verity: fix a possible NULL pointer dereference\n\nFix a possible NULL pointer dereference dm_verity_loadpin_is_bdev_trusted\nif the device has no table.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -6348,7 +6348,7 @@
                 "cve_id": "CVE-2026-72193",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs3: cap RESTART_TABLE free-chain walker at rt->used\n\nA crafted NTFS3 disk image triggers an in-kernel infinite loop at\nmount time, hanging the mounting thread and firing the soft-lockup\nwatchdog within ~22s on multi-CPU hosts (panic with\nkernel.softlockup_panic=1).  The bug is reachable from desktop USB\nauto-mount on distributions where udisks2 routes the NTFS signature\nto the in-tree ntfs3 driver (Arch family and an increasing fraction\nof Fedora / openSUSE / RHEL deployments); CAP_SYS_ADMIN-class manual\nmount elsewhere.\n\ncheck_rstbl()'s second walker iterates the free-entry singly-linked\nlist headed by rt->first_free with no upper bound on iteration count:\n\n  for (off = ff; off;) {\n      if (off == RESTART_ENTRY_ALLOCATED)\n          return false;\n      off = le32_to_cpu(*(__le32 *)Add2Ptr(rt, off));\n      if (off > ts - sizeof(__le32))\n          return false;\n  }\n\nThe existing guards cover three exits: end-of-list (off == 0), the\nin-use marker (off == RESTART_ENTRY_ALLOCATED), and out-of-bounds\n(off > ts - sizeof(__le32)).  None of the three prevents an\nin-bounds cycle.\n\nA crafted on-disk RESTART_TABLE whose free chain contains a\nself-loop or A->B->A cycle whose offsets satisfy:\n\n  - in range [sizeof(struct RESTART_TABLE), ts - sizeof(__le32)]\n  - (off - sizeof(struct RESTART_TABLE)) % rsize == 0\n\npasses all existing guards and spins the mount-time thread forever.\nReproduced in UML by hand-forging a 2 MB NTFS3 image whose journal\nRESTART_TABLE first_free = 0x18 and whose entry at offset 0x18\nstores 0x18 as its next pointer; mount of the forged image with\nthe in-tree ntfs3 driver never returns.\n\nBound the walker by rt->used.  Each entry on a legitimate free\nchain is unique, and the total slot count is ne = le16_to_cpu\n(rt->used).  A traversal that visits more than ne slots is by\nconstruction malformed; reject it as a corrupt RESTART_TABLE.\n\nAfter this patch, mount of the forged image returns with -EINVAL\nand a log_replay failure message, and mkntfs-produced legitimate\nimages mount cleanly (verified in the same UML harness).",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -7426,7 +7426,7 @@
                 "cve_id": "CVE-2026-72385",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing/fprobe: Fix NULL pointer dereference in fprobe_fgraph_entry()\n\nfprobe_fgraph_entry() sizes a shadow-stack reservation in one walk of\nthe per-ip fprobe list and fills it in a second walk, both under\nrcu_read_lock() only. A fprobe registered on an already-live ip can\nbecome visible between the two walks, so the fill walk processes an\nexit_handler the sizing walk did not count and used runs past\nreserved_words. If the sizing walk counted nothing, fgraph_data is NULL\nand the first write_fprobe_header() faults:\n\n  Oops: general protection fault, probably for non-canonical address ...\n  KASAN: null-ptr-deref in range [0x0000000000000000-0x0000000000000007]\n  RIP: 0010:fprobe_fgraph_entry+0xa38/0xf10 kernel/trace/fprobe.c:167\n  Call Trace:\n   <TASK>\n   function_graph_enter_regs+0x44c/0xa10 kernel/trace/fgraph.c:677\n   ftrace_graph_func+0xc5/0x140 arch/x86/kernel/ftrace.c:671\n   __kernel_text_address+0x9/0x40 kernel/extable.c:78\n   arch_stack_walk+0x117/0x170 arch/x86/kernel/stacktrace.c:26\n   kmem_cache_free+0x188/0x580 mm/slub.c:6378\n   tcp_data_queue+0x18d/0x6550 net/ipv4/tcp_input.c:5590\n   [...]\n   </TASK>\n\nThe list cannot be frozen across the two walks, so skip a node that does\nnot fit the reservation and count it as missed.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -7914,9 +7914,9 @@
             },
             "CVE-2026-74259": {
                 "cve_id": "CVE-2026-74259",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncifs: remove all cifs files before kill super\n\nCifs files may be put into fileinfo_put_wq during umounting cifs.\nAfter umount done, cifsFileInfo_put_final is called, which cause\nfollowing BUG:\n\nBUG: kernel NULL pointer dereference, address: 0000000000000000\n...\n[  134.222152]  list_lru_add+0x64/0x1a0\n[  134.222399]  ? cifs_put_tcon+0x171/0x340 [cifs]\n[  134.222772]  d_lru_add+0x44/0x60\n[  134.222997]  dput+0x1fc/0x210\n[  134.223213]  cifsFileInfo_put_final+0x11a/0x140 [cifs]\n[  134.223576]  process_one_work+0x17c/0x320\n[  134.223843]  worker_thread+0x188/0x280\n[  134.224084]  ? __pfx_worker_thread+0x10/0x10\n[  134.224366]  kthread+0xcc/0x100\n[  134.224576]  ? __pfx_kthread+0x10/0x10\n[  134.224827]  ret_from_fork+0x30/0x50\n[  134.225063]  ? __pfx_kthread+0x10/0x10\n[  134.225328]  ret_from_fork_asm+0x1b/0x30\n\nThis can be reproduce by following:\nunshare -n bash -c \"\nmkdir -p ${CIFS_MNT}\nip netns attach root 1\nip link add eth0 type veth peer veth0 netns root\nip link set eth0 up\nip -n root link set veth0 up\nip addr add 192.168.0.2/24 dev eth0\nip -n root addr add 192.168.0.1/24 dev veth0\nip route add default via 192.168.0.1 dev eth0\nip netns exec root sysctl net.ipv4.ip_forward=1\nip netns exec root iptables -t nat -A POSTROUTING -s 192.168.0.2 -o\n${DEV} -j MASQUERADE\nmount -t cifs ${CIFS_PATH} ${CIFS_MNT} -o\nvers=3.0,sec=ntlmssp,credentials=${CIFS_CRED},rsize=65536,wsize=65536,cache=none,echo_interval=1\ntouch ${CIFS_MNT}/a.txt\nip netns exec root iptables -t nat -D POSTROUTING -s 192.168.0.2 -o\n${DEV} -j MASQUERADE\n\"\numount ${CIFS_MNT}",
-                "severity": "HIGH",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -8084,7 +8084,7 @@
                 "cve_id": "CVE-2026-74286",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: pfcp: allocate per-cpu tstats for PFCP netdevs\n\nPFCP uses dev_get_tstats64() as its ndo_get_stats64 callback, but\npfcp_link_setup() does not request NETDEV_PCPU_STAT_TSTATS.  The net\ncore therefore leaves dev->tstats NULL for PFCP devices.\n\nCreating a PFCP rtnetlink device can immediately ask the new netdev for\nstats while building the RTM_NEWLINK notification.  That reaches\ndev_get_tstats64() and dereferences the NULL dev->tstats pointer.\n\nSet pcpu_stat_type to NETDEV_PCPU_STAT_TSTATS during PFCP link setup so\nthe net core allocates the storage expected by dev_get_tstats64().",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -8350,7 +8350,7 @@
                 "cve_id": "CVE-2026-74346",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/irdma: Fix OOB read during CQ MR registration\n\nSashiko pointed out an unrelated bug during a previous patch:\nhttps://sashiko.dev/#/patchset/20260512183852.614045-1-jmoroni%40google.com\n\nThis change fixes the bug by eliminating the cqmr->split field which\nwas not being set properly and instead just checks the CQ resize\nfeature flag directly.\n\nThe cqmr->split field essentially tracks whether IRDMA_FEATURE_CQ_RESIZE\nis set, but it was not being set until CQ creation time, which is _after_\nCQ memory registration (the only other place where it is referenced).\n\nAs a result, it would always be false during MR registration and would\ntherefore cause irdma_handle_q_mem to populate cqmr->shadow even for GEN_2\nHW and beyond:\n\n    cqmr->shadow = (dma_addr_t)arr[req->cq_pages];\n\nThe issue is that for GEN_2 and beyond, req->cq_pages may be exactly equal\nto iwmr->page_cnt and therefore equal to the size of arr, which would cause\nan OOB read by one.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -9078,7 +9078,7 @@
                 "cve_id": "CVE-2026-74491",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nof/address: Fix NULL bus dereference in of_pci_range_parser_one()\n\nThe bus matching rework made of_match_bus() return NULL for nodes with\nranges/dma-ranges but no local #address-cells. parser_init() stored that\nNULL bus, and the range iterator later dereferenced it.\n\nReject such nodes in parser_init(), leaving an explicit empty\niterator for callers that ignore the init return, and make\nof_dma_get_max_cpu_address() honour the init failure so a rejected node\ncannot clamp the DMA limit.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -9540,7 +9540,7 @@
                 "cve_id": "CVE-2026-80621",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: dwc: Avoid dwc_pcie_rasdes_debugfs_deinit() NULL dereference when no RAS DES capability\n\ndwc_pcie_rasdes_debugfs_init() returns success when the controller has no\nRAS DES capability, leaving pci->debugfs->rasdes_info unset. The common\ndebugfs teardown path still calls dwc_pcie_rasdes_debugfs_deinit(), which\ndereferences rasdes_info unconditionally.\n\nReturn early when no RAS DES state was allocated. In that case no RAS DES\nmutex was initialized, so there is nothing to destroy.\n\n[mani: reworded subject]",
-                "severity": "HIGH",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -9974,7 +9974,7 @@
                 "cve_id": "CVE-2026-80873",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: nv: Write ESR_EL2 for injected nested SError exceptions\n\nkvm_inject_el2_exception() writes ESR_EL2 for synchronous exceptions\nbut not for SError. enter_exception64() does not write ESR_ELx for any\nexception type, so the constructed syndrome is dropped. A guest L2\nhypervisor taking a nested SError observes stale ESR_EL2.\n\nThis affects both kvm_inject_nested_serror() and the EASE path in\nkvm_inject_nested_sea().\n\nWrite ESR_EL2 for except_type_serror, matching except_type_sync.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -9988,7 +9988,7 @@
                 "cve_id": "CVE-2026-80875",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipvs: use parsed transport offset in TCP state lookup\n\nTCP state handling reparses the skb to find the TCP header. For IPv6 it\nuses sizeof(struct ipv6hdr), while the surrounding IPVS code already\nparsed the packet with ip_vs_fill_iph_skb() and has the real\ntransport-header offset in iph.len.\n\nThis makes TCP state handling look at the wrong bytes when an IPv6\npacket carries extension headers. Use the parsed transport offset passed\ndown from ip_vs_set_state() when reading the TCP header.\n\nFor IPv4 and for IPv6 packets without extension headers, the passed\noffset matches the previous value.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -10016,7 +10016,7 @@
                 "cve_id": "CVE-2026-80880",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/mlx5: Properly support implicit ODP rereg_mr\n\nDue to all the child mkeys in the implicit ODP configuration we cannot\nchange anything in place for the parent mkey. Instead the whole thing\nneeds to be rebuilt if any change is requested. If the user does not\nspecify a translation then force the implicit values which will then fall\nthrough the logic into mlx5_ib_reg_user_mr() to allocate a completely new\nMR.\n\nSince implicit children were also touching the mr->pd, this removes\nanother case where the access was racy.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -10030,7 +10030,7 @@
                 "cve_id": "CVE-2026-80887",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/vmwgfx: use check_add_overflow for shader size+offset bound\n\nvmw_shader_define() validates the user-supplied shader window against\nits backing buffer with\n\n\t(u64)buffer->tbo.base.size < (u64)size + (u64)offset\n\ndrm_vmw_shader_create_arg::offset is __u64 in the uapi; when it is\nnear U64_MAX the unsigned addition wraps and the resulting tiny value\npasses the check.  The unbounded offset is then stored in\nres->guest_memory_offset and forwarded to host SVGA shader-create\ncommands.\n\nUse check_add_overflow() to detect the wrap and compare the resulting\nendpoint against the buffer size.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -10044,7 +10044,7 @@
                 "cve_id": "CVE-2026-80888",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/vmwgfx: drop dma_buf reference on foreign-fd prime import\n\nttm_prime_fd_to_handle() returns -ENOSYS when the imported fd's\ndma_buf->ops do not match the ttm_object_device's ops, but does so\nwithout releasing the reference acquired by dma_buf_get().  Any\nunprivileged renderD client passing a non-vmwgfx prime fd through the\nDRM_VMW_GB_SURFACE_REF{,_EXT} path leaks one dma_buf reference per\ncall and indefinitely pins the foreign exporter's GEM resources.\n\nFunnel the error path through the existing dma_buf_put() so the\nreference is always dropped.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -10100,7 +10100,7 @@
                 "cve_id": "CVE-2026-80897",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfs: release readahead folios on iterator preparation failure\n\nnetfs_prepare_read_iterator() batches readahead folios in put_batch so that\nthe folio references can be dropped after the I/O iterator has been\nprepared.\n\nIf rolling_buffer_load_from_ra() fails after earlier folios have been\nbatched, the function returns immediately and leaves those references held.\nRelease the batch before returning the error.",
-                "severity": "HIGH",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
