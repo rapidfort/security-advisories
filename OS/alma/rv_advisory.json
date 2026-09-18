@@ -60367,10 +60367,10 @@
                     }
                 ]
             },
-            "CVE-2026-89469": {
-                "cve_id": "CVE-2026-89469",
+            "CVE-2026-89476": {
+                "cve_id": "CVE-2026-89476",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npower: supply: lp8727: fix use-after-free in lp8727_release_irq()\n\nlp8727_isr_func(), the threaded IRQ handler, is the only caller that arms\npchg->work via schedule_delayed_work().  lp8727_release_irq() currently\ncancels the work before freeing the IRQ, so an IRQ delivered in between\ncan re-arm the work through the threaded handler.  After .remove returns\nthe devm layer frees pchg while lp8727_delayed_func() may still run and\ndereference it.\n\nFree the IRQ first so the threaded handler is quiesced and can no longer\nqueue work, then cancel the delayed work to drain the final generation.\n\nThis issue was found by an in-house static analysis tool.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: fix stream->outcnt underflow on duplicate RECONF responses\n\nA cached RECONF chunk may contain more than one request parameter.  A\nduplicate response can therefore find and process the same ADD_OUT request\nagain while another parameter is still outstanding, rolling back outcnt\ntwice and possibly underflowing it.\n\nTrack outstanding request types as bits and clear each bit after its first\nresponse.  Later responses for the same request are then ignored.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -60384,10 +60384,10 @@
                     }
                 ]
             },
-            "CVE-2026-89476": {
-                "cve_id": "CVE-2026-89476",
+            "CVE-2026-89477": {
+                "cve_id": "CVE-2026-89477",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: fix stream->outcnt underflow on duplicate RECONF responses\n\nA cached RECONF chunk may contain more than one request parameter.  A\nduplicate response can therefore find and process the same ADD_OUT request\nagain while another parameter is still outstanding, rolling back outcnt\ntwice and possibly underflowing it.\n\nTrack outstanding request types as bits and clear each bit after its first\nresponse.  Later responses for the same request are then ignored.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: fix NULL deref on untransmitted RECONF completion\n\nsctp_process_strreset_outreq(), sctp_process_strreset_addstrm_out() and\nsctp_process_strreset_resp() complete a pending stream reconfiguration\nrequest by stopping the reconf timer on the transport it was sent on:\n\n\tt = asoc->strreset_chunk->transport;\n\tif (timer_delete(&t->reconf_timer))\n\t\tsctp_transport_put(t);\n\nchunk->transport is assigned by __sctp_packet_append_chunk() when the\nchunk is appended to an outbound packet, and sctp_outq_flush_ctrl() arms\nthe reconf timer at that same point. A request already published in\nasoc->strreset_chunk but not yet transmitted has neither, so completing\nit dereferences NULL.\n\nTwo ways to get there. sctp_send_asconf_del_ip() sets\nasoc->src_out_of_asoc_ok without sending anything when the address being\nremoved is the association's last one, and sctp_outq_flush_ctrl() then\nleaves every non-ASCONF control chunk queued; as only\nsctp_process_asconf_ack() clears that flag, it persists. An unprivileged\nprocess that removes such an address and then asks for a stream reset\npanics the kernel from softirq. A peer needs neither ASCONF nor local\nhelp: sctp_cmd_interpreter() uncorks the outqueue only once the whole\npacket has been processed, so a reply built while walking a RECONF chunk\nstays untransmitted for the rest of that walk, and one RECONF chunk\ncarrying [Incoming SSN Reset Request, Outgoing SSN Reset Request,\nResponse] -- or two RECONF chunks in one packet -- reaches the same\ndereference.\n\n  KASAN: null-ptr-deref in range [0x00000000000001e8-0x00000000000001ef]\n  RIP: 0010:timer_delete+0x67/0x110\n  Call Trace:\n   <IRQ>\n   sctp_process_strreset_addstrm_out (net/sctp/stream.c:832)\n   sctp_sf_do_reconf (net/sctp/sm_statefuns.c:4212)\n   sctp_do_sm (net/sctp/sm_sideeffect.c:1172)\n   sctp_assoc_bh_rcv (net/sctp/associola.c:1044)\n   sctp_rcv (net/sctp/input.c:243)\n   ip_local_deliver (net/ipv4/ip_input.c:262)\n   process_backlog (net/core/dev.c:6680)\n   </IRQ>\n\nA response can only acknowledge a request that was actually sent, so do\nnot match asoc->strreset_chunk while chunk->transport is NULL. Guarding\nthe lookup covers all three completion sites.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -60406,6 +60406,40 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: drop a chunk if its transport was removed\n\nsctp_rcv() resolves the transport once per packet and leaves it in\nchunk->transport. The lookup reference, or the one sctp_add_backlog() takes\nif the socket is owned by userspace, keeps it around until the chunk has\nbeen processed.\n\nAn authenticated ASCONF DEL-IP can remove it in the meantime.\nsctp_assoc_rm_peer() takes the transport out of the association and calls\nsctp_transport_free(), which tags it dead and drops the reference the\nassociation held. There is a window on both paths: the packet can sit on\nthe socket backlog, and on the direct path the lookup completes before\nbh_lock_sock().\n\nThe DATA chunk in that packet puts the removed transport back into\nasoc->peer.last_data_from. Once the packet is done that reference goes\naway and the transport is freed by RCU, so the next delayed SACK carries\nthe pointer into the SACK chunk and sctp_outq_select_transport() reads the\nfreed transport's state.\n\nDrop the chunk in sctp_inq_push(), next to the existing rcvr->dead check.\nBoth paths reach it with the association's socket lock held. The peer\nretransmits it.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89479": {
+                "cve_id": "CVE-2026-89479",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: stop processing a packet once its association is deleted\n\nsctp_endpoint_bh_rcv() looks the association up only when chunk->asoc is\nNULL, and caches the result in chunk->asoc and chunk->transport without\ntaking a reference.\n\nA packet that matches no association is handed to the endpoint, so a peer\ncan bundle COOKIE ECHO, SHUTDOWN and SHUTDOWN ACK in one packet. The\nCOOKIE ECHO creates the association, the SHUTDOWN chunk caches it, and\nwith the outqueue empty the SHUTDOWN ACK reaches sctp_sf_do_9_2_final(),\nso the association and its transports are freed.\n\nThe endpoint loop has no counterpart to the asoc->base.dead check in\nsctp_assoc_bh_rcv(). The next chunk writes to last_time_heard in the freed\ntransport and is then passed to sctp_do_sm() with the freed association.\nThe transport is freed through RCU, so this needs the packet to come off\nthe socket backlog, where the loop runs in task context.\n\nThe endpoint loop cannot do the same check: it holds no reference on the\nassociation, so reading asoc->base.dead would itself be a use-after-free.\nMark the packet for discard in the command interpreter, just before it\ndeletes the association. That is also before sctp_inq_free() releases the\nchunk on the association receive path.\n\nsctp_sf_do_5_2_4_dupcook() issues SCTP_CMD_DELETE_TCB for the temporary\nassociation, while the one the packet belongs to stays alive. A restarting\npeer can bundle DATA behind its COOKIE ECHO, so compare against\nchunk->asoc and leave that case alone.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89480": {
+                "cve_id": "CVE-2026-89480",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-tcp: reject a read that transferred too few bytes\n\nnvme_tcp_recv_data() completes a request once the current C2HData PDU\nhas been consumed. Nothing compares the total bytes received against\nthe length the command asked for: struct nvme_tcp_request has no\nreceive-side counter, queue->data_remaining is per queue, and\nblk_mq_end_request() completes for blk_rq_bytes(rq) unconditionally\nwith no residual concept anywhere above.\n\nA controller can therefore answer a 4096-byte read with 512 bytes and\nhave it reported as a complete read; user space then gets 4096 bytes of\nwhich 3584 are whatever was already in the page. I reproduced that with\na test target.\n\nCount the bytes received and refuse to complete a successful read whose\ncount does not match, at the two NVME_TCP_F_DATA_SUCCESS paths and in\nnvme_tcp_process_nvme_cqe(). The success test shifts req->status right\nby one, because the driver keeps the wire value there and shifts it on\ncompletion, so the check must see what the completion path will see.\nOnly REQ_OP_READ is checked, because there the length comes from the\nsectors the request covers; a passthrough command is built by its\nsubmitter, which picks both command and buffer, so the kernel has\nnothing to compare against.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -70960,6 +70994,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: plda: Fix IRQ domain leaks in the error paths of plda_init_interrupts()\n\nplda_init_interrupts() initializes IRQ domains and creates IRQ mapping but\ndoes not unwind them when later step fails.\n\nIf platform_get_irq() or either irq_create_mapping() fails\nin plda_init_interrupts(), the domains are never deinitialized. If\nirq_create_mapping() fails, port->intx_irq stays initialized.\n\nHence, remove the IRQ domains in the error path by calling\nplda_pcie_irq_domain_deinit().\n\nSince plda_pcie_irq_domain_deinit() now disposes of the intx_irq and\nmsi_irq mappings itself before removing their domains, the msi_irq\nmapping failure path can go directly to err_irq_domain_deinit instead of\ndisposing of port->intx_irq separately first.\n\nThis issue was found by automated review of sashiko-bot\n\n[mani: commit log]",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-89469": {
+                "cve_id": "CVE-2026-89469",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npower: supply: lp8727: fix use-after-free in lp8727_release_irq()\n\nlp8727_isr_func(), the threaded IRQ handler, is the only caller that arms\npchg->work via schedule_delayed_work().  lp8727_release_irq() currently\ncancels the work before freeing the IRQ, so an IRQ delivered in between\ncan re-arm the work through the threaded handler.  After .remove returns\nthe devm layer frees pchg while lp8727_delayed_func() may still run and\ndereference it.\n\nFree the IRQ first so the threaded handler is quiesced and can no longer\nqueue work, then cancel the delayed work to drain the final generation.\n\nThis issue was found by an in-house static analysis tool.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -131432,10 +131479,10 @@
                     }
                 ]
             },
-            "CVE-2026-89469": {
-                "cve_id": "CVE-2026-89469",
+            "CVE-2026-89476": {
+                "cve_id": "CVE-2026-89476",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npower: supply: lp8727: fix use-after-free in lp8727_release_irq()\n\nlp8727_isr_func(), the threaded IRQ handler, is the only caller that arms\npchg->work via schedule_delayed_work().  lp8727_release_irq() currently\ncancels the work before freeing the IRQ, so an IRQ delivered in between\ncan re-arm the work through the threaded handler.  After .remove returns\nthe devm layer frees pchg while lp8727_delayed_func() may still run and\ndereference it.\n\nFree the IRQ first so the threaded handler is quiesced and can no longer\nqueue work, then cancel the delayed work to drain the final generation.\n\nThis issue was found by an in-house static analysis tool.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: fix stream->outcnt underflow on duplicate RECONF responses\n\nA cached RECONF chunk may contain more than one request parameter.  A\nduplicate response can therefore find and process the same ADD_OUT request\nagain while another parameter is still outstanding, rolling back outcnt\ntwice and possibly underflowing it.\n\nTrack outstanding request types as bits and clear each bit after its first\nresponse.  Later responses for the same request are then ignored.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -131449,10 +131496,10 @@
                     }
                 ]
             },
-            "CVE-2026-89476": {
-                "cve_id": "CVE-2026-89476",
+            "CVE-2026-89477": {
+                "cve_id": "CVE-2026-89477",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: fix stream->outcnt underflow on duplicate RECONF responses\n\nA cached RECONF chunk may contain more than one request parameter.  A\nduplicate response can therefore find and process the same ADD_OUT request\nagain while another parameter is still outstanding, rolling back outcnt\ntwice and possibly underflowing it.\n\nTrack outstanding request types as bits and clear each bit after its first\nresponse.  Later responses for the same request are then ignored.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: fix NULL deref on untransmitted RECONF completion\n\nsctp_process_strreset_outreq(), sctp_process_strreset_addstrm_out() and\nsctp_process_strreset_resp() complete a pending stream reconfiguration\nrequest by stopping the reconf timer on the transport it was sent on:\n\n\tt = asoc->strreset_chunk->transport;\n\tif (timer_delete(&t->reconf_timer))\n\t\tsctp_transport_put(t);\n\nchunk->transport is assigned by __sctp_packet_append_chunk() when the\nchunk is appended to an outbound packet, and sctp_outq_flush_ctrl() arms\nthe reconf timer at that same point. A request already published in\nasoc->strreset_chunk but not yet transmitted has neither, so completing\nit dereferences NULL.\n\nTwo ways to get there. sctp_send_asconf_del_ip() sets\nasoc->src_out_of_asoc_ok without sending anything when the address being\nremoved is the association's last one, and sctp_outq_flush_ctrl() then\nleaves every non-ASCONF control chunk queued; as only\nsctp_process_asconf_ack() clears that flag, it persists. An unprivileged\nprocess that removes such an address and then asks for a stream reset\npanics the kernel from softirq. A peer needs neither ASCONF nor local\nhelp: sctp_cmd_interpreter() uncorks the outqueue only once the whole\npacket has been processed, so a reply built while walking a RECONF chunk\nstays untransmitted for the rest of that walk, and one RECONF chunk\ncarrying [Incoming SSN Reset Request, Outgoing SSN Reset Request,\nResponse] -- or two RECONF chunks in one packet -- reaches the same\ndereference.\n\n  KASAN: null-ptr-deref in range [0x00000000000001e8-0x00000000000001ef]\n  RIP: 0010:timer_delete+0x67/0x110\n  Call Trace:\n   <IRQ>\n   sctp_process_strreset_addstrm_out (net/sctp/stream.c:832)\n   sctp_sf_do_reconf (net/sctp/sm_statefuns.c:4212)\n   sctp_do_sm (net/sctp/sm_sideeffect.c:1172)\n   sctp_assoc_bh_rcv (net/sctp/associola.c:1044)\n   sctp_rcv (net/sctp/input.c:243)\n   ip_local_deliver (net/ipv4/ip_input.c:262)\n   process_backlog (net/core/dev.c:6680)\n   </IRQ>\n\nA response can only acknowledge a request that was actually sent, so do\nnot match asoc->strreset_chunk while chunk->transport is NULL. Guarding\nthe lookup covers all three completion sites.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -131471,6 +131518,40 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: drop a chunk if its transport was removed\n\nsctp_rcv() resolves the transport once per packet and leaves it in\nchunk->transport. The lookup reference, or the one sctp_add_backlog() takes\nif the socket is owned by userspace, keeps it around until the chunk has\nbeen processed.\n\nAn authenticated ASCONF DEL-IP can remove it in the meantime.\nsctp_assoc_rm_peer() takes the transport out of the association and calls\nsctp_transport_free(), which tags it dead and drops the reference the\nassociation held. There is a window on both paths: the packet can sit on\nthe socket backlog, and on the direct path the lookup completes before\nbh_lock_sock().\n\nThe DATA chunk in that packet puts the removed transport back into\nasoc->peer.last_data_from. Once the packet is done that reference goes\naway and the transport is freed by RCU, so the next delayed SACK carries\nthe pointer into the SACK chunk and sctp_outq_select_transport() reads the\nfreed transport's state.\n\nDrop the chunk in sctp_inq_push(), next to the existing rcvr->dead check.\nBoth paths reach it with the association's socket lock held. The peer\nretransmits it.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89479": {
+                "cve_id": "CVE-2026-89479",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: stop processing a packet once its association is deleted\n\nsctp_endpoint_bh_rcv() looks the association up only when chunk->asoc is\nNULL, and caches the result in chunk->asoc and chunk->transport without\ntaking a reference.\n\nA packet that matches no association is handed to the endpoint, so a peer\ncan bundle COOKIE ECHO, SHUTDOWN and SHUTDOWN ACK in one packet. The\nCOOKIE ECHO creates the association, the SHUTDOWN chunk caches it, and\nwith the outqueue empty the SHUTDOWN ACK reaches sctp_sf_do_9_2_final(),\nso the association and its transports are freed.\n\nThe endpoint loop has no counterpart to the asoc->base.dead check in\nsctp_assoc_bh_rcv(). The next chunk writes to last_time_heard in the freed\ntransport and is then passed to sctp_do_sm() with the freed association.\nThe transport is freed through RCU, so this needs the packet to come off\nthe socket backlog, where the loop runs in task context.\n\nThe endpoint loop cannot do the same check: it holds no reference on the\nassociation, so reading asoc->base.dead would itself be a use-after-free.\nMark the packet for discard in the command interpreter, just before it\ndeletes the association. That is also before sctp_inq_free() releases the\nchunk on the association receive path.\n\nsctp_sf_do_5_2_4_dupcook() issues SCTP_CMD_DELETE_TCB for the temporary\nassociation, while the one the packet belongs to stays alive. A restarting\npeer can bundle DATA behind its COOKIE ECHO, so compare against\nchunk->asoc and leave that case alone.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89480": {
+                "cve_id": "CVE-2026-89480",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-tcp: reject a read that transferred too few bytes\n\nnvme_tcp_recv_data() completes a request once the current C2HData PDU\nhas been consumed. Nothing compares the total bytes received against\nthe length the command asked for: struct nvme_tcp_request has no\nreceive-side counter, queue->data_remaining is per queue, and\nblk_mq_end_request() completes for blk_rq_bytes(rq) unconditionally\nwith no residual concept anywhere above.\n\nA controller can therefore answer a 4096-byte read with 512 bytes and\nhave it reported as a complete read; user space then gets 4096 bytes of\nwhich 3584 are whatever was already in the page. I reproduced that with\na test target.\n\nCount the bytes received and refuse to complete a successful read whose\ncount does not match, at the two NVME_TCP_F_DATA_SUCCESS paths and in\nnvme_tcp_process_nvme_cqe(). The success test shifts req->status right\nby one, because the driver keeps the wire value there and shifts it on\ncompletion, so the check must see what the completion path will see.\nOnly REQ_OP_READ is checked, because there the length comes from the\nsectors the request covers; a passthrough command is built by its\nsubmitter, which picks both command and buffer, so the kernel has\nnothing to compare against.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
