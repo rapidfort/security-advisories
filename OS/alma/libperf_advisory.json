@@ -57514,6 +57514,23 @@
                     }
                 ]
             },
+            "CVE-2026-80530": {
+                "cve_id": "CVE-2026-80530",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix exchange-range reflink flag clearing issue with INO1_WRITTEN\n\nWhen exchanging two full-file ranges, xmi_can_exchange_reflink_flags()\ncan move the reflink inode flag from the file that currently has it to\nthe other file, as long as exactly one side is marked.  This assumes\nthat the file contents, and therefore all shared extents, are exchanged.\n\nThat assumption is not true when XFS_EXCHMAPS_INO1_WRITTEN is set.\nxfs_exchmaps_can_skip_mapping() can skip hole and unwritten mappings\nfrom file1, so an exchange can complete without moving every mapping\nthat the earlier flag-swap decision accounted for.  In that case the\npost-operation cleanup can clear the reflink flag from an inode that\nstill owns shared written extents.  Later writes then take the\nnon-reflink write path and may update blocks that should still have\nbeen protected by CoW, which shows up as data corruption between\nreflink-related files.\n\nFix this by disabling the reflink flag exchange whenever\nXFS_EXCHMAPS_INO1_WRITTEN is requested.  The contents exchange can still\nproceed; the conservative outcome is that both inodes keep the reflink\nflag.  The regular reflink flag cleanup path can drop the extra flag\nlater once the inode no longer has shared extents.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-80534": {
                 "cve_id": "CVE-2026-80534",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -60114,6 +60131,23 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/cpum_cf: Handle CPU hotplug via prepare/dead callbacks\n\nThe command 'perf stat -e cycles -- <command>' crashes the kernel\nwhen CPUs are hotplug added during that run.\n\nRoot cause is the allocation of struct cpu_cf_events at first\nevent initialization. The allocation is dynamic and the first\nevent that has task context creates such a structure for\neach online CPU. This is not sufficient. CPUs may be offline\nduring event creation and can be set online during the\nperf run time. For example commands\n\n # echo 0 > /sys/devices/system/cpu/cpu1/online\n # perf stat -e cycles -i -- stress-ng -t10s --matrix X\n # sleep 1\n # echo 1 > /sys/devices/system/cpu/cpu1/online\n\ncreate an event for CPUs 0,2-X. Since the events are created with\ntask-context, the scheduler will eventually schedule the program\non CPU1. This CPU has not created and initialized any per\nCPU event infrastructure as that CPU was not online at the time\nof the perf invocation. Thus when the scheduler runs stress-ng\non CPU1, the function cpumf_pmu_add() refers to a NULL pointer:\n\n struct cpu_cf_events *cpuhw = this_cpu_cfhw();\n\nThis function call is invoked after the task stress-ng has been\nmade runnable on CPU1. And this_cpu_cfhw() returns NULL.\n\nThe result is a panic:\nUnable to handle kernel pointer dereference in virtual kernel address space\nFailing address: 0000000000000000 TEID: 0000000000000483\n....\nKrnl PSW : 0404d00180000000 000003ef8291fd0c (cpumf_pmu_add+0x3c/0x80)\n....\nCall Trace:\n [<000003ef8291fd0c>] cpumf_pmu_add+0x3c/0x80\n [<000003ef82bb5e3e>] event_sched_in+0xae/0x190\n [<000003ef82bb60d6>] merge_sched_in+0x1b6/0x390\n [<000003ef82bb65b8>] visit_groups_merge.constprop.0.isra.0+0x308/0x5b0\n [<000003ef82bb689a>] pmu_groups_sched_in+0x3a/0x50\n [<000003ef82bb6a30>] ctx_sched_in+0x180/0x260\n [<000003ef82bb780c>] perf_event_context_sched_in+0x11c/0x2d0\n [<000003ef82bb79ee>] __perf_event_task_sched_in+0x2e/0xc0\n [<000003ef82994834>] finish_task_switch.isra.0+0x1a4/0x250\n....\nLast Breaking-Event-Address:\n [<000003ef8291f1d8>] this_cpu_cfhw+0x38/0x40\n\nThe issue arises only in per-task context when the CPUMF facility is\nused and the scheduler picks a random CPU for such a process to run on.\nThe scheduler enables the CPUMF infrastructure via PMU callback\nfunctions pmu::add() and pmu::del().\n\nIntroduce a CPU hotplug prepare/dead callback pair which creates and\nremoves the per CPU counter data while the CPU is offline. Count the\nusers which track every CPU (cpu == -1), that is perf_event_open()\nevents with task context and /dev/hwctr device sessions, in the new\ncounter cpu_cf_root::tskcnt, protected by pmc_reserve_mutex.\nThis ensures the infrastructure is available when\nnew CPU is selected to run the per-task context process.\n\nIn cpum_cf_free_root() and cpum_cf_free_cpu() ensure the reference\npointer to data structures is set to NULL before the data is freed\nto prevent interrupt handlers to access stale data.\n\n[gor@linux.ibm.com: change commit message]",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89469": {
+                "cve_id": "CVE-2026-89469",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npower: supply: lp8727: fix use-after-free in lp8727_release_irq()\n\nlp8727_isr_func(), the threaded IRQ handler, is the only caller that arms\npchg->work via schedule_delayed_work().  lp8727_release_irq() currently\ncancels the work before freeing the IRQ, so an IRQ delivered in between\ncan re-arm the work through the threaded handler.  After .remove returns\nthe devm layer frees pchg while lp8727_delayed_func() may still run and\ndereference it.\n\nFree the IRQ first so the threaded handler is quiesced and can no longer\nqueue work, then cancel the delayed work to drain the final generation.\n\nThis issue was found by an in-house static analysis tool.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -70702,19 +70736,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: plda: Fix IRQ domain leaks in the error paths of plda_init_interrupts()\n\nplda_init_interrupts() initializes IRQ domains and creates IRQ mapping but\ndoes not unwind them when later step fails.\n\nIf platform_get_irq() or either irq_create_mapping() fails\nin plda_init_interrupts(), the domains are never deinitialized. If\nirq_create_mapping() fails, port->intx_irq stays initialized.\n\nHence, remove the IRQ domains in the error path by calling\nplda_pcie_irq_domain_deinit().\n\nSince plda_pcie_irq_domain_deinit() now disposes of the intx_irq and\nmsi_irq mappings itself before removing their domains, the msi_irq\nmapping failure path can go directly to err_irq_domain_deinit instead of\ndisposing of port->intx_irq separately first.\n\nThis issue was found by automated review of sashiko-bot\n\n[mani: commit log]",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-89465": {
-                "cve_id": "CVE-2026-89465",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npower: supply: rt9455: quiesce delayed work before teardown\n\nThe threaded IRQ handler can queue pwr_rdy_work,\nmax_charging_time_work and batt_presence_work.  pwr_rdy_work and\nbatt_presence_work can also queue max_charging_time_work, while\nbatt_presence_work can requeue itself.\n\nrt9455_remove() cancels max_charging_time_work before\nbatt_presence_work.  The latter can therefore queue\nmax_charging_time_work after it has already been cancelled:\n\n  rt9455_remove()                   workqueue\n    cancel pwr_rdy_work\n    cancel max_charging_time_work\n                                      batt_presence_work queues\n                                        max_charging_time_work\n    cancel batt_presence_work\n    return\n    devres frees rt9455_info\n                                      max_charging_time_work dereferences\n                                        rt9455_info\n\nThe IRQ also remains registered until devres cleanup and can queue more\nwork after any of the cancellation calls.  If rt9455_hw_init() fails\nafter the IRQ has been requested, probe returns without cancelling work\nthat may already have been queued.  A pending callback can then access\nrt9455_info after it has been freed.\n\nRegister rt9455_cancel_all_delayed_works() through\ndevm_add_action_or_reset() right after devm_power_supply_register().\ndevres invokes the action in reverse registration order, after the\nmanaged IRQ has been freed and before rt9455_info is released, so the\ndelayed works are drained in both rt9455_remove() and the probe error\npath.  Cancel pwr_rdy_work and batt_presence_work before\nmax_charging_time_work because both can queue the latter.\n\nThis issue was found by an in-house static analysis tool.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -123441,6 +123462,23 @@
                     }
                 ]
             },
+            "CVE-2026-80530": {
+                "cve_id": "CVE-2026-80530",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix exchange-range reflink flag clearing issue with INO1_WRITTEN\n\nWhen exchanging two full-file ranges, xmi_can_exchange_reflink_flags()\ncan move the reflink inode flag from the file that currently has it to\nthe other file, as long as exactly one side is marked.  This assumes\nthat the file contents, and therefore all shared extents, are exchanged.\n\nThat assumption is not true when XFS_EXCHMAPS_INO1_WRITTEN is set.\nxfs_exchmaps_can_skip_mapping() can skip hole and unwritten mappings\nfrom file1, so an exchange can complete without moving every mapping\nthat the earlier flag-swap decision accounted for.  In that case the\npost-operation cleanup can clear the reflink flag from an inode that\nstill owns shared written extents.  Later writes then take the\nnon-reflink write path and may update blocks that should still have\nbeen protected by CoW, which shows up as data corruption between\nreflink-related files.\n\nFix this by disabling the reflink flag exchange whenever\nXFS_EXCHMAPS_INO1_WRITTEN is requested.  The contents exchange can still\nproceed; the conservative outcome is that both inodes keep the reflink\nflag.  The regular reflink flag cleanup path can drop the extra flag\nlater once the inode no longer has shared extents.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-80534": {
                 "cve_id": "CVE-2026-80534",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -126041,6 +126079,23 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/cpum_cf: Handle CPU hotplug via prepare/dead callbacks\n\nThe command 'perf stat -e cycles -- <command>' crashes the kernel\nwhen CPUs are hotplug added during that run.\n\nRoot cause is the allocation of struct cpu_cf_events at first\nevent initialization. The allocation is dynamic and the first\nevent that has task context creates such a structure for\neach online CPU. This is not sufficient. CPUs may be offline\nduring event creation and can be set online during the\nperf run time. For example commands\n\n # echo 0 > /sys/devices/system/cpu/cpu1/online\n # perf stat -e cycles -i -- stress-ng -t10s --matrix X\n # sleep 1\n # echo 1 > /sys/devices/system/cpu/cpu1/online\n\ncreate an event for CPUs 0,2-X. Since the events are created with\ntask-context, the scheduler will eventually schedule the program\non CPU1. This CPU has not created and initialized any per\nCPU event infrastructure as that CPU was not online at the time\nof the perf invocation. Thus when the scheduler runs stress-ng\non CPU1, the function cpumf_pmu_add() refers to a NULL pointer:\n\n struct cpu_cf_events *cpuhw = this_cpu_cfhw();\n\nThis function call is invoked after the task stress-ng has been\nmade runnable on CPU1. And this_cpu_cfhw() returns NULL.\n\nThe result is a panic:\nUnable to handle kernel pointer dereference in virtual kernel address space\nFailing address: 0000000000000000 TEID: 0000000000000483\n....\nKrnl PSW : 0404d00180000000 000003ef8291fd0c (cpumf_pmu_add+0x3c/0x80)\n....\nCall Trace:\n [<000003ef8291fd0c>] cpumf_pmu_add+0x3c/0x80\n [<000003ef82bb5e3e>] event_sched_in+0xae/0x190\n [<000003ef82bb60d6>] merge_sched_in+0x1b6/0x390\n [<000003ef82bb65b8>] visit_groups_merge.constprop.0.isra.0+0x308/0x5b0\n [<000003ef82bb689a>] pmu_groups_sched_in+0x3a/0x50\n [<000003ef82bb6a30>] ctx_sched_in+0x180/0x260\n [<000003ef82bb780c>] perf_event_context_sched_in+0x11c/0x2d0\n [<000003ef82bb79ee>] __perf_event_task_sched_in+0x2e/0xc0\n [<000003ef82994834>] finish_task_switch.isra.0+0x1a4/0x250\n....\nLast Breaking-Event-Address:\n [<000003ef8291f1d8>] this_cpu_cfhw+0x38/0x40\n\nThe issue arises only in per-task context when the CPUMF facility is\nused and the scheduler picks a random CPU for such a process to run on.\nThe scheduler enables the CPUMF infrastructure via PMU callback\nfunctions pmu::add() and pmu::del().\n\nIntroduce a CPU hotplug prepare/dead callback pair which creates and\nremoves the per CPU counter data while the CPU is offline. Count the\nusers which track every CPU (cpu == -1), that is perf_event_open()\nevents with task context and /dev/hwctr device sessions, in the new\ncounter cpu_cf_root::tskcnt, protected by pmc_reserve_mutex.\nThis ensures the infrastructure is available when\nnew CPU is selected to run the per-task context process.\n\nIn cpum_cf_free_root() and cpum_cf_free_cpu() ensure the reference\npointer to data structures is set to NULL before the data is freed\nto prevent interrupt handlers to access stale data.\n\n[gor@linux.ibm.com: change commit message]",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89469": {
+                "cve_id": "CVE-2026-89469",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npower: supply: lp8727: fix use-after-free in lp8727_release_irq()\n\nlp8727_isr_func(), the threaded IRQ handler, is the only caller that arms\npchg->work via schedule_delayed_work().  lp8727_release_irq() currently\ncancels the work before freeing the IRQ, so an IRQ delivered in between\ncan re-arm the work through the threaded handler.  After .remove returns\nthe devm layer frees pchg while lp8727_delayed_func() may still run and\ndereference it.\n\nFree the IRQ first so the threaded handler is quiesced and can no longer\nqueue work, then cancel the delayed work to drain the final generation.\n\nThis issue was found by an in-house static analysis tool.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
