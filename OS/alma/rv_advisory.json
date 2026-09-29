@@ -64155,6 +64155,193 @@
                     }
                 ]
             },
+            "CVE-2026-97554": {
+                "cve_id": "CVE-2026-97554",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid using uninitialized SIDs in cifs_posix_to_fattr()\n\ncifs_posix_to_fattr() ignores the return value of posix_info_parse().\nWhen a malformed POSIX directory entry is encountered (e.g. invalid\nSID lengths from an untrusted server), posix_info_parse() returns -1\nwithout populating the 'parsed' struct.  The uninitialized stack\nmemory in parsed.owner and parsed.group is then passed to\nsid_to_id(), which processes the garbage bytes and passes them to\nrequest_key() to construct a SID string, potentially leaking kernel\nstack contents to the userspace idmap daemon.\n\nFix this by checking the return value and skipping the SID-to-id\nmapping when parsing fails.  The remaining fattr fields (timestamps,\nmode, etc.) are populated directly from the 'info' pointer so they\nare unaffected.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97555": {
+                "cve_id": "CVE-2026-97555",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix heap overflow in DACL owner/group rewrite\n\nWhen id_mode_to_cifs_acl rewrites an existing DACL, it allocates a\nbuffer sized according to the on-disk DACL length reported by\ndacl_ptr->size. However, replace_sids_and_copy_aces may rewrite each\nACE with a new owner/group SID obtained from the cifs.idmap upcall.\nThose SIDs can have up to SID_MAX_SUB_AUTHORITIES (15) sub-authorities,\nmaking each ACE up to 76 bytes (sizeof(struct smb_ace)).\n\nIf the original DACL contains short SIDs (e.g., 1 sub-authority) while\nthe replacement SIDs are long, the rewritten ACEs overflow the\nallocation.\n\nFix this by always budgeting for worst-case SID expansion: allocate\nsizeof(struct smb_acl) plus num_aces * sizeof(struct smb_ace), which\ncovers the smb_acl header and room for every ACE at maximum SID size.\nThis replaces the previous split logic that used dacl_ptr->size for\ncifsacl mounts but num_aces * sizeof(struct smb_ace) for mode_from_sid\nmounts: both paths can trigger the same rewrite and need the same\nheadroom.\n\nKASAN reports this as:\n  BUG: KASAN: slab-out-of-bounds in build_sec_desc+0x1e8a/0x2680 [cifs]\n  Write of size 4 at addr ffff8881a5e25374 by task chown/5298\n  ...\n  The buggy address is located 0 bytes to the right of\n   allocated 884-byte region [ffff8881a5e25000, ffff8881a5e25374)",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97556": {
+                "cve_id": "CVE-2026-97556",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid leaking refcount when cifs_sb_tlink() fails\n\ncifs_oplock_break() takes over the reference that\ncifs_queue_oplock_break() acquired when it queued the work, and drops it\nwith _cifsFileInfo_put() once the break has been processed.\n\nOnly in setups with \"-o multiuser\", cifs_sb_tlink() may fail, at which\npoint cifs_oplock_break() returns without putting the file reference,\nmirroring the reference leak we already fixed in the companion patch to\ncifs_queue_oplock_break().\n\nThis would trigger a crash due to busy inodes on the next unmount:\n\n  BUG: Dentry ... still in use (1) [unmount of cifs cifs]\n  VFS: Busy inodes after unmount of cifs (cifs)\n\nDrop the reference on that path as well. Doing so before the out label\nmirrors the normal path, which also puts the reference before\ncifs_done_oplock_break().\n\nFound by Sashiko code review. The failure path was not exercised at\nruntime.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97557": {
+                "cve_id": "CVE-2026-97557",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid leaking refcount in cifs_queue_oplock_break()\n\ncifs_queue_oplock_break() unconditionally takes a reference on the\ntarget file before queueing cifs_oplock_break(). Only that work item\ndecreases the reference counter again.\n\nIf another oplock break arrives while that work is still queued,\nqueue_work() will return false and not queue this second work item. As a\nresult, we will never reach the point to drop the file reference again\nand are leaking this reference. This can be triggered when interacting\nwith a slow-responding server.\n\nAs a result, later unmount operations for this file system will fail with\n\n  BUG: Dentry ... still in use (1) [unmount of cifs cifs]\n  VFS: Busy inodes after unmount of cifs (cifs)\n  kernel BUG at fs/super.c:777!\n\nFix this by only incrementing the reference count if the work has been\nqueued successfully. Taking it after queue_work() is safe because all\nthree callers hold tcon->open_file_lock across the call and\n_cifsFileInfo_put() decrements under that same lock, so a worker that\nstarts the handler in the window cannot drop the reference before it has\nbeen taken.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97558": {
+                "cve_id": "CVE-2026-97558",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix cifsFileInfo reference leak in deferred close\n\nWhen cifs_close() defers a close, it hands the cifsFileInfo reference\nof the closing struct file to the queued work. Each execution of\nsmb2_deferred_work_close() drops one such reference.\n\ndeferred_close_scheduled can be false while the work is pending: the\nworkqueue clears PENDING when the callback starts to run, before the\ncallback clears the flag under deferred_lock. A close in that\ninterval requeues the running work, and the callback then clears the\nflag, leaving the requeued work pending with the flag down. A later\ncifs_open() can reuse the handle and its cifs_close() reaches the\nsame branch: queue_delayed_work() fails because the work is still\npending, but cifs_close() returns without dropping the closing file's\nreference. The cifsFileInfo count stays pinned and its tlink, dentry\nand server handle are leaked.\n\nCheck the return value and hand off the reference only when work was\nactually queued. Otherwise, use the shared _cifsFileInfo_put(), like\nthe mod_delayed_work() branch above: the pending execution already\nowns its reference.\n\nThis issue was found by an in-house static analysis tool.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97559": {
+                "cve_id": "CVE-2026-97559",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fail DACL rewrite when the new DACL exceeds 64K\n\nreplace_sids_and_copy_aces() and set_chmod_dacl() accumulate the size of\nthe DACL they build in a u16. That accumulator can wrap.\n\nvalidate_dacl() caps num_aces at (dacl_size - sizeof(struct smb_acl)) /\n20, i.e. 3276 for a maximally sized DACL, while each rewritten ACE can\ngrow to sizeof(struct smb_ace) (76 bytes) once its SID is replaced with\none carrying SID_MAX_SUB_AUTHORITIES sub-authorities. The worst case is\ntherefore sizeof(struct smb_acl) + 3276 * 76 = 248984 bytes, far beyond\nwhat a u16 can hold. A wraparound is reached with 863 ACEs.\n\nAfter the wraparound, ndacl_ptr->size becomes meaningless and the offset\nwill point anywhere in the ACE array. As a result, we will see\ncorruption of the DACL, which then gets sent to the server. This is not\nan out-of-bounds write as the allocation now covers the worst-case\nexpansion, so writes will always go into the buffer.\n\nAdjust the code to use a u32 internally and return -EOVERFLOW in the\noverflow case. The operation must be refused, because a DACL can only\nhold 2^16-1 bytes on the wire and larger DACLs cannot be represented.\n\nset_chmod_dacl() carries the same pattern and is fixed the same way. It\nonly wraps once the source DACL comes within roughly 380 bytes of the\n64K ceiling, but the failure mode is identical.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97560": {
+                "cve_id": "CVE-2026-97560",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix one-byte OOB read in smb2_parse_native_symlink()\n\nWhen parsing a share-root relative native symlink, memcpy copies\nsmb_target+1 (skipping the leading separator) but uses\nstrlen(smb_target)+1 as the length, reading one byte past the\nallocated buffer.\n\nThis fixes the following KASAN splat when accessing an SMB symlink\nwith a target of '\\a\\b':\n\n  BUG: KASAN: slab-out-of-bounds in smb2_parse_native_symlink+0x4f5/0xca0\n  Read of size 5 at addr ffff88800878fe21 by task netfsfuzz-execu/1\n  CPU: 1 UID: 0 PID: 1 Comm: netfsfuzz-execu Tainted: G N\n  7.2.0-11943-g2709dd5ae32f-dirty #1 PREEMPT(lazy)\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix,\n  1996)\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x7b/0xa0\n   print_report+0xd0/0x630\n   kasan_report+0xe5/0x120\n   kasan_check_range+0x105/0x1b0\n   __asan_memcpy+0x23/0x60\n   smb2_parse_native_symlink+0x4f5/0xca0\n   parse_reparse_point+0x68a/0x1530\n   reparse_info_to_fattr+0x752/0xa20\n   cifs_get_fattr+0x873/0x15b0\n   cifs_get_inode_info+0xc0/0x310\n   cifs_lookup+0x308/0xa70\n   __lookup_slow+0x122/0x2b0\n   lookup_slow+0x50/0x70\n   path_lookupat+0x525/0xaf0\n   filename_lookup+0x1f2/0x550\n   vfs_statx+0xd1/0x1a0\n   vfs_fstatat+0x65/0xc0\n   __do_sys_newfstatat+0x9a/0x120\n   do_syscall_64+0xdd/0x4a0\n   entry_SYSCALL_64_after_hwframe+0x77/0x7f",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97561": {
+                "cve_id": "CVE-2026-97561",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: honor forceuid/forcegid when mapping SIDs to uid/gid\n\nWhen the administrator mounts with forceuid or forcegid (uid=/gid=\nmount options), they expect all files to appear owned by the specified\nuser/group.  However, several code paths unconditionally called\nsid_to_id() to overwrite cf_uid/cf_gid with server-provided values,\nignoring the administrator's explicit override:\n\n  - smb311_posix_info_to_fattr() (stat via POSIX extensions)\n  - cifs_posix_to_fattr() (readdir via POSIX extensions)\n  - parse_sec_desc() (CIFS ACL ownership mapping)\n\nThis allowed an untrusted server to dictate local file ownership even\nwhen the mount was configured to force specific uid/gid values.\n\nFix all three call sites to check CIFS_MOUNT_OVERR_UID and\nCIFS_MOUNT_OVERR_GID before calling sid_to_id(), following the\nsame pattern already used by cifs_unix_basic_to_fattr() for unix\nextensions.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97562": {
+                "cve_id": "CVE-2026-97562",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: pin DFS superblock in iterator callback\n\ntcon_super_cb() stores a raw superblock pointer, but __cifs_get_super()\ntakes its active reference only after iterate_supers_type() has dropped\ns_umount and its passive reference. Concurrent DFS automount expiry can\ntherefore free the superblock before cifs_sb_active() uses it.\n\nA deterministic KASAN test reproduces the race as:\n\n  BUG: KASAN: slab-use-after-free in cifs_sb_active+0x77/0x80\n\nThe same test passes with this change applied.\n\nTake the active reference in the callback while iterate_supers_type()\nstill holds s_umount shared. cifs_put_tcp_super() remains the matching\nrelease.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97563": {
+                "cve_id": "CVE-2026-97563",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject out-of-bounds DataOffset in CIFSSMBRead()\n\nThe SMB1 synchronous read helper CIFSSMBRead() validates the server's\nDataLength against CIFSMaxBufSize and the caller's count, but never\nvalidates DataOffset. The copy source is formed as\n\n\t&pSMBr->hdr.Protocol + le16_to_cpu(pSMBr->DataOffset)\n\nand memcpy()'d for DataLength bytes with no check that the\n[DataOffset, DataOffset + DataLength) range lies within the response\nactually received from the server.\n\nA malicious or compromised SMB1 server can return a response carrying\nan in-range DataLength and a large DataOffset, driving the source\npointer past the end of the response buffer. The memcpy() then copies\nadjacent kernel heap into the caller's read buffer (information\ndisclosure), or reads unmapped memory and oopses (denial of service).\nSMB1 is not negotiated by default; reaching this code requires an\nexplicit vers=1.0 mount.\n\nBoth DataOffset and the received response length recorded in\nrsp_iov.iov_len are relative to the start of the SMB header, so reject\nthe response unless DataOffset + DataLength fits within that length,\nusing overflow-safe arithmetic, before forming the source pointer.\nThe response length has been validated by the previous patch, so the\nDataOffset and DataLength fields can be read safely here.\n\nWhile here, make data_length unsigned. It holds a length derived from\nunsigned on-the-wire fields and is only ever compared against unsigned\nquantities; print it with %u accordingly, and add __func__ to the\ncifs_dbg() calls in this function.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97564": {
+                "cve_id": "CVE-2026-97564",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject userspace cifs.idmap descriptions\n\ncifs.idmap key descriptions carry authority-bearing fields (owner and\ngroup SIDs and uid/gid values in \"os:\"/\"gs:\"/\"oi:\"/\"gi:\" form) that the\ncifs.idmap upcall helper treats as kernel-originating inputs.  Unlike\nits sibling cifs.spnego, the cifs.idmap key type has no vet_description\nhook, so userspace can create keys of this type through\nrequest_key(2)/add_key(2) and supply those fields without CIFS origin.\nA request_key(2) call with a non-NULL callout then drives a root\nusermodehelper upcall (/sbin/request-key -> cifs.idmap) that consumes\nthe unvetted description in root context.\n\nOnly accept cifs.idmap descriptions while CIFS is using its private\nroot_cred to request the key.  id_to_sid()/sid_to_id() already run\nunder override_creds(root_cred), so the kernel-originated path is\nunaffected.\n\nThis mirrors commit 3da1fdf4efbc (\"smb: client: reject userspace\ncifs.spnego descriptions\"), which applied the same restriction to\ncifs.spnego.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-98003": {
                 "cve_id": "CVE-2026-98003",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -64789,6 +64976,74 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Fix NULL-ptr-deref when showing a void BTF type\n\nbtf_modifier_show() resolves the modifier and then calls\nbtf_type_ops(t)->show() unconditionally. For the void type (type_id 0,\nBTF_KIND_UNKN) kind_ops[] has no entry, so ->show is NULL.\n\nA \"const void\" (a modifier resolving to void) cannot be a map key or\nvalue - map_check_btf() rejects it because void has no size - so the map\ndump path does not reach it. But bpf_snprintf_btf() takes a type_id\nstraight from the BPF program, and passing such a \"const void\" from the\nvmlinux BTF NULL-derefs:\n\nKASAN: null-ptr-deref in range [0x0000000000000028-0x000000000000002f]\nRIP: 0010:btf_modifier_show (kernel/bpf/btf.c:2914)\nCall Trace:\n <TASK>\n btf_type_show (kernel/bpf/btf.c:8251)\n btf_type_snprintf_show (kernel/bpf/btf.c:8321)\n bpf_snprintf_btf (kernel/trace/bpf_trace.c:1047)\n bpf_prog_test_run_raw_tp (net/bpf/test_run.c:829)\n __sys_bpf (kernel/bpf/syscall.c:4804)\n do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n entry_SYSCALL_64_after_hwframe (arch/x86/entry/entry_64.S:121)\n </TASK>\n\nFall back to btf_df_show() when the resolved type has no show op; it\nemits the \"<unsupported kind:N>\" placeholder already used for kinds like\nFWD and FUNC. bpf_snprintf_btf() then returns the length as usual.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98066": {
+                "cve_id": "CVE-2026-98066",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: caiaq: Fix potential double-free at error path\n\nThe fix for caiaq driver's resource management to handle the errors\ntries to release the resources in a common destructor call, but as a\nsashiko review for another patch suggested, some of the audio\nresources such as URBs have been already freed, and this may lead to a\ndouble-free.\n\nFor addressing the double-free, call the common destructor function\nfrom each place, and assure that the resource pointers get cleared.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98073": {
+                "cve_id": "CVE-2026-98073",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: Remove conflicting altnames for dying netns in __dev_change_net_namespace().\n\nsyzbot reported the warning in cfg80211_pernet_exit(). [0]\n\nThe repro does the following:\n\n  1. create two device in root netns and non-root netns\n  2. assign the same altname for the two devices\n  3. remove the non-root netns\n\nSince commit 7663d522099e (\"net: check for altname conflicts\nwhen changing netdev's netns\"), cfg80211_switch_netns() and\ncfg802154_switch_netns() fail if init_net has a device with the\nconflicting altname.\n\ndefault_device_exit_net() had the same issue and commit d09486a04f5d\n(\"net: fix removing a namespace with conflicting altnames\") fixed it.\n\ncfg80211_pernet_exit() and cfg802154_pernet_exit() need the same fix.\n\nLet's generalise the fix by removing conflicting altnames for dying\nnetns in __dev_change_net_namespace().\n\n[0]:\ncfg80211_switch_netns(rdev, &init_net)\nWARNING: net/wireless/core.c:1871 at cfg80211_pernet_exit+0xd5/0x120 net/wireless/core.c:1871, CPU#1: kworker/u8:9/1160\nModules linked in:\nCPU: 1 UID: 0 PID: 1160 Comm: kworker/u8:9 Not tainted syzkaller #0 PREEMPT(full)\nHardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 07/24/2026\nWorkqueue: netns cleanup_net\nRIP: 0010:cfg80211_pernet_exit+0xd5/0x120 net/wireless/core.c:1871\nCode: e8 03 42 80 3c 20 00 74 08 4c 89 f7 e8 b4 ef 0e f7 4d 8b 36 49 81 fe 20 10 4a 90 74 12 e8 03 3d 9f f6 eb 85 e8 fc 3c 9f f6 90 <0f> 0b 90 eb cc e8 f1 3c 9f f6 eb 05 e8 ea 3c 9f f6 5b 41 5c 41 5e\nRSP: 0018:ffffc900057a78f0 EFLAGS: 00010293\nRAX: ffffffff8b287154 RBX: ffff88807ba72780 RCX: ffff8880213e8000\nRDX: 0000000000000000 RSI: 00000000ffffffef RDI: 0000000000000000\nRBP: 00000000ffffffef R08: ffffffff9024cc67 R09: 0000000000000000\nR10: fffff52000af4eb0 R11: fffffbfff204998d R12: dffffc0000000000\nR13: ffffffff904a1080 R14: ffff888144ed0008 R15: ffff888144ed0e20\nFS:  0000000000000000(0000) GS:ffff888124de6000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 00005642de0a8a70 CR3: 000000007a40c000 CR4: 00000000003526f0\nCall Trace:\n <TASK>\n ops_exit_list net/core/net_namespace.c:200 [inline]\n ops_undo_list+0x43d/0x8d0 net/core/net_namespace.c:253\n cleanup_net+0x572/0x810 net/core/net_namespace.c:706\n process_one_work kernel/workqueue.c:3387 [inline]\n process_scheduled_works+0xc3d/0x1630 kernel/workqueue.c:3470\n worker_thread+0xa47/0xfb0 kernel/workqueue.c:3551\n kthread+0x38b/0x480 kernel/kthread.c:436\n ret_from_fork+0x514/0xb70 arch/x86/kernel/process.c:158\n ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:245\n </TASK>",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98074": {
+                "cve_id": "CVE-2026-98074",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbonding: do not clear curr_active_slave prematurely when releasing all slaves\n\nWhen releasing all slaves during bond destruction (all == true),\n__bond_release_one() unconditionally clears bond->curr_active_slave to\nNULL in every iteration.\n\nIf a backup slave is released before the active slave,\nbond_alb_deinit_slave() triggers rlb_teach_disabled_mac_on_primary(),\nwhich increments the active slave dev promiscuity counter and sets\nbond_info->primary_is_promisc = 1.\n\nBecause bond->curr_active_slave was prematurely cleared to NULL when\nreleasing the backup slave, the subsequent iteration releasing the active\nslave evaluates oldcurrent as NULL, so bond_change_active_slave(bond, NULL)\nis skipped. Consequently, bond_alb_handle_active_change() is never called\nto decrement the promiscuity counter, permanently leaking promiscuous\nmode on the physical device after bond teardown.\n\nWhen oldcurrent == slave, bond_change_active_slave(bond, NULL) already sets\nbond->curr_active_slave to NULL. We only need to avoid selecting a new\nactive slave when all == true. Replace the if (all) branch with\nif (!all && oldcurrent == slave).",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98075": {
+                "cve_id": "CVE-2026-98075",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: reject BPF_PSEUDO_FUNC reference to the main program\n\nfixups.c:jit_subprogs() rewrites BPF_PSEUDO_FUNC loads to contain real\nfunction addresses. This function is invoked from bpf_jit_subprogs()\nonly when env->subprog_cnt > 1. Meaning that for any program like\nbelow:\n\n  int main(void *ctx) {\n    void *ptr = main;\n    ...\n    bpf_timer_set_callback(..., ptr);\n    ...\n  }\n\nThe 'ptr' won't be ever converted to contain an address.\nIn combination with e.g. bpf_timer_set_callback() this would lead to a\nfunction call at a bogus address.\n\nInstead of complicating the implementation, just assume that no useful\nprogram needs main to be a sync or async callback and reject\nBPF_PSEUDO_FUNC loads for the main subprogram.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -75541,6 +75796,19 @@
                 "cve_id": "CVE-2026-98061",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject tail calls directly from callback frames\n\nA tail call from a non-zero frame is modeled as a return from that frame.\nThe verifier makes R0 unknown and calls prepare_func_exit() for the taken\nbranch.\n\nWhen the current frame is a synchronous callback, prepare_func_exit()\nenforces the callback return-value contract and marks R0 precise. Since the\ntail-call path synthesized R0 rather than deriving it from an instruction,\nprecision backtracking reaches the callback-calling instruction with R0\nstill requested and triggers the \"callback unexpected regs\" verifier bug.\nA CAP_BPF task can therefore cause a WARN and an -EFAULT BPF_PROG_LOAD.\n\nTail calls reachable from callbacks are already rejected later by\ncheck_max_stack_depth(). Reject a tail call made directly by a callback\nbefore constructing the inconsistent return state, using the existing\ndiagnostic. Tail calls from ordinary subprograms keep their current\nbehavior.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98067": {
+                "cve_id": "CVE-2026-98067",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nerofs: disable LZ4 rolling decompression for now\n\nLZ4 rolling decompression [1] was introduced to reduce the memory\nfootprint of temporary pages:\n\n For many cases, it is needed for users to read small data within\n a compressed extent (pcluster), either due to random small read, or\n since uptodate folios (typically order-0) cannot be reused for\n decompression again since decompression algorithm refills\n already-uptodate folios.\n\nRolling decompression works because LZ4 is LZ77-based and only refers\nto the most recent 64 KiB of decompressed data, so in theory only a\nbounded rolling window of temporary pages is needed when decompressing.\n\nIt can save a lot of temporary memory, e.g.\n 601,960-byte data can be compressed into a 256k LZ4 compressed extent,\n which means it needs 146 extra pages per request in the worst case if\n rolling decompression is disabled.\n\nHowever, the upstream LZ4 implementation is not under EROFS' control:\nFor example, the literal copy memmove() may still **copy long literals\nbackward** on x86 based on the address comparison even when the source\nand destination ranges do not overlap (IOWs, inline decompression\ndoesn't need to be considered here). That breaks the rolling assumption\nand makes the optimization broken.\n\nDisable it for now to make sure the data correctness first since EROFS\nis used everywhere now: The rolling window approach can be revived once\nwe either ensure that the official LZ4 code always copies forward for\nnon-overlapping ranges or maintain our own LZ4 implementation in EROFS.\n\nThe main impact is a higher runtime memory footprint; However, recent\ncommit 0f6273ab4637 (\"erofs: add a reserved buffer pool for lz4\ndecompression\") helps mitigate this when enabled but it's still not\nperfect.\n\n[1] https://www.usenix.org/conference/atc19/presentation/gao\n    \u00a7 3.3 Decompression",
                 "severity": "LOW",
                 "status": "open",
                 "events": [
@@ -139790,6 +140058,193 @@
                     }
                 ]
             },
+            "CVE-2026-97554": {
+                "cve_id": "CVE-2026-97554",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid using uninitialized SIDs in cifs_posix_to_fattr()\n\ncifs_posix_to_fattr() ignores the return value of posix_info_parse().\nWhen a malformed POSIX directory entry is encountered (e.g. invalid\nSID lengths from an untrusted server), posix_info_parse() returns -1\nwithout populating the 'parsed' struct.  The uninitialized stack\nmemory in parsed.owner and parsed.group is then passed to\nsid_to_id(), which processes the garbage bytes and passes them to\nrequest_key() to construct a SID string, potentially leaking kernel\nstack contents to the userspace idmap daemon.\n\nFix this by checking the return value and skipping the SID-to-id\nmapping when parsing fails.  The remaining fattr fields (timestamps,\nmode, etc.) are populated directly from the 'info' pointer so they\nare unaffected.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97555": {
+                "cve_id": "CVE-2026-97555",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix heap overflow in DACL owner/group rewrite\n\nWhen id_mode_to_cifs_acl rewrites an existing DACL, it allocates a\nbuffer sized according to the on-disk DACL length reported by\ndacl_ptr->size. However, replace_sids_and_copy_aces may rewrite each\nACE with a new owner/group SID obtained from the cifs.idmap upcall.\nThose SIDs can have up to SID_MAX_SUB_AUTHORITIES (15) sub-authorities,\nmaking each ACE up to 76 bytes (sizeof(struct smb_ace)).\n\nIf the original DACL contains short SIDs (e.g., 1 sub-authority) while\nthe replacement SIDs are long, the rewritten ACEs overflow the\nallocation.\n\nFix this by always budgeting for worst-case SID expansion: allocate\nsizeof(struct smb_acl) plus num_aces * sizeof(struct smb_ace), which\ncovers the smb_acl header and room for every ACE at maximum SID size.\nThis replaces the previous split logic that used dacl_ptr->size for\ncifsacl mounts but num_aces * sizeof(struct smb_ace) for mode_from_sid\nmounts: both paths can trigger the same rewrite and need the same\nheadroom.\n\nKASAN reports this as:\n  BUG: KASAN: slab-out-of-bounds in build_sec_desc+0x1e8a/0x2680 [cifs]\n  Write of size 4 at addr ffff8881a5e25374 by task chown/5298\n  ...\n  The buggy address is located 0 bytes to the right of\n   allocated 884-byte region [ffff8881a5e25000, ffff8881a5e25374)",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97556": {
+                "cve_id": "CVE-2026-97556",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid leaking refcount when cifs_sb_tlink() fails\n\ncifs_oplock_break() takes over the reference that\ncifs_queue_oplock_break() acquired when it queued the work, and drops it\nwith _cifsFileInfo_put() once the break has been processed.\n\nOnly in setups with \"-o multiuser\", cifs_sb_tlink() may fail, at which\npoint cifs_oplock_break() returns without putting the file reference,\nmirroring the reference leak we already fixed in the companion patch to\ncifs_queue_oplock_break().\n\nThis would trigger a crash due to busy inodes on the next unmount:\n\n  BUG: Dentry ... still in use (1) [unmount of cifs cifs]\n  VFS: Busy inodes after unmount of cifs (cifs)\n\nDrop the reference on that path as well. Doing so before the out label\nmirrors the normal path, which also puts the reference before\ncifs_done_oplock_break().\n\nFound by Sashiko code review. The failure path was not exercised at\nruntime.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97557": {
+                "cve_id": "CVE-2026-97557",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid leaking refcount in cifs_queue_oplock_break()\n\ncifs_queue_oplock_break() unconditionally takes a reference on the\ntarget file before queueing cifs_oplock_break(). Only that work item\ndecreases the reference counter again.\n\nIf another oplock break arrives while that work is still queued,\nqueue_work() will return false and not queue this second work item. As a\nresult, we will never reach the point to drop the file reference again\nand are leaking this reference. This can be triggered when interacting\nwith a slow-responding server.\n\nAs a result, later unmount operations for this file system will fail with\n\n  BUG: Dentry ... still in use (1) [unmount of cifs cifs]\n  VFS: Busy inodes after unmount of cifs (cifs)\n  kernel BUG at fs/super.c:777!\n\nFix this by only incrementing the reference count if the work has been\nqueued successfully. Taking it after queue_work() is safe because all\nthree callers hold tcon->open_file_lock across the call and\n_cifsFileInfo_put() decrements under that same lock, so a worker that\nstarts the handler in the window cannot drop the reference before it has\nbeen taken.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97558": {
+                "cve_id": "CVE-2026-97558",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix cifsFileInfo reference leak in deferred close\n\nWhen cifs_close() defers a close, it hands the cifsFileInfo reference\nof the closing struct file to the queued work. Each execution of\nsmb2_deferred_work_close() drops one such reference.\n\ndeferred_close_scheduled can be false while the work is pending: the\nworkqueue clears PENDING when the callback starts to run, before the\ncallback clears the flag under deferred_lock. A close in that\ninterval requeues the running work, and the callback then clears the\nflag, leaving the requeued work pending with the flag down. A later\ncifs_open() can reuse the handle and its cifs_close() reaches the\nsame branch: queue_delayed_work() fails because the work is still\npending, but cifs_close() returns without dropping the closing file's\nreference. The cifsFileInfo count stays pinned and its tlink, dentry\nand server handle are leaked.\n\nCheck the return value and hand off the reference only when work was\nactually queued. Otherwise, use the shared _cifsFileInfo_put(), like\nthe mod_delayed_work() branch above: the pending execution already\nowns its reference.\n\nThis issue was found by an in-house static analysis tool.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97559": {
+                "cve_id": "CVE-2026-97559",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fail DACL rewrite when the new DACL exceeds 64K\n\nreplace_sids_and_copy_aces() and set_chmod_dacl() accumulate the size of\nthe DACL they build in a u16. That accumulator can wrap.\n\nvalidate_dacl() caps num_aces at (dacl_size - sizeof(struct smb_acl)) /\n20, i.e. 3276 for a maximally sized DACL, while each rewritten ACE can\ngrow to sizeof(struct smb_ace) (76 bytes) once its SID is replaced with\none carrying SID_MAX_SUB_AUTHORITIES sub-authorities. The worst case is\ntherefore sizeof(struct smb_acl) + 3276 * 76 = 248984 bytes, far beyond\nwhat a u16 can hold. A wraparound is reached with 863 ACEs.\n\nAfter the wraparound, ndacl_ptr->size becomes meaningless and the offset\nwill point anywhere in the ACE array. As a result, we will see\ncorruption of the DACL, which then gets sent to the server. This is not\nan out-of-bounds write as the allocation now covers the worst-case\nexpansion, so writes will always go into the buffer.\n\nAdjust the code to use a u32 internally and return -EOVERFLOW in the\noverflow case. The operation must be refused, because a DACL can only\nhold 2^16-1 bytes on the wire and larger DACLs cannot be represented.\n\nset_chmod_dacl() carries the same pattern and is fixed the same way. It\nonly wraps once the source DACL comes within roughly 380 bytes of the\n64K ceiling, but the failure mode is identical.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97560": {
+                "cve_id": "CVE-2026-97560",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix one-byte OOB read in smb2_parse_native_symlink()\n\nWhen parsing a share-root relative native symlink, memcpy copies\nsmb_target+1 (skipping the leading separator) but uses\nstrlen(smb_target)+1 as the length, reading one byte past the\nallocated buffer.\n\nThis fixes the following KASAN splat when accessing an SMB symlink\nwith a target of '\\a\\b':\n\n  BUG: KASAN: slab-out-of-bounds in smb2_parse_native_symlink+0x4f5/0xca0\n  Read of size 5 at addr ffff88800878fe21 by task netfsfuzz-execu/1\n  CPU: 1 UID: 0 PID: 1 Comm: netfsfuzz-execu Tainted: G N\n  7.2.0-11943-g2709dd5ae32f-dirty #1 PREEMPT(lazy)\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix,\n  1996)\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x7b/0xa0\n   print_report+0xd0/0x630\n   kasan_report+0xe5/0x120\n   kasan_check_range+0x105/0x1b0\n   __asan_memcpy+0x23/0x60\n   smb2_parse_native_symlink+0x4f5/0xca0\n   parse_reparse_point+0x68a/0x1530\n   reparse_info_to_fattr+0x752/0xa20\n   cifs_get_fattr+0x873/0x15b0\n   cifs_get_inode_info+0xc0/0x310\n   cifs_lookup+0x308/0xa70\n   __lookup_slow+0x122/0x2b0\n   lookup_slow+0x50/0x70\n   path_lookupat+0x525/0xaf0\n   filename_lookup+0x1f2/0x550\n   vfs_statx+0xd1/0x1a0\n   vfs_fstatat+0x65/0xc0\n   __do_sys_newfstatat+0x9a/0x120\n   do_syscall_64+0xdd/0x4a0\n   entry_SYSCALL_64_after_hwframe+0x77/0x7f",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97561": {
+                "cve_id": "CVE-2026-97561",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: honor forceuid/forcegid when mapping SIDs to uid/gid\n\nWhen the administrator mounts with forceuid or forcegid (uid=/gid=\nmount options), they expect all files to appear owned by the specified\nuser/group.  However, several code paths unconditionally called\nsid_to_id() to overwrite cf_uid/cf_gid with server-provided values,\nignoring the administrator's explicit override:\n\n  - smb311_posix_info_to_fattr() (stat via POSIX extensions)\n  - cifs_posix_to_fattr() (readdir via POSIX extensions)\n  - parse_sec_desc() (CIFS ACL ownership mapping)\n\nThis allowed an untrusted server to dictate local file ownership even\nwhen the mount was configured to force specific uid/gid values.\n\nFix all three call sites to check CIFS_MOUNT_OVERR_UID and\nCIFS_MOUNT_OVERR_GID before calling sid_to_id(), following the\nsame pattern already used by cifs_unix_basic_to_fattr() for unix\nextensions.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97562": {
+                "cve_id": "CVE-2026-97562",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: pin DFS superblock in iterator callback\n\ntcon_super_cb() stores a raw superblock pointer, but __cifs_get_super()\ntakes its active reference only after iterate_supers_type() has dropped\ns_umount and its passive reference. Concurrent DFS automount expiry can\ntherefore free the superblock before cifs_sb_active() uses it.\n\nA deterministic KASAN test reproduces the race as:\n\n  BUG: KASAN: slab-use-after-free in cifs_sb_active+0x77/0x80\n\nThe same test passes with this change applied.\n\nTake the active reference in the callback while iterate_supers_type()\nstill holds s_umount shared. cifs_put_tcp_super() remains the matching\nrelease.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97563": {
+                "cve_id": "CVE-2026-97563",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject out-of-bounds DataOffset in CIFSSMBRead()\n\nThe SMB1 synchronous read helper CIFSSMBRead() validates the server's\nDataLength against CIFSMaxBufSize and the caller's count, but never\nvalidates DataOffset. The copy source is formed as\n\n\t&pSMBr->hdr.Protocol + le16_to_cpu(pSMBr->DataOffset)\n\nand memcpy()'d for DataLength bytes with no check that the\n[DataOffset, DataOffset + DataLength) range lies within the response\nactually received from the server.\n\nA malicious or compromised SMB1 server can return a response carrying\nan in-range DataLength and a large DataOffset, driving the source\npointer past the end of the response buffer. The memcpy() then copies\nadjacent kernel heap into the caller's read buffer (information\ndisclosure), or reads unmapped memory and oopses (denial of service).\nSMB1 is not negotiated by default; reaching this code requires an\nexplicit vers=1.0 mount.\n\nBoth DataOffset and the received response length recorded in\nrsp_iov.iov_len are relative to the start of the SMB header, so reject\nthe response unless DataOffset + DataLength fits within that length,\nusing overflow-safe arithmetic, before forming the source pointer.\nThe response length has been validated by the previous patch, so the\nDataOffset and DataLength fields can be read safely here.\n\nWhile here, make data_length unsigned. It holds a length derived from\nunsigned on-the-wire fields and is only ever compared against unsigned\nquantities; print it with %u accordingly, and add __func__ to the\ncifs_dbg() calls in this function.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97564": {
+                "cve_id": "CVE-2026-97564",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject userspace cifs.idmap descriptions\n\ncifs.idmap key descriptions carry authority-bearing fields (owner and\ngroup SIDs and uid/gid values in \"os:\"/\"gs:\"/\"oi:\"/\"gi:\" form) that the\ncifs.idmap upcall helper treats as kernel-originating inputs.  Unlike\nits sibling cifs.spnego, the cifs.idmap key type has no vet_description\nhook, so userspace can create keys of this type through\nrequest_key(2)/add_key(2) and supply those fields without CIFS origin.\nA request_key(2) call with a non-NULL callout then drives a root\nusermodehelper upcall (/sbin/request-key -> cifs.idmap) that consumes\nthe unvetted description in root context.\n\nOnly accept cifs.idmap descriptions while CIFS is using its private\nroot_cred to request the key.  id_to_sid()/sid_to_id() already run\nunder override_creds(root_cred), so the kernel-originated path is\nunaffected.\n\nThis mirrors commit 3da1fdf4efbc (\"smb: client: reject userspace\ncifs.spnego descriptions\"), which applied the same restriction to\ncifs.spnego.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-98003": {
                 "cve_id": "CVE-2026-98003",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -140424,6 +140879,74 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Fix NULL-ptr-deref when showing a void BTF type\n\nbtf_modifier_show() resolves the modifier and then calls\nbtf_type_ops(t)->show() unconditionally. For the void type (type_id 0,\nBTF_KIND_UNKN) kind_ops[] has no entry, so ->show is NULL.\n\nA \"const void\" (a modifier resolving to void) cannot be a map key or\nvalue - map_check_btf() rejects it because void has no size - so the map\ndump path does not reach it. But bpf_snprintf_btf() takes a type_id\nstraight from the BPF program, and passing such a \"const void\" from the\nvmlinux BTF NULL-derefs:\n\nKASAN: null-ptr-deref in range [0x0000000000000028-0x000000000000002f]\nRIP: 0010:btf_modifier_show (kernel/bpf/btf.c:2914)\nCall Trace:\n <TASK>\n btf_type_show (kernel/bpf/btf.c:8251)\n btf_type_snprintf_show (kernel/bpf/btf.c:8321)\n bpf_snprintf_btf (kernel/trace/bpf_trace.c:1047)\n bpf_prog_test_run_raw_tp (net/bpf/test_run.c:829)\n __sys_bpf (kernel/bpf/syscall.c:4804)\n do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n entry_SYSCALL_64_after_hwframe (arch/x86/entry/entry_64.S:121)\n </TASK>\n\nFall back to btf_df_show() when the resolved type has no show op; it\nemits the \"<unsupported kind:N>\" placeholder already used for kinds like\nFWD and FUNC. bpf_snprintf_btf() then returns the length as usual.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98066": {
+                "cve_id": "CVE-2026-98066",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: caiaq: Fix potential double-free at error path\n\nThe fix for caiaq driver's resource management to handle the errors\ntries to release the resources in a common destructor call, but as a\nsashiko review for another patch suggested, some of the audio\nresources such as URBs have been already freed, and this may lead to a\ndouble-free.\n\nFor addressing the double-free, call the common destructor function\nfrom each place, and assure that the resource pointers get cleared.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98073": {
+                "cve_id": "CVE-2026-98073",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: Remove conflicting altnames for dying netns in __dev_change_net_namespace().\n\nsyzbot reported the warning in cfg80211_pernet_exit(). [0]\n\nThe repro does the following:\n\n  1. create two device in root netns and non-root netns\n  2. assign the same altname for the two devices\n  3. remove the non-root netns\n\nSince commit 7663d522099e (\"net: check for altname conflicts\nwhen changing netdev's netns\"), cfg80211_switch_netns() and\ncfg802154_switch_netns() fail if init_net has a device with the\nconflicting altname.\n\ndefault_device_exit_net() had the same issue and commit d09486a04f5d\n(\"net: fix removing a namespace with conflicting altnames\") fixed it.\n\ncfg80211_pernet_exit() and cfg802154_pernet_exit() need the same fix.\n\nLet's generalise the fix by removing conflicting altnames for dying\nnetns in __dev_change_net_namespace().\n\n[0]:\ncfg80211_switch_netns(rdev, &init_net)\nWARNING: net/wireless/core.c:1871 at cfg80211_pernet_exit+0xd5/0x120 net/wireless/core.c:1871, CPU#1: kworker/u8:9/1160\nModules linked in:\nCPU: 1 UID: 0 PID: 1160 Comm: kworker/u8:9 Not tainted syzkaller #0 PREEMPT(full)\nHardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 07/24/2026\nWorkqueue: netns cleanup_net\nRIP: 0010:cfg80211_pernet_exit+0xd5/0x120 net/wireless/core.c:1871\nCode: e8 03 42 80 3c 20 00 74 08 4c 89 f7 e8 b4 ef 0e f7 4d 8b 36 49 81 fe 20 10 4a 90 74 12 e8 03 3d 9f f6 eb 85 e8 fc 3c 9f f6 90 <0f> 0b 90 eb cc e8 f1 3c 9f f6 eb 05 e8 ea 3c 9f f6 5b 41 5c 41 5e\nRSP: 0018:ffffc900057a78f0 EFLAGS: 00010293\nRAX: ffffffff8b287154 RBX: ffff88807ba72780 RCX: ffff8880213e8000\nRDX: 0000000000000000 RSI: 00000000ffffffef RDI: 0000000000000000\nRBP: 00000000ffffffef R08: ffffffff9024cc67 R09: 0000000000000000\nR10: fffff52000af4eb0 R11: fffffbfff204998d R12: dffffc0000000000\nR13: ffffffff904a1080 R14: ffff888144ed0008 R15: ffff888144ed0e20\nFS:  0000000000000000(0000) GS:ffff888124de6000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 00005642de0a8a70 CR3: 000000007a40c000 CR4: 00000000003526f0\nCall Trace:\n <TASK>\n ops_exit_list net/core/net_namespace.c:200 [inline]\n ops_undo_list+0x43d/0x8d0 net/core/net_namespace.c:253\n cleanup_net+0x572/0x810 net/core/net_namespace.c:706\n process_one_work kernel/workqueue.c:3387 [inline]\n process_scheduled_works+0xc3d/0x1630 kernel/workqueue.c:3470\n worker_thread+0xa47/0xfb0 kernel/workqueue.c:3551\n kthread+0x38b/0x480 kernel/kthread.c:436\n ret_from_fork+0x514/0xb70 arch/x86/kernel/process.c:158\n ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:245\n </TASK>",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98074": {
+                "cve_id": "CVE-2026-98074",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbonding: do not clear curr_active_slave prematurely when releasing all slaves\n\nWhen releasing all slaves during bond destruction (all == true),\n__bond_release_one() unconditionally clears bond->curr_active_slave to\nNULL in every iteration.\n\nIf a backup slave is released before the active slave,\nbond_alb_deinit_slave() triggers rlb_teach_disabled_mac_on_primary(),\nwhich increments the active slave dev promiscuity counter and sets\nbond_info->primary_is_promisc = 1.\n\nBecause bond->curr_active_slave was prematurely cleared to NULL when\nreleasing the backup slave, the subsequent iteration releasing the active\nslave evaluates oldcurrent as NULL, so bond_change_active_slave(bond, NULL)\nis skipped. Consequently, bond_alb_handle_active_change() is never called\nto decrement the promiscuity counter, permanently leaking promiscuous\nmode on the physical device after bond teardown.\n\nWhen oldcurrent == slave, bond_change_active_slave(bond, NULL) already sets\nbond->curr_active_slave to NULL. We only need to avoid selecting a new\nactive slave when all == true. Replace the if (all) branch with\nif (!all && oldcurrent == slave).",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98075": {
+                "cve_id": "CVE-2026-98075",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: reject BPF_PSEUDO_FUNC reference to the main program\n\nfixups.c:jit_subprogs() rewrites BPF_PSEUDO_FUNC loads to contain real\nfunction addresses. This function is invoked from bpf_jit_subprogs()\nonly when env->subprog_cnt > 1. Meaning that for any program like\nbelow:\n\n  int main(void *ctx) {\n    void *ptr = main;\n    ...\n    bpf_timer_set_callback(..., ptr);\n    ...\n  }\n\nThe 'ptr' won't be ever converted to contain an address.\nIn combination with e.g. bpf_timer_set_callback() this would lead to a\nfunction call at a bogus address.\n\nInstead of complicating the implementation, just assume that no useful\nprogram needs main to be a sync or async callback and reject\nBPF_PSEUDO_FUNC loads for the main subprogram.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
