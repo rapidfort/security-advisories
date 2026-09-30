@@ -72893,6 +72893,71 @@
                     }
                 ]
             },
+            "CVE-2026-97993": {
+                "cve_id": "CVE-2026-97993",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost-vdpa: don't install the eventfd_ctx_fdget() error in config_ctx\n\nvhost_vdpa_set_config_call() swaps the eventfd_ctx_fdget() return value\ninto v->config_ctx before checking it, so on failure the field briefly\nholds an ERR_PTR:\n\n\tctx = fd == VHOST_FILE_UNBIND ? NULL : eventfd_ctx_fdget(fd);\n\tswap(ctx, v->config_ctx);\n\n\tif (!IS_ERR_OR_NULL(ctx))\n\t\teventfd_ctx_put(ctx);\n\n\tif (IS_ERR(v->config_ctx)) {\n\t\tlong ret = PTR_ERR(v->config_ctx);\n\n\t\tv->config_ctx = NULL;\n\t\treturn ret;\n\t}\n\nCommit 0bde59c1723a (\"vhost-vdpa: set v->config_ctx to NULL if\neventfd_ctx_fdget() fails\") added that clearing, and spelled out the\ninvariant the rest of the file relies on: \"we consider 'v->config_ctx'\nvalid if it is not NULL\".  The window between the swap and the clearing\nstill breaks it.  vhost_vdpa_config_cb() only tests for NULL, so a config\ninterrupt delivered inside the window hands the ERR_PTR to\neventfd_signal().\n\nCheck the fd before installing it instead.  That closes the window and\nmatches how vhost_vring_ioctl() handles the same failure for the vq call\nfd.\n\nIt also stops a rejected fd from tearing down a config interrupt that was\nworking: until now the swap replaced the live context and put it, so\nafter an EBADF the device silently stopped delivering config interrupts\nuntil userspace installed a new fd.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97994": {
+                "cve_id": "CVE-2026-97994",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost/vdpa: reject VRING_NUM larger than device max\n\nvhost_vring_set_num() accepts any non-zero power-of-two queue size that\nfits in 16 bits. vhost-vdpa then passes that value to set_vq_num()\nwithout comparing it with get_vq_num_max().\n\nA process with access to /dev/vhost-vdpa-* can therefore configure a\nqueue larger than the device advertises. With vdpa_sim, the worker can\nwalk descriptors beyond the mapped descriptor ring. KASAN reports a\n16-byte out-of-bounds read, corresponding to one vring_desc, in the\nvringh IOTLB path:\n\n  BUG: KASAN: out-of-bounds in _copy_from_iter\n  Read of size 16\n  copy_from_iotlb\n  copydesc_iotlb\n  vringh_getdesc_iotlb\n  vdpasim_net_work\n\nCache get_vq_num_max() immediately after reset. Some backends derive\nit from writable queue-size state, so querying it after SET_NUM may\nreturn the current size instead of the device capability. Invalidate\nthe cached value before reset so a failed reset leaves SET_NUM\ndisabled.\n\nFor VHOST_SET_VRING_NUM, copy the complete vring state once and use\nthe same index and size for validation, vq->num, and set_vq_num().\nThis ensures that validation and use operate on the same copied values.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97995": {
+                "cve_id": "CVE-2026-97995",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio_console: do not free control-out buffers on remove\n\n__send_control_msg() publishes &portdev->cpkt as the control-out\nvirtqueue cookie. remove_vqs() walks every virtqueue and passes leftover\ncookies to free_buf(), which treats them as struct port_buffer and\nreads sgpages.\n\nIf a control message is still on c_ovq when the device is unbound,\nfree_buf() reads past the ports_device object.\n\nKASAN reported slab-out-of-bounds in free_buf():\n\n\tfree_buf\n\tremove_vqs\n\tvirtcons_remove\n\tunbind_store\n\nThe object was the ports_device allocated in virtcons_probe().\n\nDrain c_ovq without freeing. The packet lives in portdev and is released\nwith it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97997": {
+                "cve_id": "CVE-2026-97997",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio_ring: fix stale descriptor flags after a failed packed add\n\nIn a packed ring the AVAIL and USED bits sit in the descriptor itself,\nso writing them makes that descriptor available. Those bit combinations\nflip meaning on every round of the ring, tracked by a wrap counter, so\ninvalidating or validating a descriptor means inverting both bits.\n\nCommit 1ce9e6055fa0 (\"virtio_ring: introduce packed ring support\") has\nvirtqueue_add_packed() make every descriptor of a chain available as it\nmaps the chain, and write the head last. The device consumes the ring in\norder and stops at a head that is not available yet, so it never reaches\nthe rest.\n\nWhen vring_map_one_sg() fails partway, unmap_release unmaps the segments\nand restores avail_used_flags, but the descriptors it wrote to in the\nring stay marked with AVAIL and USED bits. The head is now the only\nentry that keeps the device from consuming these stale entries.\n\nFor example, the ring would look like this now.\n\n  Z - pre-previous command\n  A - previous command\n  B - aborted command\n  C - current command\n\n  [A1 DONE] [A2 DONE] <C1 EMPTY> [B2] [B3] [Z1 DONE]\n\nWhen the driver now attempts to issue the C command, the next add starts\nat the same head as B. If C spans less descriptors than B, there is no\nend marker because AVAIL and USED bits were still in place. And that\nmeans the device will start interpreting these stale entries (B2/B3) as\nanother command entry, which then blocks the queue.\n\nThis effect typically happens in swiotlb configurations under memory\npressure, because vring_map_one_sg() can then fail with larger I/O\nrequests which then leads to command abortions.\n\nThere are broadly 2 ways to avoid leaving those flags behind:\n\n  1) Defer those flags too until the chain is complete.\n  2) Rewrite those flags for the previous wrap counter.\n\nImplement the second option in both packed add paths. The first option\ntraverses the chain a second time on every successful add. The second\noption invalidates all added descriptors when any add fails.\n\nWith this patch applied, a packed virtqueue keeps completing requests\nafter a failed add.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97998": {
+                "cve_id": "CVE-2026-97998",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nfnetlink_log: cope with concurrent instance destruction\n\nInstances are refcounted. However, only memory release happens on the\n1 -> 0 transition; the unlink from hashes can occur with any refcount.\n\nUncooperative userspace can force a situation where a queue is pending\nfor destruction from netlink event while a different socket with same\nportid processes an UNBIND request.\n\nWith right timing, this will unhash the instance again:\n\nOops: general protection fault, [..]\nCall Trace:\n <TASK>\n nfulnl_recv_config+0x31a/0xd50\n nfnetlink_rcv_msg+0x7c2/0xeb0",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-98003": {
                 "cve_id": "CVE-2026-98003",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -115227,6 +115292,71 @@
                 "cve_id": "CVE-2026-97992",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost-vdpa: protect config_ctx from being freed under the config callback\n\nvhost_vdpa_config_cb() loads v->config_ctx and signals it without taking\na reference and without holding any lock:\n\n\tstruct eventfd_ctx *config_ctx = v->config_ctx;\n\n\tif (config_ctx)\n\t\teventfd_signal(config_ctx);\n\nVHOST_VDPA_SET_CONFIG_CALL replaces that field and drops what is normally\nthe last reference to the old context:\n\n\tswap(ctx, v->config_ctx);\n\n\tif (ctx)\n\t\teventfd_ctx_put(ctx);\n\neventfd_ctx_put() drops the last kref and frees the context immediately,\nwith no RCU grace period, so a callback that has already loaded the\npointer goes on to dereference freed memory.  The two sides share no\nlock: the ioctl runs under vhost_dev.mutex, while the parent invokes the\ncallback from its own interrupt or workqueue context.\n\nThis is not the reopen refcount underflow fixed by commit f6bbf0010ba0\n(\"vhost-vdpa: fix use-after-free of v->config_ctx\"), which was about\nvhost_vdpa_config_put() leaving a stale pointer behind.  Here the pointer\nis maintained correctly and it is the read side that is unprotected.\n\nWith VDUSE as the parent this is reachable from userspace with access to\n/dev/vduse (root by default).  VDUSE_DEV_INJECT_CONFIG_IRQ queues\ndev->inject, and vduse_dev_irq_inject() runs the callback under VDUSE's\nown dev->irq_lock, which vhost does not hold.  vduse_dev_reset() does\nflush_work(&dev->inject), but VHOST_VDPA_SET_CONFIG_CALL never goes\nthrough reset, so an inject already in flight is not waited for.  A\nprocess that injects config interrupts on the VDUSE fd while another\nthread swaps the call fd on the vhost-vdpa fd hits it in seconds:\n\n  BUG: KASAN: slab-use-after-free in native_queued_spin_lock_slowpath\n  Read of size 4 at addr ffff888107d21808 by task kworker/u17:1/2993\n  Workqueue: vduse-irq vduse_dev_irq_inject\n  Call Trace:\n   native_queued_spin_lock_slowpath+0x97/0x5b0\n   _raw_spin_lock_irqsave+0xd4/0xe0\n   eventfd_signal_mask+0x69/0x120\n   vhost_vdpa_config_cb+0x34/0x50\n   vduse_dev_irq_inject+0x46/0x60\n   process_one_work+0x468/0x950\n\n  Allocated by task 2992:\n   do_eventfd+0x50/0x200\n   __x64_sys_eventfd2+0x2e/0x40\n\n  Freed by task 2992:\n   eventfd_ctx_put+0xb9/0xc0\n   vhost_vdpa_unlocked_ioctl+0x116c/0x2190\n\nAdd a spinlock covering every access to config_ctx, so the callback\neither signals a context that is still alive or observes NULL, and the\nput happens only once no callback can reach the old value.\n\nClearing the parent's callback before the put would not be enough: of the\nin-tree set_config_cb() implementations only VDUSE takes a lock, the rest\nstore the pointer unlocked, so that would not order against an in-flight\ninvocation.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-97993": {
+                "cve_id": "CVE-2026-97993",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost-vdpa: don't install the eventfd_ctx_fdget() error in config_ctx\n\nvhost_vdpa_set_config_call() swaps the eventfd_ctx_fdget() return value\ninto v->config_ctx before checking it, so on failure the field briefly\nholds an ERR_PTR:\n\n\tctx = fd == VHOST_FILE_UNBIND ? NULL : eventfd_ctx_fdget(fd);\n\tswap(ctx, v->config_ctx);\n\n\tif (!IS_ERR_OR_NULL(ctx))\n\t\teventfd_ctx_put(ctx);\n\n\tif (IS_ERR(v->config_ctx)) {\n\t\tlong ret = PTR_ERR(v->config_ctx);\n\n\t\tv->config_ctx = NULL;\n\t\treturn ret;\n\t}\n\nCommit 0bde59c1723a (\"vhost-vdpa: set v->config_ctx to NULL if\neventfd_ctx_fdget() fails\") added that clearing, and spelled out the\ninvariant the rest of the file relies on: \"we consider 'v->config_ctx'\nvalid if it is not NULL\".  The window between the swap and the clearing\nstill breaks it.  vhost_vdpa_config_cb() only tests for NULL, so a config\ninterrupt delivered inside the window hands the ERR_PTR to\neventfd_signal().\n\nCheck the fd before installing it instead.  That closes the window and\nmatches how vhost_vring_ioctl() handles the same failure for the vq call\nfd.\n\nIt also stops a rejected fd from tearing down a config interrupt that was\nworking: until now the swap replaced the live context and put it, so\nafter an EBADF the device silently stopped delivering config interrupts\nuntil userspace installed a new fd.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-97994": {
+                "cve_id": "CVE-2026-97994",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost/vdpa: reject VRING_NUM larger than device max\n\nvhost_vring_set_num() accepts any non-zero power-of-two queue size that\nfits in 16 bits. vhost-vdpa then passes that value to set_vq_num()\nwithout comparing it with get_vq_num_max().\n\nA process with access to /dev/vhost-vdpa-* can therefore configure a\nqueue larger than the device advertises. With vdpa_sim, the worker can\nwalk descriptors beyond the mapped descriptor ring. KASAN reports a\n16-byte out-of-bounds read, corresponding to one vring_desc, in the\nvringh IOTLB path:\n\n  BUG: KASAN: out-of-bounds in _copy_from_iter\n  Read of size 16\n  copy_from_iotlb\n  copydesc_iotlb\n  vringh_getdesc_iotlb\n  vdpasim_net_work\n\nCache get_vq_num_max() immediately after reset. Some backends derive\nit from writable queue-size state, so querying it after SET_NUM may\nreturn the current size instead of the device capability. Invalidate\nthe cached value before reset so a failed reset leaves SET_NUM\ndisabled.\n\nFor VHOST_SET_VRING_NUM, copy the complete vring state once and use\nthe same index and size for validation, vq->num, and set_vq_num().\nThis ensures that validation and use operate on the same copied values.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-97995": {
+                "cve_id": "CVE-2026-97995",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio_console: do not free control-out buffers on remove\n\n__send_control_msg() publishes &portdev->cpkt as the control-out\nvirtqueue cookie. remove_vqs() walks every virtqueue and passes leftover\ncookies to free_buf(), which treats them as struct port_buffer and\nreads sgpages.\n\nIf a control message is still on c_ovq when the device is unbound,\nfree_buf() reads past the ports_device object.\n\nKASAN reported slab-out-of-bounds in free_buf():\n\n\tfree_buf\n\tremove_vqs\n\tvirtcons_remove\n\tunbind_store\n\nThe object was the ports_device allocated in virtcons_probe().\n\nDrain c_ovq without freeing. The packet lives in portdev and is released\nwith it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-97997": {
+                "cve_id": "CVE-2026-97997",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio_ring: fix stale descriptor flags after a failed packed add\n\nIn a packed ring the AVAIL and USED bits sit in the descriptor itself,\nso writing them makes that descriptor available. Those bit combinations\nflip meaning on every round of the ring, tracked by a wrap counter, so\ninvalidating or validating a descriptor means inverting both bits.\n\nCommit 1ce9e6055fa0 (\"virtio_ring: introduce packed ring support\") has\nvirtqueue_add_packed() make every descriptor of a chain available as it\nmaps the chain, and write the head last. The device consumes the ring in\norder and stops at a head that is not available yet, so it never reaches\nthe rest.\n\nWhen vring_map_one_sg() fails partway, unmap_release unmaps the segments\nand restores avail_used_flags, but the descriptors it wrote to in the\nring stay marked with AVAIL and USED bits. The head is now the only\nentry that keeps the device from consuming these stale entries.\n\nFor example, the ring would look like this now.\n\n  Z - pre-previous command\n  A - previous command\n  B - aborted command\n  C - current command\n\n  [A1 DONE] [A2 DONE] <C1 EMPTY> [B2] [B3] [Z1 DONE]\n\nWhen the driver now attempts to issue the C command, the next add starts\nat the same head as B. If C spans less descriptors than B, there is no\nend marker because AVAIL and USED bits were still in place. And that\nmeans the device will start interpreting these stale entries (B2/B3) as\nanother command entry, which then blocks the queue.\n\nThis effect typically happens in swiotlb configurations under memory\npressure, because vring_map_one_sg() can then fail with larger I/O\nrequests which then leads to command abortions.\n\nThere are broadly 2 ways to avoid leaving those flags behind:\n\n  1) Defer those flags too until the chain is complete.\n  2) Rewrite those flags for the previous wrap counter.\n\nImplement the second option in both packed add paths. The first option\ntraverses the chain a second time on every successful add. The second\noption invalidates all added descriptors when any add fails.\n\nWith this patch applied, a packed virtqueue keeps completing requests\nafter a failed add.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-97998": {
+                "cve_id": "CVE-2026-97998",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nfnetlink_log: cope with concurrent instance destruction\n\nInstances are refcounted. However, only memory release happens on the\n1 -> 0 transition; the unlink from hashes can occur with any refcount.\n\nUncooperative userspace can force a situation where a queue is pending\nfor destruction from netlink event while a different socket with same\nportid processes an UNBIND request.\n\nWith right timing, this will unhash the instance again:\n\nOops: general protection fault, [..]\nCall Trace:\n <TASK>\n nfulnl_recv_config+0x31a/0xd50\n nfnetlink_rcv_msg+0x7c2/0xeb0",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
