@@ -64378,6 +64378,142 @@
                     }
                 ]
             },
+            "CVE-2026-97477": {
+                "cve_id": "CVE-2026-97477",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/counter: Fix num_counters leak on bind_qp failure in alloc_and_bind()\n\nWhen __rdma_counter_bind_qp() fails in alloc_and_bind(), the error path\njumps to err_mode which frees the counter without decrementing\nport_counter->num_counters. The only place that decrements is\nrdma_counter_free(), which is unreachable since the counter was never\nsuccessfully bound.\n\nThis leak accumulates across repeated failures, permanently preventing\nthe port from switching to AUTO mode (-EBUSY in __counter_set_mode())\nand blocking the MANUAL\u2192NONE auto-revert in rdma_counter_free(). When\nthe mode was NONE before the call, the MANUAL mode set by\n__counter_set_mode() also leaks since the revert logic is never\nreached.\n\nAdd an err_bind label between the num_counters increment and the\nexisting err_mode label. It decrements num_counters and mirrors the\nMANUAL\u2192NONE revert from rdma_counter_free(), ensuring the port state\nis fully restored on bind failure.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97479": {
+                "cve_id": "CVE-2026-97479",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndriver core: Avoid warning when removing a device while its supplier is unbinding\n\nDuring driver removal, the following warning can appear:\n   WARNING: CPU: 1 PID: 139 at drivers/base/core.c:1497 __device_links_no_driver+0xcc/0xfc\n   ...\n   Call trace:\n     __device_links_no_driver+0xcc/0xfc (P)\n     device_links_driver_cleanup+0xa8/0xf0\n     device_release_driver_internal+0x208/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     driver_detach+0xa0/0x12c\n     bus_remove_driver+0x6c/0xbc\n     driver_unregister+0x30/0x60\n     pci_unregister_driver+0x20/0x9c\n     lan966x_pci_driver_exit+0x18/0xa90 [lan966x_pci]\n\nThis warning is triggered when a consumer is removed because the links\nstatus of its supplier is not DL_DEV_DRIVER_BOUND and the link flag\nDL_FLAG_SYNC_STATE_ONLY is not set.\n\nThe topology in terms of consumers/suppliers used was the following\n(consumer ---> supplier):\n\n      i2c -----------> OIC ----> PCI device\n       |                ^\n       |                |\n       +---> pinctrl ---+\n\nWhen the PCI device is removed, the OIC (interrupt controller) has to be\nremoved. In order to remove the OIC, pinctrl and i2c need to be removed\nand to remove pinctrl, i2c need to be removed. The removal order is:\n  1) i2c\n  2) pinctrl\n  3) OIC\n  4) PCI device\n\nIn details, the removal sequence is the following (with 0000:01:00.0 the\nPCI device):\n  driver_detach: call device_release_driver_internal(0000:01:00.0)...\n    device_links_busy(0000:01:00.0):\n      links->status = DL_DEV_UNBINDING\n    device_links_unbind_consumers(0000:01:00.0):\n      0000:01:00.0--oic link->status = DL_STATE_SUPPLIER_UNBIND\n      call device_release_driver_internal(oic)...\n        device_links_busy(oic):\n          links->status = DL_DEV_UNBINDING\n        device_links_unbind_consumers(oic):\n          oic--pinctrl link->status = DL_STATE_SUPPLIER_UNBIND\n          call device_release_driver_internal(pinctrl)...\n            device_links_busy(pinctrl):\n              links->status = DL_DEV_UNBINDING\n            device_links_unbind_consumers(pinctrl):\n              pinctrl--i2c link->status = DL_STATE_SUPPLIER_UNBIND\n              call device_release_driver_internal(i2c)...\n                device_links_busy(i2c): links->status = DL_DEV_UNBINDING\n                __device_links_no_driver(i2c)...\n                  pinctrl--i2c link->status is DL_STATE_SUPPLIER_UNBIND\n                  oic--i2c link->status is DL_STATE_ACTIVE\n                  oic--i2c link->supplier->links.status is DL_DEV_UNBINDING\n\nThe warning is triggered by the i2c removal because the OIC (supplier)\nlinks status is not DL_DEV_DRIVER_BOUND. Its links status is indeed set\nto DL_DEV_UNBINDING.\n\nIt is perfectly legit to have the links status set to DL_DEV_UNBINDING\nin that case. Indeed we had started to unbind the OIC which triggered\nthe consumer unbinding and didn't finish yet when the i2c is unbound.\n\nAvoid the warning when the supplier links status is set to\nDL_DEV_UNBINDING and thus support this removal sequence without any\nwarnings.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97480": {
+                "cve_id": "CVE-2026-97480",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntty: serial: 8250: protect against NULL uart->port.dev in register\n\nserial8250_register_8250_port() conditionally copies uart->port.dev\nfrom up->port.dev only when up->port.dev is non-NULL:\n\n\tif (up->port.dev) {\n\t\tuart->port.dev = up->port.dev;\n\t\t...\n\t}\n\nSo if both the existing uart slot and up have a NULL ->dev,\nuart->port.dev remains NULL. The very next ACPI companion check\nthen dereferences it unconditionally:\n\n\tif (!has_acpi_companion(uart->port.dev)) {\n\nhas_acpi_companion() reads dev->fwnode without a NULL guard\n(include/linux/acpi.h), so this NULL-derefs the kernel for the\nremaining no-dev case rather than just skipping the\nmctrl_gpio_init() initialisation as intended.\n\nsmatch flags the inconsistency:\n\n  drivers/tty/serial/8250/8250_core.c:767\n  serial8250_register_8250_port() error: 'uart->port.dev' could be\n  null (see line 719)\n\nGuard the call with a NULL check so register continues to work\nfor callers that legitimately have no parent device (legacy\nnon-OF/non-ACPI registrations).\n\nNo functional change for callers that pass a non-NULL ->dev.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97481": {
+                "cve_id": "CVE-2026-97481",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nserial: 8250: fix possible ISR soft lockup\n\nThere are rare cases in which the host gets stuck in the ISR because it\nis flooded with messages during the startup phase.\n\nThe reason for the soft lockup in the ISR is the missing FIFO error IRQ\n(FIFOE) handling. Not handling it and reporting IRQ_HANDLED triggers\nthe IRQ immediately again.\n\nFix this by adding a check for the FIFOE status and clearing the FIFO\nif no data is ready (DR).\n\nThis behavior was observed on an AM62L device which uses the OMAP 8250\ndriver. Fix it for all 8250 drivers, since the OMAP driver's special\nIRQ setup handling may trigger this behavior more frequently, but it\nis not ensured that other 8250 drivers aren't affected.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97483": {
+                "cve_id": "CVE-2026-97483",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: hcd: fix possible deadlock in rh control transfers\n\n>From within the SCSI error handler memory allocations must not\ntrigger IO. Handling errors in UAS and the storage driver may\ninvolve resetting a device. The thread doing the reset itself\nrelies on VM magic. However, that is insufficient, as resetting\na device involves resuming it. Resumption as well as resetting\ninvolves conrol transfers to the parent of the device to be reset.\nThat may be a root hub. Hence usbcore must heed the flags passed\nto usb_submit_urb() processing control transfers to root hubs.\n\nThe problem exist since the storage driver has been merged.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97484": {
+                "cve_id": "CVE-2026-97484",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusbip: vhci_hcd: fix NULL deref in status_show_vhci\n\nplatform_get_drvdata() can return NULL if a VHCI host controller's\nprobe failed (e.g. due to USB bus number exhaustion). status_show_vhci()\nchecked for a NULL pdev but not for a NULL hcd returned by\nplatform_get_drvdata(). Passing NULL to hcd_to_vhci_hcd() does not\nreturn NULL - it returns a pointer offset of 0x260, causing a NULL\npointer dereference when that value is subsequently dereferenced.\n\nAdd a NULL check on hcd before calling hcd_to_vhci_hcd(). Move\nstatus_show_not_ready() above status_show_vhci() to make it callable\nfrom the new error path without a forward declaration.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97485": {
+                "cve_id": "CVE-2026-97485",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nomfs: handle set_blocksize failures\n\nomfs uses buffer_heads, which don't handle block size > PAGE_SIZE well.\nWithout this, mounting we will hit the\n\n        BUG_ON(offset >= folio_size(folio));\n\nin folio_set_bh on the first __bread_gfp call.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97492": {
+                "cve_id": "CVE-2026-97492",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: don't call ieee80211_handle_reconfig_failure when not needed\n\nIn case reconfiguration of NAN fails, we call\nieee80211_handle_reconfig_failure, that marks all interfaces as not in\nthe driver.\nThen, at the error path of the reconfig, cfg80211_shutdown_all_interfaces\nis called to destroy all the interfaces.\n\nIf we have any other interface but the NAN one, for example a BSS\nstation, then when its state (links, stations) will be removed, we\nwon't tell the driver about this, because we will think that the\ninterfaces are not in the driver, and then drivers might remain with\ndangling pointers to objects like stations and links (at least for\niwlwifi this is the case).\n\nieee80211_handle_reconfig_failure is meant to be called after we cleaned\nup the state in the driver, there is no reason to call it for NAN\nreconfiguration failure.\n\nFix the code to just warn in such a case, as we do in other error paths\nin reconfig where it is too complicated to rewind.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-97503": {
                 "cve_id": "CVE-2026-97503",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -65708,6 +65844,193 @@
                 "cve_id": "CVE-2026-97918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Undo the registration when enabling the histogram trigger fails\n\nCommit 6f86bdeab633 (\"tracing: Fix bad hist from corrupting named_triggers\nlist\") described how a trigger that is registered but not on file->triggers\nends up freed while still on the global named_triggers list, and moved the\nregistration down so that hist_trigger_enable() follows it immediately. One\npath still gets there. hist_trigger_enable() adds the trigger and takes it\nstraight back out when the event cannot be enabled:\n\n\tlist_add_tail_rcu(&data->list, &file->triggers);\n\n\tupdate_cond_flag(file);\n\n\tif (trace_event_trigger_enable_disable(file, 1) < 0) {\n\t\tlist_del_rcu(&data->list);\n\t\tupdate_cond_flag(file);\n\t\tret--;\n\t}\n\nso the list walk in hist_unregister_trigger() matches nothing, test stays\nNULL, and the ->free() that would call del_named_trigger() is skipped.\nout_unreg falls through to out_free, which frees the trigger anyway:\n\n BUG: KASAN: slab-use-after-free in find_named_trigger+0xac/0xc0\n Read of size 8 at addr ffff8880091d3160 by task init/1\n  find_named_trigger+0xac/0xc0\n  hist_register_trigger+0xc1/0xa00\n  event_hist_trigger_parse+0x3146/0x6af0\n  event_trigger_write+0xce/0x160\n Freed by task 69:\n  kfree+0x154/0x420\n  trigger_kthread_fn+0xfd/0x160\n\nLeave the trigger where hist_unregister_trigger() can find it and let that\nundo the registration, which is the only code that knows all of what\ncmd_ops->init() took: the named list entry, the hist_pad reference, the\nreference on the trigger a named histogram is shared with, and the copied\ncmd_ops. It also pairs the failed trace_event_trigger_enable_disable(),\nwhose sm_ref and buffered event reference are otherwise left behind.\n\nSince ->free() releases trigger_data and, for a trigger that does not share\nits histogram, hist_data with it, out_unreg can no longer fall through to\nout_free. For a trigger that does share, hist_register_trigger() has\nalready destroyed the caller's hist_data, so the fall-through was reading\nfreed memory there as well.\n\nMove the enable_timestamps check in hist_unregister_trigger() above the\n->free() call for the same reason: hist_data does not outlive it once the\ntrigger being removed is the one that owns it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97922": {
+                "cve_id": "CVE-2026-97922",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Free histogram var refs regardless of how often they are referenced\n\nUsing the same variable three or more times in one hist trigger leaks the\nvariable reference and its strings when the trigger is removed.\n\ncommit 656fe2ba85e8 (\"tracing: Use hist trigger's var_ref array to destroy\nvar_refs\") made a trigger's var_refs[] array the only owner of a var ref:\ndestroy_hist_field() returns early for HIST_FIELD_FL_VAR_REF, so the field\nexpressions never destroy one. One entry, freed once, no count needed.\n\ncommit 8bcebc77e85f (\"tracing: Fix histogram code when expression has same\nvar as value\") then made repeated references share one object and added a\ncount of them. Only the increment side exists, since those expressions\nstill return early and never drop a reference, so __destroy_hist_field()\nsees how many references were created rather than how many are left. It\nfrees when the decremented count is 0 or 1, so two references work and\nthree or more leak.\n\nSharing kept one array entry per object, and create_var_ref() searches and\nappends within a single trigger, so nothing outside it holds the object.\nRemoving a trigger whose variables are still referenced is already refused\nby check_var_refs() with -EBUSY. Drop the count and free unconditionally.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97923": {
+                "cve_id": "CVE-2026-97923",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Free histogram the var ref when its initialization fails\n\ncreate_var_ref() allocates a VAR_REF hist_field and then calls\ninit_var_ref() to fill it in. When that fails the field is leaked.\n\ncommit 656fe2ba85e8 (\"tracing: Use hist trigger's var_ref array to destroy\nvar_refs\") made destroy_hist_field() return early for\nHIST_FIELD_FL_VAR_REF, since var refs are freed by walking the trigger's\nvar_refs[] array instead. create_var_ref() adds the field to that array\nonly after init_var_ref() has succeeded, so on this path the field is in\nneither place and nothing frees it. The call was correct when it was\nwritten, before var refs were taken out of destroy_hist_field().\n\ninit_var_ref() cannot free it either. The caller owns the field, so\ninit_var_ref() undoes only its own string allocations and leaves the\nfield alone. Freeing it there would leave create_var_ref() passing freed\nmemory to destroy_hist_field(), which reads its flags.\n\nCall __destroy_hist_field(), which frees the field without consulting\nthe flag.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97925": {
+                "cve_id": "CVE-2026-97925",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntick/broadcast: Plug clockevents replacement race\n\n\u6731\u607a\u4e7e reported and decoded the following race condition when a broadcast\ndevice is replaced:\n\nCPUA\t\t\t\t\tCPUB\n __tick_broadcast_oneshot_control()\n   bc = tick_broadcast_device.evtdev;\n\t\t\t\t\ttick_install_broadcast_device(dev)\n        \t\t\t\tclockevents_exchange_device(cur, dev)\n\t\t\t\t\t   shutdown(cur);\n\t\t\t\t\t   detach(cur);\n\t\t\t\t\t   cur->handler = noop;\n\t\t\t\t\t   tick_broadcast_device.evtdev = dev;\n\n  tick_broadcast_set_event(bc, next_event); <- FAIL: arms a detached device.\n\nIf the original broadcast device has a restricted interrupt affinity mask\nand the last CPU in that mask goes offline then the BUG() in\ntick_cleanup_dead_cpu() triggers because the clockevent device is not in\ndetached state.\n\nThe reason for this is that tick_install_broadcast_device() is not\nserialized vs. tick broadcast operations.\n\nThe obvious cure is to serialize tick_install_broadcast_device() with\ntick_broadcast_lock against a concurrent tick broadcast operation.\n\nThat requires to split clockevents_exchange_device() into two parts, one\nwhich does the exchange, shutdown and detach operation and the other which\ndrops the module reference count. This is required because the module\nreference cannot be dropped while holding tick_broadcast_lock.\n\nLet clockevents_exchange_device() do both operations as before, but let the\nbroadcast device code take the two step approach and do the device\nexchange under tick_broadcast_lock and drop the module reference count\nafter releasing it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97928": {
+                "cve_id": "CVE-2026-97928",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: skip the VMID 0 flush for VRAM\n\nClear-on-release only runs on VRAM, which amdgpu_ttm_map_buffer() reaches\nvia its direct MC address without programming a GART window, yet the wipe\nstill forces a VMID 0 flush. On GFX11 (e.g. Navi33) that spurious SDMA\nflush can wedge the engine; only flush when a GART window is actually used.\n\nv2: Let amdgpu_ttm_map_buffer() return whether the VMID 0 flush is needed,\n    and drive the clear and copy paths from that. (Christian)\nv3: Make the vm_needs_flush output parameter mandatory instead of\n    allowing NULL. (Christian)\n\n(cherry picked from commit a306e406e570b74318ff7d80e5b07b540ca1d3a9)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97930": {
+                "cve_id": "CVE-2026-97930",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: usbusx2y: fix in04_last array size mismatch with in04_buf\n\nThe in04_last array in struct usx2ydev is declared as char[24], but\nin04_buf is allocated as sizeof(struct us428_ctls) which is 21 bytes.\nIn i_usx2y_in04_int(), when ctl_snapshot_last == -2 (initialization\npath):\n\n    memcpy(usx2y->in04_last, usx2y->in04_buf, sizeof(usx2y->in04_last));\n\nThis copies 24 bytes from a 21-byte slab allocation, reading 3 bytes\npast the end of the source object.\n\nIntroduce a USX2Y_IN04_SIZE constant defined as sizeof(struct\nus428_ctls) and use it consistently for the in04_last array, the\nin04_buf allocation, the URB transfer length, and the comparison loop,\nreplacing the bare 24 and 21 literals throughout.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97931": {
+                "cve_id": "CVE-2026-97931",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: us122l: Prevent write upgrades for read mappings\n\nThe hwdep mmap callback rejects read-buffer mappings that are initially\nwritable, but leaves VM_MAYWRITE set on mappings created with PROT_READ.\nA process that can open the hwdep node O_RDWR can later use mprotect() to\nmake the mapping writable.\n\nThe read allocation begins with struct usb_stream. Its read_size member is\nused by the fault handler to decide which pages belong to the read buffer.\nThe read VMA intentionally remains expandable because pcm_usb_stream uses\nmremap() after reading that size. Changing read_size first can therefore\nmap and access pages beyond the allocation. The same member is also\nconsumed by usb_stream_free(), where changing it can make\nfree_pages_exact() release pages outside the allocation.\n\nClear VM_MAYWRITE for read-buffer mappings after rejecting an initially\nwritable VMA. This keeps the separate output-buffer mapping writable while\npreventing later permission upgrades.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97935": {
+                "cve_id": "CVE-2026-97935",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Set the trace clock before registering the histogram trigger\n\nhist_register_trigger() puts the trigger on the global named_triggers\nlist in cmd_ops->init(), and only then sets the trace clock:\n\n\tif (data->cmd_ops->init) {\n\t\tret = data->cmd_ops->init(data);\n\t\tif (ret < 0)\n\t\t\tgoto out;\n\t}\n\n\tif (hist_data->enable_timestamps) {\n\t\tret = tracing_set_clock(file->tr, hist_data->attrs->clock);\n\t\tif (ret) {\n\t\t\thist_err(tr, HIST_ERR_SET_CLOCK_FAIL, errpos(clock));\n\t\t\tgoto out;\n\t\t}\n\nThe clock string is not checked anywhere before that call, so a named\ntrigger using common_timestamp with an unknown clock fails after it has\nalready become findable. event_hist_trigger_parse() then frees it\nwithout taking it off the list, and the next lookup by name reads the\nfreed object:\n\n ~# cd /sys/kernel/tracing/events/sched/sched_switch\n ~# echo 'hist:name=foo:keys=common_pid:ts=common_timestamp:clock=bogus' > trigger\n bash: echo: write error: Invalid argument\n ~# echo 'hist:name=foo:keys=common_pid' > trigger\n\n  BUG: KASAN: slab-use-after-free in find_named_trigger+0xac/0xc0\n  Read of size 8 at addr ffff88800915d760 by task init/1\n   find_named_trigger+0xac/0xc0\n   hist_register_trigger+0xc1/0x900\n   event_hist_trigger_parse+0x3146/0x6af0\n   event_trigger_write+0xce/0x160\n  Freed by task 63:\n   kfree+0x154/0x420\n   trigger_kthread_fn+0xfd/0x160\n\nSet the clock before the trigger is registered, so that nothing which\ncan fail runs after it is published, the way commit 6f86bdeab633\n(\"tracing: Fix bad hist from corrupting named_triggers list\") moved the\nregistration below the rest of the setup.\n\ntracing_set_filter_buffering() is reference counted, so the init failure\npath has to drop the reference that the clock block now takes first.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97938": {
+                "cve_id": "CVE-2026-97938",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nreboot: fix cad_pid use-after-free race\n\ncad_pid is a single kernel-wide struct pid pointer. proc_do_cad_pid()\nreads it and passes it to pid_vnr() without protecting the lifetime of\nthe referenced struct pid. A concurrent writer can replace cad_pid and\ndrop the final reference to the old struct pid after the reader has\nloaded the pointer but before pid_vnr() has finished dereferencing it,\ncausing a use-after-free.\n\nkill_cad_pid() has the same lifetime race when it passes cad_pid to\nkill_pid().\n\nAt the time this issue was reported, an unprivileged user could reach the\nsysctl through user and PID namespaces because cad_pid was registered in\npid_table[]. Moving cad_pid back to the global reboot sysctl table\ncorrected that namespace and permission mismatch, but did not fix the\nunderlying lifetime race.\n\nFix this by treating cad_pid as an RCU-protected pointer at both read\nsites and by waiting for a grace period before dropping the old reference\non the write side.\n\ncall_rcu(&old_pid->rcu, ...) cannot be used here because free_pid()\nalso queues pid->rcu; queueing the same rcu_head twice can corrupt the\nRCU callback list.\n\nOriginal KASAN crash stack:\n  kernel/pid.c:545 pid_nr_ns()        # reads freed pid->level\n  kernel/pid.c:556 pid_vnr()          # calls pid_nr_ns()\n  kernel/pid.c:775 proc_do_cad_pid()  # calls pid_vnr(cad_pid)",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97939": {
+                "cve_id": "CVE-2026-97939",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipmr: account multicast table and route memory\n\nA netadmin in a user+net namespace can create many IPv4 and IPv6\nmulticast routing tables with MRT_TABLE and MRT6_TABLE. Each unseen\nid allocates an mr_table via the shared mr_table_alloc(), links it\ninto the per-net list, and leaves it until netns teardown. Those\nobjects were not charged to memcg, so the host unreclaimable slab\ngrows with the table count.\n\nAccount mr_table allocations with GFP_KERNEL_ACCOUNT and mark the\nIPv4/IPv6 MFC caches SLAB_ACCOUNT. This matches the established\nhandling of IP addresses, routes and alternate interface names.\n\nUnresolved MFC entries are still allocated from softIRQ with\nGFP_ATOMIC and are not charged. They expire after 10 seconds and are\nbounded by the socket receive queue; see commit 0079ad8e8dc3\n(\"ipmr: remove hard code cache_resolve_queue_len limit\").",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97940": {
+                "cve_id": "CVE-2026-97940",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: fix fib6 walker UAF on seq stop\n\nipv6_route_iter_active() treats a walker in FWS_U at the table root as\nalready unlinked. fib6_del_route() can move a still-linked walker into\nthat same state when the current leaf is the last route at the root,\nso ipv6_route_native_seq_stop() skips fib6_walker_unlink(). The seq\nprivate object can then be freed while it remains on\nnet->ipv6.fib6_walkers. A later route deletion walks the dangling list\nand uses the freed walker.\n\nUse the list head as membership state and reinitialize it when\nunlinking. Keep the existing w->node check so a never-started iterator\nwith a zeroed private object is not treated as linked.\n\nThe same stop helper is used by /proc/net/ipv6_route and by the BPF\nipv6_route iterator. The BPF show path only widens the race.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97945": {
+                "cve_id": "CVE-2026-97945",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mm: Fix user-space data loss with MADV_FREE and THP\n\nSome of users of Polars (a data analytics library) have lost production\ndata from this bug. They seem to have just the right combination of\nhuge pages, MADV_FREE and heavy reclaim pressure.\n\npmd_modify() masks the old value with (_HPAGE_CHG_MASK & ~_PAGE_DIRTY),\nsilently discarding the hardware dirty bit.  The subsequent\npmd_mksaveddirty() call is supposed to transfer _PAGE_DIRTY into\n_PAGE_SAVED_DIRTY when write-protecting, but the dirty bit was already\nstripped from the value, so there is nothing left to transfer.\n\nContrast with pte_modify(), which keeps _PAGE_DIRTY_BITS in its mask,\nand pud_modify(), which keeps _HPAGE_CHG_MASK untouched: pmd_modify()\nis the odd one out.  Any pmd_modify() on a writable, dirty PMD loses\nthe dirty state.\n\nOne visible consequence is data loss with MADV_FREE on PMD-mapped THP:\n\n    memset(buf, 0x5A, size);          // PMD-mapped THP, PMD dirty\n    madvise(buf, size, MADV_FREE);    // PMD cleaned but left writable,\n                                      // folio marked lazyfree\n    memset(buf, 0x5A, size);          // hardware sets _PAGE_DIRTY again\n    mprotect(buf, size, PROT_READ);   // pmd_modify() drops the dirty bit\n    mprotect(buf, size, PROT_READ|PROT_WRITE);\n    // ... memory pressure ...\n\nReclaim (e.g. under memcg pressure) then finds the lazyfree folio with\nno dirty bit set anywhere and frees it in\n__discard_anon_folio_pmd_locked(), even though the data was rewritten\nafter MADV_FREE; subsequent reads fault in fresh zero pages.  NUMA\nhinting alone can trigger the same loss, as do_huge_pmd_numa_page()\nrestores the PMD through pmd_modify() as well.\n\nPMD-mapped file THPs are affected too: mprotect()/NUMA hinting dropping\nthe dirty bit means rewritten data is never written back.\n\nFix it by keeping _PAGE_DIRTY in the preserved mask, exactly like\npte_modify() and pud_modify() do.  The existing\npmd_mksaveddirty()/pmd_clear_saveddirty() pair then performs the\nhardware-dirty <-> saved-dirty transition based on the write bit,\npreserving the shadow-stack encoding rules.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -77276,6 +77599,84 @@
                 "cve_id": "CVE-2026-97920",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Keep the entry count when the histogram stats allocation fails\n\nprint_entries() uses n_entries both as the number of sort entries and as\nits own return value, so the -ENOMEM it stores when the stats allocation\nfails overwrites the count that the cleanup still needs:\n\n\tn_entries = tracing_map_sort_entries(map, ...);\n\tif (n_entries < 0)\n\t\treturn n_entries;\n\t...\n\t\t\tif (!stats) {\n\t\t\t\tn_entries = -ENOMEM;\n\t\t\t\tgoto out;\n\t\t\t}\n\t...\n out:\n\ttracing_map_destroy_sort_entries(sort_entries, n_entries);\n\ntracing_map_destroy_sort_entries() takes an unsigned int and loops up to\nit, so -ENOMEM arrives as 4294967284. It walks an array of at most\nmap->max_elts pointers and calls destroy_sort_entry(), which dereferences\nand frees, on whatever lies past the end.\n\nReading the hist file of a trigger with a .percent value, with that\nallocation forced to fail:\n\n  BUG: KASAN: vmalloc-out-of-bounds in tracing_map_destroy_sort_entries+0xa0/0xb0\n  Read of size 8 at addr ffffc90000045000 by task init/1\n   tracing_map_destroy_sort_entries+0xa0/0xb0\n   hist_show+0x6f7/0x1df0\n   seq_read_iter+0x2b8/0x1190\n   vfs_read+0x176/0xa40\n  The buggy address belongs to a 4-page vmalloc region starting at\n  ffffc90000041000 allocated at tracing_map_sort_entries+0x5c/0xd50\n\nA few pages further the fault is fatal. The registers at the oops confirm\nthe bound: the loop's end pointer less the array start, over the pointer\nsize, is 4294967284.\n\nReturn the error in a separate variable and leave n_entries holding the\ncount, the way tracing_map_sort_entries() does on its own error path.\n\nThe stats block is only entered for a value carrying .percent or .graph,\nwhich __create_val_field() has rejected since v6.3, so this cannot be\nreached in mainline as it stands. It becomes reachable again with\n\"tracing: hist: let values keep the percent and graph modifiers\", so it\nshould be applied first.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-97921": {
+                "cve_id": "CVE-2026-97921",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Free histogram the field rejected for a bad modifier\n\nWriting a hist trigger whose value or variable carries a modifier that is\nnot allowed there leaks the fields that were built for it.\n\n__create_val_field() takes the field from parse_expr() and stores it in\nhist_data->fields[] only after the modifier checks have run:\n\n\thist_field = parse_expr(hist_data, file, field_str, flags, var_name,\n\t\t\t\t&n_subexprs);\n\t...\n\tif (hist_field->flags & HIST_FIELD_FL_VAR) {\n\t\tif (hist_field->flags & (...))\n\t\t\tgoto err;\n\t} else {\n\t\tif (hist_field->flags & (...))\n\t\t\tgoto err;\n\t}\n\n\thist_data->fields[val_idx] = hist_field;\n\nBoth checks jump past that store, and the err label returns without\nfreeing anything. The error unwinds to create_hist_data(), which calls\ndestroy_hist_data() -> destroy_hist_fields(), and that reaches a field\nonly by walking fields[]. A field that never got there is unreachable.\n\ncommit e0213434fe3e (\"tracing: Do not let histogram values have some\nmodifiers\") set ret to -EINVAL and fell through to the store, which left\nthe field owned by fields[] and freed along with the rest of hist_data.\nSplitting the check into a value case and a variable case replaced that\nfall-through with a goto that skips it.\n\nWith CONFIG_DEBUG_KMEMLEAK, 200 writes of\n\n  # echo 'hist:keys=prev_pid:vals=next_pid.log2' > \\\n\t events/sched/sched_switch/trigger\n\neach correctly rejected with -EINVAL, leave 332 unreferenced objects\n(63744 bytes) reported at create_hist_field(); 200 install and remove\ncycles of a valid trigger leave none. A '.log2' field is two\nallocations, since create_hist_field() puts the plain field in\noperands[0] of the log2 field, and both are reported.\n\nUse destroy_hist_field() rather than __destroy_hist_field() so that\noperands[0] is freed as well. It returns early for HIST_FIELD_FL_VAR_REF,\nwhich is what an operand owned by hist_data->var_refs[] needs; the\nrejected field itself is never a var ref, because a var ref never carries\na modifier flag.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-97933": {
+                "cve_id": "CVE-2026-97933",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Take trace_array reference when opening a tracer options file\n\nWhen a tracer option file is opened, it is passed a descriptor that points\nto an element on the trace_array's topts array. This element has\ninformation to find the trace array and other information. It uses this\nelement to take a reference of the trace_array so that the trace_array\ndoes not get removed while this file is opened.\n\nUnfortunately, there's a race condition where the element itself could be\nfreed by the removal of the instance the trace_array represents causing a\nuse-after-free as this element that is used to find the trace_array to\nincrement its reference counter is also freed when the instance is\nremoved.\n\nTo solve this, add a trace_array_tracer_options_get() helper function that\nwill take the address of the element that is passed to the open function\nby the inode->i_private pointer and search all the trace_arrays under a\nlock to find the one that the element's address is in the range of the\ntrace_arrays topts array elements. When a match happens, that trace_array's\nreference would be increased.\n\nNote, there's a race where if an admin was deleting and creating trace\ninstances at the same time and the memory of the old trace_array's array\nmatched the memory of the new trace_array that it could in theory open the\noption from the wrong trace array. But we do not care because it would be\nstupid to perform that kind of action. As long as the only thing that can\nhappen is that the option from the wrong trace array is used and doesn't\ncrash the kernel it will only make the user confused. But if they are\ndoing something stupid like this, they are already confused, so no harm\ndone.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-97934": {
+                "cve_id": "CVE-2026-97934",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Fix memory corruption from a \"STACKTRACE\" histogram key\n\n\"cpu\", \"CPU\", \"stacktrace\" and \"STACKTRACE\" are generic fields, defined\nwith an offset and a size of zero so that the filter code can match them\nby name. parse_field() maps them onto their common_* equivalents for\nbackward compatibility, but unlike the common_* names it hands the\nplaceholder back to the caller instead of NULL.\n\ncreate_hist_field() takes a non-NULL field as a promise that the record\ncarries a stacktrace and picks HIST_FIELD_FN_STACK, so the __data_loc\nword is read from offset 0, that is from common_type, and its low 16\nbits are followed as an offset into the record. What is found there\nbecomes the length of an unbounded memcpy. Pick an event whose id is\nsmall enough that the offset stays inside its own record and the length\nis a kernel text address:\n\n  # cd /sys/kernel/tracing\n  # echo 'hist:keys=STACKTRACE' > events/ftrace/print/trigger\n  # echo hello > trace_marker\n\n  Oops: general protection fault, probably for non-canonical address\n  RIP: 0010:rb_next+0x23/0x60\n   </IRQ>\n  RIP: 0010:memcpy+0xc/0x30\n   event_hist_trigger+0x2e7/0x12c0\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nLeave the field NULL, which is what the comment above the branch says\nthe code does and what common_stacktrace already does. FILTER_CPU and\nFILTER_COMM are left alone, their create_hist_field() branches never\nlook at the field.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-97936": {
+                "cve_id": "CVE-2026-97936",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Fix memory corruption from the histogram stacktrace modifier\n\nparse_field() sets HIST_FIELD_FL_STACKTRACE from the \".stacktrace\"\nmodifier before it looks the field name up, and nothing afterwards\nchecks that the name resolved to a field which holds a stacktrace.\ncreate_hist_field() picks HIST_FIELD_FN_STACK on the strength of the\nfield pointer alone, which reads a __data_loc word from the record and\nfollows its low 16 bits as an offset into the same record.\nevent_hist_trigger() takes the first word there as an entry count and\ncopies that many longs into a 31 entry array:\n\n\tn_entries = *stack;\n\tmemcpy(entries, ++stack, n_entries * sizeof(unsigned long));\n\nNeither end of that copy is bounded, and the count is whatever the event\nholds at the offset, so any field will do:\n\n  # cd /sys/kernel/tracing/events/sched/sched_process_fork\n  # echo 'hist:keys=parent_pid.stacktrace' > trigger\n  # (true)\n\n  BUG: kernel NULL pointer dereference, address: 0000000000000008\n  RIP: 0010:rb_insert_color+0x18/0x130\n   timerqueue_linked_add+0x7e/0xd0\n   enqueue_hrtimer+0x39/0xb0\n   __hrtimer_run_queues+0x10f/0x1f0\n   </IRQ>\n  RIP: 0010:memcpy+0xc/0x30\n   event_hist_trigger+0x165/0x690\n\nThe timer interrupt landed on the rbtree the copy had already run over.\nNo debug options are needed for this; KASAN reports the same write as an\nout-of-bounds read of 13835058055416381440 bytes.\n\nDocumentation/trace/histogram.rst already states the rule, \"must be a\nlong[] type\", so enforce it once the name has been resolved. Names which\nresolve to no field at all, \"hitcount.stacktrace\" and the common_*\npseudo-fields, are refused for the same reason: they hold no stacktrace\nto read.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-97942": {
+                "cve_id": "CVE-2026-97942",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/alternatives: Exclude text poking against change_page_attr()\n\nFrom time to time, the following BUG can be observed\nin the x86 alternatives patching code [0]:\n\n  > kernel BUG at arch/x86/kernel/alternative.c:2576!\n  > Oops: invalid opcode: 0000 [#1] SMP NOPTI\n  > CPU: 0 UID: 0 PID: 355 Comm: (udev-worker) Not tainted 7.1.3-1-default #1 PREEMPT(full) openSUSE Tumbleweed  8c1795b03ec64f997e57a8ad38b1161e3b98da64\n  > Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS unknown 02/02/2022\n  > RIP: 0010:__text_poke+0x2aa/0x450\n  > Call Trace:\n  >  <TASK>\n  >  smp_text_poke_batch_finish+0x2a7/0x320\n  >  __static_call_transform+0xb7/0x220\n  >  arch_static_call_transform+0x5b/0xb0\n  >  __static_call_init+0xe9/0x270\n  >  static_call_module_notify+0x11f/0x150\n  >  notifier_call_chain+0x61/0xe0\n  >  blocking_notifier_call_chain_robust+0x63/0xc0\n  >  load_module+0x1c92/0x20c0\n  >  init_module_from_file+0xd8/0x140\n  >  idempotent_init_module+0x100/0x2f0\n  >  __x64_sys_finit_module+0x71/0xe0\n  >  do_syscall_64+0xe1/0x610\n  >  entry_SYSCALL_64_after_hwframe+0x76/0x7e\n\nwhich matches the following BUG_ON() in alternative.c:\n\n\t/*\n\t * If something went wrong, crash and burn since recovery paths are not\n\t * implemented.\n\t */\n\tBUG_ON(!pages[0] || (cross_page_boundary && !pages[1]));\n\nThis can happen if vmalloc_to_page() fails, for any reason. Such can happen\nif text poking races with CPA, which can possibly result in the collapsing\nof page tables (or breaking of PMD hugepages). It is not a problem for most\nusers of vmalloc_to_page() (they solely own the vmalloc'd range) but, when\nCONFIG_ARCH_HAS_EXECMEM_ROX=y, various modules own a single execmem vmalloc\nrange, and can call set_memory_*() in parallel on it. This can happen to\nrace against __text_poke and cause havoc in vmalloc_to_page().\n\nFix it by excluding against CPA using the init_mm mmap read lock.\n\n[ dhansen: Fix up SoB ordering. The actual code flow here was:\n\t   Pedro=>Lorenzo=>Mike=>Me which is reflected in the SoB chain\n\t   now. I *believe* Mike simply picked up Lorenzo's update to\n\t   Pedro's post from the Link ]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-97943": {
+                "cve_id": "CVE-2026-97943",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mm/pat: Acquire init_mm write lock on collapse to avoid UAF\n\nx86 implements page attribute modification using its Change Page\nAttributes (CPA) mechanism.\n\nThis tracks properties of ranges such as cache mode through x86 page\nattributes, and as part of that logic manipulates kernel page tables.\n\nSince commit:\n\n  41d88484c71c (\"x86/mm/pat: restore large ROX pages after fragmentation\")\n\nranges of kernel page table entries can be collapsed into\nhuge page table entries as part of this logic.\n\nAs part of this collapse, it frees the page tables which the collapsed\nentries previously pointed to, and it does so without any relevant locks\nbeing held to preclude concurrent kernel page table walkers.\n\nThe only way this code can be reached is if CPA_COLLAPSE is specified, and\nthis is only set in set_memory_rox() via:\n\nset_memory_rox()\n-> change_page_attr_set_clr()\n-> cpa_flush()\n-> cpa_collapse_large_pages()\n\nNotable users of this are execmem and BPF when manipulating executable\nmappings.\n\nHowever, this is problematic for ptdump as it walks ranges it does not own\nand thus runs the risk of a use-after-free on page tables freed underneath\nit.\n\nIn addition, concurrent CPA collapse operations are possible which can also\ncause races.\n\nResolve the issue by acquiring the mmap write lock on init_mm across the\nwhole operation.\n\nIt is safe to acquire a sleeping lock as all the callers invoke\nset_memory_rox() from process context and in any case,\nchange_page_attr_set_clr() calls vm_unmap_alias() which ultimately takes a\nmutex, disallowing atomic context here.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -141938,6 +142339,142 @@
                     }
                 ]
             },
+            "CVE-2026-97477": {
+                "cve_id": "CVE-2026-97477",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/counter: Fix num_counters leak on bind_qp failure in alloc_and_bind()\n\nWhen __rdma_counter_bind_qp() fails in alloc_and_bind(), the error path\njumps to err_mode which frees the counter without decrementing\nport_counter->num_counters. The only place that decrements is\nrdma_counter_free(), which is unreachable since the counter was never\nsuccessfully bound.\n\nThis leak accumulates across repeated failures, permanently preventing\nthe port from switching to AUTO mode (-EBUSY in __counter_set_mode())\nand blocking the MANUAL\u2192NONE auto-revert in rdma_counter_free(). When\nthe mode was NONE before the call, the MANUAL mode set by\n__counter_set_mode() also leaks since the revert logic is never\nreached.\n\nAdd an err_bind label between the num_counters increment and the\nexisting err_mode label. It decrements num_counters and mirrors the\nMANUAL\u2192NONE revert from rdma_counter_free(), ensuring the port state\nis fully restored on bind failure.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97479": {
+                "cve_id": "CVE-2026-97479",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndriver core: Avoid warning when removing a device while its supplier is unbinding\n\nDuring driver removal, the following warning can appear:\n   WARNING: CPU: 1 PID: 139 at drivers/base/core.c:1497 __device_links_no_driver+0xcc/0xfc\n   ...\n   Call trace:\n     __device_links_no_driver+0xcc/0xfc (P)\n     device_links_driver_cleanup+0xa8/0xf0\n     device_release_driver_internal+0x208/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     driver_detach+0xa0/0x12c\n     bus_remove_driver+0x6c/0xbc\n     driver_unregister+0x30/0x60\n     pci_unregister_driver+0x20/0x9c\n     lan966x_pci_driver_exit+0x18/0xa90 [lan966x_pci]\n\nThis warning is triggered when a consumer is removed because the links\nstatus of its supplier is not DL_DEV_DRIVER_BOUND and the link flag\nDL_FLAG_SYNC_STATE_ONLY is not set.\n\nThe topology in terms of consumers/suppliers used was the following\n(consumer ---> supplier):\n\n      i2c -----------> OIC ----> PCI device\n       |                ^\n       |                |\n       +---> pinctrl ---+\n\nWhen the PCI device is removed, the OIC (interrupt controller) has to be\nremoved. In order to remove the OIC, pinctrl and i2c need to be removed\nand to remove pinctrl, i2c need to be removed. The removal order is:\n  1) i2c\n  2) pinctrl\n  3) OIC\n  4) PCI device\n\nIn details, the removal sequence is the following (with 0000:01:00.0 the\nPCI device):\n  driver_detach: call device_release_driver_internal(0000:01:00.0)...\n    device_links_busy(0000:01:00.0):\n      links->status = DL_DEV_UNBINDING\n    device_links_unbind_consumers(0000:01:00.0):\n      0000:01:00.0--oic link->status = DL_STATE_SUPPLIER_UNBIND\n      call device_release_driver_internal(oic)...\n        device_links_busy(oic):\n          links->status = DL_DEV_UNBINDING\n        device_links_unbind_consumers(oic):\n          oic--pinctrl link->status = DL_STATE_SUPPLIER_UNBIND\n          call device_release_driver_internal(pinctrl)...\n            device_links_busy(pinctrl):\n              links->status = DL_DEV_UNBINDING\n            device_links_unbind_consumers(pinctrl):\n              pinctrl--i2c link->status = DL_STATE_SUPPLIER_UNBIND\n              call device_release_driver_internal(i2c)...\n                device_links_busy(i2c): links->status = DL_DEV_UNBINDING\n                __device_links_no_driver(i2c)...\n                  pinctrl--i2c link->status is DL_STATE_SUPPLIER_UNBIND\n                  oic--i2c link->status is DL_STATE_ACTIVE\n                  oic--i2c link->supplier->links.status is DL_DEV_UNBINDING\n\nThe warning is triggered by the i2c removal because the OIC (supplier)\nlinks status is not DL_DEV_DRIVER_BOUND. Its links status is indeed set\nto DL_DEV_UNBINDING.\n\nIt is perfectly legit to have the links status set to DL_DEV_UNBINDING\nin that case. Indeed we had started to unbind the OIC which triggered\nthe consumer unbinding and didn't finish yet when the i2c is unbound.\n\nAvoid the warning when the supplier links status is set to\nDL_DEV_UNBINDING and thus support this removal sequence without any\nwarnings.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97480": {
+                "cve_id": "CVE-2026-97480",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntty: serial: 8250: protect against NULL uart->port.dev in register\n\nserial8250_register_8250_port() conditionally copies uart->port.dev\nfrom up->port.dev only when up->port.dev is non-NULL:\n\n\tif (up->port.dev) {\n\t\tuart->port.dev = up->port.dev;\n\t\t...\n\t}\n\nSo if both the existing uart slot and up have a NULL ->dev,\nuart->port.dev remains NULL. The very next ACPI companion check\nthen dereferences it unconditionally:\n\n\tif (!has_acpi_companion(uart->port.dev)) {\n\nhas_acpi_companion() reads dev->fwnode without a NULL guard\n(include/linux/acpi.h), so this NULL-derefs the kernel for the\nremaining no-dev case rather than just skipping the\nmctrl_gpio_init() initialisation as intended.\n\nsmatch flags the inconsistency:\n\n  drivers/tty/serial/8250/8250_core.c:767\n  serial8250_register_8250_port() error: 'uart->port.dev' could be\n  null (see line 719)\n\nGuard the call with a NULL check so register continues to work\nfor callers that legitimately have no parent device (legacy\nnon-OF/non-ACPI registrations).\n\nNo functional change for callers that pass a non-NULL ->dev.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97481": {
+                "cve_id": "CVE-2026-97481",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nserial: 8250: fix possible ISR soft lockup\n\nThere are rare cases in which the host gets stuck in the ISR because it\nis flooded with messages during the startup phase.\n\nThe reason for the soft lockup in the ISR is the missing FIFO error IRQ\n(FIFOE) handling. Not handling it and reporting IRQ_HANDLED triggers\nthe IRQ immediately again.\n\nFix this by adding a check for the FIFOE status and clearing the FIFO\nif no data is ready (DR).\n\nThis behavior was observed on an AM62L device which uses the OMAP 8250\ndriver. Fix it for all 8250 drivers, since the OMAP driver's special\nIRQ setup handling may trigger this behavior more frequently, but it\nis not ensured that other 8250 drivers aren't affected.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97483": {
+                "cve_id": "CVE-2026-97483",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: hcd: fix possible deadlock in rh control transfers\n\n>From within the SCSI error handler memory allocations must not\ntrigger IO. Handling errors in UAS and the storage driver may\ninvolve resetting a device. The thread doing the reset itself\nrelies on VM magic. However, that is insufficient, as resetting\na device involves resuming it. Resumption as well as resetting\ninvolves conrol transfers to the parent of the device to be reset.\nThat may be a root hub. Hence usbcore must heed the flags passed\nto usb_submit_urb() processing control transfers to root hubs.\n\nThe problem exist since the storage driver has been merged.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97484": {
+                "cve_id": "CVE-2026-97484",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusbip: vhci_hcd: fix NULL deref in status_show_vhci\n\nplatform_get_drvdata() can return NULL if a VHCI host controller's\nprobe failed (e.g. due to USB bus number exhaustion). status_show_vhci()\nchecked for a NULL pdev but not for a NULL hcd returned by\nplatform_get_drvdata(). Passing NULL to hcd_to_vhci_hcd() does not\nreturn NULL - it returns a pointer offset of 0x260, causing a NULL\npointer dereference when that value is subsequently dereferenced.\n\nAdd a NULL check on hcd before calling hcd_to_vhci_hcd(). Move\nstatus_show_not_ready() above status_show_vhci() to make it callable\nfrom the new error path without a forward declaration.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97485": {
+                "cve_id": "CVE-2026-97485",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nomfs: handle set_blocksize failures\n\nomfs uses buffer_heads, which don't handle block size > PAGE_SIZE well.\nWithout this, mounting we will hit the\n\n        BUG_ON(offset >= folio_size(folio));\n\nin folio_set_bh on the first __bread_gfp call.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97492": {
+                "cve_id": "CVE-2026-97492",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: don't call ieee80211_handle_reconfig_failure when not needed\n\nIn case reconfiguration of NAN fails, we call\nieee80211_handle_reconfig_failure, that marks all interfaces as not in\nthe driver.\nThen, at the error path of the reconfig, cfg80211_shutdown_all_interfaces\nis called to destroy all the interfaces.\n\nIf we have any other interface but the NAN one, for example a BSS\nstation, then when its state (links, stations) will be removed, we\nwon't tell the driver about this, because we will think that the\ninterfaces are not in the driver, and then drivers might remain with\ndangling pointers to objects like stations and links (at least for\niwlwifi this is the case).\n\nieee80211_handle_reconfig_failure is meant to be called after we cleaned\nup the state in the driver, there is no reason to call it for NAN\nreconfiguration failure.\n\nFix the code to just warn in such a case, as we do in other error paths\nin reconfig where it is too complicated to rewind.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-97503": {
                 "cve_id": "CVE-2026-97503",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -143268,6 +143805,193 @@
                 "cve_id": "CVE-2026-97918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Undo the registration when enabling the histogram trigger fails\n\nCommit 6f86bdeab633 (\"tracing: Fix bad hist from corrupting named_triggers\nlist\") described how a trigger that is registered but not on file->triggers\nends up freed while still on the global named_triggers list, and moved the\nregistration down so that hist_trigger_enable() follows it immediately. One\npath still gets there. hist_trigger_enable() adds the trigger and takes it\nstraight back out when the event cannot be enabled:\n\n\tlist_add_tail_rcu(&data->list, &file->triggers);\n\n\tupdate_cond_flag(file);\n\n\tif (trace_event_trigger_enable_disable(file, 1) < 0) {\n\t\tlist_del_rcu(&data->list);\n\t\tupdate_cond_flag(file);\n\t\tret--;\n\t}\n\nso the list walk in hist_unregister_trigger() matches nothing, test stays\nNULL, and the ->free() that would call del_named_trigger() is skipped.\nout_unreg falls through to out_free, which frees the trigger anyway:\n\n BUG: KASAN: slab-use-after-free in find_named_trigger+0xac/0xc0\n Read of size 8 at addr ffff8880091d3160 by task init/1\n  find_named_trigger+0xac/0xc0\n  hist_register_trigger+0xc1/0xa00\n  event_hist_trigger_parse+0x3146/0x6af0\n  event_trigger_write+0xce/0x160\n Freed by task 69:\n  kfree+0x154/0x420\n  trigger_kthread_fn+0xfd/0x160\n\nLeave the trigger where hist_unregister_trigger() can find it and let that\nundo the registration, which is the only code that knows all of what\ncmd_ops->init() took: the named list entry, the hist_pad reference, the\nreference on the trigger a named histogram is shared with, and the copied\ncmd_ops. It also pairs the failed trace_event_trigger_enable_disable(),\nwhose sm_ref and buffered event reference are otherwise left behind.\n\nSince ->free() releases trigger_data and, for a trigger that does not share\nits histogram, hist_data with it, out_unreg can no longer fall through to\nout_free. For a trigger that does share, hist_register_trigger() has\nalready destroyed the caller's hist_data, so the fall-through was reading\nfreed memory there as well.\n\nMove the enable_timestamps check in hist_unregister_trigger() above the\n->free() call for the same reason: hist_data does not outlive it once the\ntrigger being removed is the one that owns it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97922": {
+                "cve_id": "CVE-2026-97922",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Free histogram var refs regardless of how often they are referenced\n\nUsing the same variable three or more times in one hist trigger leaks the\nvariable reference and its strings when the trigger is removed.\n\ncommit 656fe2ba85e8 (\"tracing: Use hist trigger's var_ref array to destroy\nvar_refs\") made a trigger's var_refs[] array the only owner of a var ref:\ndestroy_hist_field() returns early for HIST_FIELD_FL_VAR_REF, so the field\nexpressions never destroy one. One entry, freed once, no count needed.\n\ncommit 8bcebc77e85f (\"tracing: Fix histogram code when expression has same\nvar as value\") then made repeated references share one object and added a\ncount of them. Only the increment side exists, since those expressions\nstill return early and never drop a reference, so __destroy_hist_field()\nsees how many references were created rather than how many are left. It\nfrees when the decremented count is 0 or 1, so two references work and\nthree or more leak.\n\nSharing kept one array entry per object, and create_var_ref() searches and\nappends within a single trigger, so nothing outside it holds the object.\nRemoving a trigger whose variables are still referenced is already refused\nby check_var_refs() with -EBUSY. Drop the count and free unconditionally.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97923": {
+                "cve_id": "CVE-2026-97923",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Free histogram the var ref when its initialization fails\n\ncreate_var_ref() allocates a VAR_REF hist_field and then calls\ninit_var_ref() to fill it in. When that fails the field is leaked.\n\ncommit 656fe2ba85e8 (\"tracing: Use hist trigger's var_ref array to destroy\nvar_refs\") made destroy_hist_field() return early for\nHIST_FIELD_FL_VAR_REF, since var refs are freed by walking the trigger's\nvar_refs[] array instead. create_var_ref() adds the field to that array\nonly after init_var_ref() has succeeded, so on this path the field is in\nneither place and nothing frees it. The call was correct when it was\nwritten, before var refs were taken out of destroy_hist_field().\n\ninit_var_ref() cannot free it either. The caller owns the field, so\ninit_var_ref() undoes only its own string allocations and leaves the\nfield alone. Freeing it there would leave create_var_ref() passing freed\nmemory to destroy_hist_field(), which reads its flags.\n\nCall __destroy_hist_field(), which frees the field without consulting\nthe flag.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97925": {
+                "cve_id": "CVE-2026-97925",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntick/broadcast: Plug clockevents replacement race\n\n\u6731\u607a\u4e7e reported and decoded the following race condition when a broadcast\ndevice is replaced:\n\nCPUA\t\t\t\t\tCPUB\n __tick_broadcast_oneshot_control()\n   bc = tick_broadcast_device.evtdev;\n\t\t\t\t\ttick_install_broadcast_device(dev)\n        \t\t\t\tclockevents_exchange_device(cur, dev)\n\t\t\t\t\t   shutdown(cur);\n\t\t\t\t\t   detach(cur);\n\t\t\t\t\t   cur->handler = noop;\n\t\t\t\t\t   tick_broadcast_device.evtdev = dev;\n\n  tick_broadcast_set_event(bc, next_event); <- FAIL: arms a detached device.\n\nIf the original broadcast device has a restricted interrupt affinity mask\nand the last CPU in that mask goes offline then the BUG() in\ntick_cleanup_dead_cpu() triggers because the clockevent device is not in\ndetached state.\n\nThe reason for this is that tick_install_broadcast_device() is not\nserialized vs. tick broadcast operations.\n\nThe obvious cure is to serialize tick_install_broadcast_device() with\ntick_broadcast_lock against a concurrent tick broadcast operation.\n\nThat requires to split clockevents_exchange_device() into two parts, one\nwhich does the exchange, shutdown and detach operation and the other which\ndrops the module reference count. This is required because the module\nreference cannot be dropped while holding tick_broadcast_lock.\n\nLet clockevents_exchange_device() do both operations as before, but let the\nbroadcast device code take the two step approach and do the device\nexchange under tick_broadcast_lock and drop the module reference count\nafter releasing it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97928": {
+                "cve_id": "CVE-2026-97928",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: skip the VMID 0 flush for VRAM\n\nClear-on-release only runs on VRAM, which amdgpu_ttm_map_buffer() reaches\nvia its direct MC address without programming a GART window, yet the wipe\nstill forces a VMID 0 flush. On GFX11 (e.g. Navi33) that spurious SDMA\nflush can wedge the engine; only flush when a GART window is actually used.\n\nv2: Let amdgpu_ttm_map_buffer() return whether the VMID 0 flush is needed,\n    and drive the clear and copy paths from that. (Christian)\nv3: Make the vm_needs_flush output parameter mandatory instead of\n    allowing NULL. (Christian)\n\n(cherry picked from commit a306e406e570b74318ff7d80e5b07b540ca1d3a9)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97930": {
+                "cve_id": "CVE-2026-97930",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: usbusx2y: fix in04_last array size mismatch with in04_buf\n\nThe in04_last array in struct usx2ydev is declared as char[24], but\nin04_buf is allocated as sizeof(struct us428_ctls) which is 21 bytes.\nIn i_usx2y_in04_int(), when ctl_snapshot_last == -2 (initialization\npath):\n\n    memcpy(usx2y->in04_last, usx2y->in04_buf, sizeof(usx2y->in04_last));\n\nThis copies 24 bytes from a 21-byte slab allocation, reading 3 bytes\npast the end of the source object.\n\nIntroduce a USX2Y_IN04_SIZE constant defined as sizeof(struct\nus428_ctls) and use it consistently for the in04_last array, the\nin04_buf allocation, the URB transfer length, and the comparison loop,\nreplacing the bare 24 and 21 literals throughout.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97931": {
+                "cve_id": "CVE-2026-97931",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: us122l: Prevent write upgrades for read mappings\n\nThe hwdep mmap callback rejects read-buffer mappings that are initially\nwritable, but leaves VM_MAYWRITE set on mappings created with PROT_READ.\nA process that can open the hwdep node O_RDWR can later use mprotect() to\nmake the mapping writable.\n\nThe read allocation begins with struct usb_stream. Its read_size member is\nused by the fault handler to decide which pages belong to the read buffer.\nThe read VMA intentionally remains expandable because pcm_usb_stream uses\nmremap() after reading that size. Changing read_size first can therefore\nmap and access pages beyond the allocation. The same member is also\nconsumed by usb_stream_free(), where changing it can make\nfree_pages_exact() release pages outside the allocation.\n\nClear VM_MAYWRITE for read-buffer mappings after rejecting an initially\nwritable VMA. This keeps the separate output-buffer mapping writable while\npreventing later permission upgrades.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97935": {
+                "cve_id": "CVE-2026-97935",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Set the trace clock before registering the histogram trigger\n\nhist_register_trigger() puts the trigger on the global named_triggers\nlist in cmd_ops->init(), and only then sets the trace clock:\n\n\tif (data->cmd_ops->init) {\n\t\tret = data->cmd_ops->init(data);\n\t\tif (ret < 0)\n\t\t\tgoto out;\n\t}\n\n\tif (hist_data->enable_timestamps) {\n\t\tret = tracing_set_clock(file->tr, hist_data->attrs->clock);\n\t\tif (ret) {\n\t\t\thist_err(tr, HIST_ERR_SET_CLOCK_FAIL, errpos(clock));\n\t\t\tgoto out;\n\t\t}\n\nThe clock string is not checked anywhere before that call, so a named\ntrigger using common_timestamp with an unknown clock fails after it has\nalready become findable. event_hist_trigger_parse() then frees it\nwithout taking it off the list, and the next lookup by name reads the\nfreed object:\n\n ~# cd /sys/kernel/tracing/events/sched/sched_switch\n ~# echo 'hist:name=foo:keys=common_pid:ts=common_timestamp:clock=bogus' > trigger\n bash: echo: write error: Invalid argument\n ~# echo 'hist:name=foo:keys=common_pid' > trigger\n\n  BUG: KASAN: slab-use-after-free in find_named_trigger+0xac/0xc0\n  Read of size 8 at addr ffff88800915d760 by task init/1\n   find_named_trigger+0xac/0xc0\n   hist_register_trigger+0xc1/0x900\n   event_hist_trigger_parse+0x3146/0x6af0\n   event_trigger_write+0xce/0x160\n  Freed by task 63:\n   kfree+0x154/0x420\n   trigger_kthread_fn+0xfd/0x160\n\nSet the clock before the trigger is registered, so that nothing which\ncan fail runs after it is published, the way commit 6f86bdeab633\n(\"tracing: Fix bad hist from corrupting named_triggers list\") moved the\nregistration below the rest of the setup.\n\ntracing_set_filter_buffering() is reference counted, so the init failure\npath has to drop the reference that the clock block now takes first.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97938": {
+                "cve_id": "CVE-2026-97938",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nreboot: fix cad_pid use-after-free race\n\ncad_pid is a single kernel-wide struct pid pointer. proc_do_cad_pid()\nreads it and passes it to pid_vnr() without protecting the lifetime of\nthe referenced struct pid. A concurrent writer can replace cad_pid and\ndrop the final reference to the old struct pid after the reader has\nloaded the pointer but before pid_vnr() has finished dereferencing it,\ncausing a use-after-free.\n\nkill_cad_pid() has the same lifetime race when it passes cad_pid to\nkill_pid().\n\nAt the time this issue was reported, an unprivileged user could reach the\nsysctl through user and PID namespaces because cad_pid was registered in\npid_table[]. Moving cad_pid back to the global reboot sysctl table\ncorrected that namespace and permission mismatch, but did not fix the\nunderlying lifetime race.\n\nFix this by treating cad_pid as an RCU-protected pointer at both read\nsites and by waiting for a grace period before dropping the old reference\non the write side.\n\ncall_rcu(&old_pid->rcu, ...) cannot be used here because free_pid()\nalso queues pid->rcu; queueing the same rcu_head twice can corrupt the\nRCU callback list.\n\nOriginal KASAN crash stack:\n  kernel/pid.c:545 pid_nr_ns()        # reads freed pid->level\n  kernel/pid.c:556 pid_vnr()          # calls pid_nr_ns()\n  kernel/pid.c:775 proc_do_cad_pid()  # calls pid_vnr(cad_pid)",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97939": {
+                "cve_id": "CVE-2026-97939",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipmr: account multicast table and route memory\n\nA netadmin in a user+net namespace can create many IPv4 and IPv6\nmulticast routing tables with MRT_TABLE and MRT6_TABLE. Each unseen\nid allocates an mr_table via the shared mr_table_alloc(), links it\ninto the per-net list, and leaves it until netns teardown. Those\nobjects were not charged to memcg, so the host unreclaimable slab\ngrows with the table count.\n\nAccount mr_table allocations with GFP_KERNEL_ACCOUNT and mark the\nIPv4/IPv6 MFC caches SLAB_ACCOUNT. This matches the established\nhandling of IP addresses, routes and alternate interface names.\n\nUnresolved MFC entries are still allocated from softIRQ with\nGFP_ATOMIC and are not charged. They expire after 10 seconds and are\nbounded by the socket receive queue; see commit 0079ad8e8dc3\n(\"ipmr: remove hard code cache_resolve_queue_len limit\").",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97940": {
+                "cve_id": "CVE-2026-97940",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: fix fib6 walker UAF on seq stop\n\nipv6_route_iter_active() treats a walker in FWS_U at the table root as\nalready unlinked. fib6_del_route() can move a still-linked walker into\nthat same state when the current leaf is the last route at the root,\nso ipv6_route_native_seq_stop() skips fib6_walker_unlink(). The seq\nprivate object can then be freed while it remains on\nnet->ipv6.fib6_walkers. A later route deletion walks the dangling list\nand uses the freed walker.\n\nUse the list head as membership state and reinitialize it when\nunlinking. Keep the existing w->node check so a never-started iterator\nwith a zeroed private object is not treated as linked.\n\nThe same stop helper is used by /proc/net/ipv6_route and by the BPF\nipv6_route iterator. The BPF show path only widens the race.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-97945": {
+                "cve_id": "CVE-2026-97945",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mm: Fix user-space data loss with MADV_FREE and THP\n\nSome of users of Polars (a data analytics library) have lost production\ndata from this bug. They seem to have just the right combination of\nhuge pages, MADV_FREE and heavy reclaim pressure.\n\npmd_modify() masks the old value with (_HPAGE_CHG_MASK & ~_PAGE_DIRTY),\nsilently discarding the hardware dirty bit.  The subsequent\npmd_mksaveddirty() call is supposed to transfer _PAGE_DIRTY into\n_PAGE_SAVED_DIRTY when write-protecting, but the dirty bit was already\nstripped from the value, so there is nothing left to transfer.\n\nContrast with pte_modify(), which keeps _PAGE_DIRTY_BITS in its mask,\nand pud_modify(), which keeps _HPAGE_CHG_MASK untouched: pmd_modify()\nis the odd one out.  Any pmd_modify() on a writable, dirty PMD loses\nthe dirty state.\n\nOne visible consequence is data loss with MADV_FREE on PMD-mapped THP:\n\n    memset(buf, 0x5A, size);          // PMD-mapped THP, PMD dirty\n    madvise(buf, size, MADV_FREE);    // PMD cleaned but left writable,\n                                      // folio marked lazyfree\n    memset(buf, 0x5A, size);          // hardware sets _PAGE_DIRTY again\n    mprotect(buf, size, PROT_READ);   // pmd_modify() drops the dirty bit\n    mprotect(buf, size, PROT_READ|PROT_WRITE);\n    // ... memory pressure ...\n\nReclaim (e.g. under memcg pressure) then finds the lazyfree folio with\nno dirty bit set anywhere and frees it in\n__discard_anon_folio_pmd_locked(), even though the data was rewritten\nafter MADV_FREE; subsequent reads fault in fresh zero pages.  NUMA\nhinting alone can trigger the same loss, as do_huge_pmd_numa_page()\nrestores the PMD through pmd_modify() as well.\n\nPMD-mapped file THPs are affected too: mprotect()/NUMA hinting dropping\nthe dirty bit means rewritten data is never written back.\n\nFix it by keeping _PAGE_DIRTY in the preserved mask, exactly like\npte_modify() and pud_modify() do.  The existing\npmd_mksaveddirty()/pmd_clear_saveddirty() pair then performs the\nhardware-dirty <-> saved-dirty transition based on the write bit,\npreserving the shadow-stack encoding rules.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
