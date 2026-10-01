@@ -79,6 +79,19 @@
                         "identifier": "fc43"
                     }
                 ]
+            },
+            "GHSA-6r3w-6jpj-x5w6": {
+                "cve_id": "GHSA-6r3w-6jpj-x5w6",
+                "title": "Native Stack Buffer Overflow in Public INPUT_RECORD.memmove JNI Method (Windows)",
+                "description": "### Summary The JLine3 Windows native library exposes a public JNI method `INPUT_RECORD.memmove(INPUT_RECORD dest, long src, long size)` that copies an attacker-controlled number of bytes into a fixed-size stack-allocated `INPUT_RECORD` structure without any bounds check. This bypasses Java's memory safety guarantees and may lead to arbitrary native code execution in the context of the JVM process. ### Details The public Java declaration: ```java // Kernel32.java:513 public static native void memmove(INPUT_RECORD dest, long src, long size); ``` The native implementation: ```c // kernel32.c:817-825 JNIEXPORT void JNICALL INPUT_RECORD_NATIVE(memmove) (JNIEnv *env, jclass that, jobject arg0, jlong arg1, jlong arg2) { INPUT_RECORD _arg0, *lparg0=NULL; // stack-allocated: ~20 bytes if (arg0) if ((lparg0 = &_arg0) == NULL) goto fail; memmove((void *)lparg0, (const void *)(intptr_t)arg1, // src: caller-controlled address (size_t)arg2); // size: caller-controlled, unchecked fail: if (arg0 && lparg0) setINPUT_RECORDFields(env, arg0, lparg0); } ``` `_arg0` is a stack-allocated `INPUT_RECORD` whose size is `sizeof(INPUT_RECORD)`. The `size` argument (`arg2`) is passed directly to `memmove()` with no check that `size <= sizeof(INPUT_RECORD)`. Supplying `size = 4096` causes memmove to copy 4096 bytes into a ~20-byte stack slot, overwriting the stack frame and saved return address. The method is `public static native` and is accessible to any Java code that can import `org.jline.nativ.Kernel32.INPUT_RECORD`. No reflection, unsafe access, or privileged operation is required. This native code is compiled exclusively for Windows targets. Affected source locations: - `native/src/main/native/kernel32.c` lines 817-825 - `native/src/main/java/org/jline/nativ/Kernel32.java` line 513 ### PoC ```java // In a Java application on Windows with org.jline:jline-native on the classpath: Kernel32.INPUT_RECORD rec = new Kernel32.INPUT_RECORD(); Kernel32.INPUT_RECORD.memmove(rec, <valid_readable_address>, 4096L); // Stack corruption occurs in the native frame immediately. ``` A stack-canary-protected build raises a stack smash detected error. An unprotected build may silently overwrite the saved return address. ### Impact **Type**: Out-of-bounds Write / Potential Code Execution **Who is affected**: Any multi-tenant Java application running on Windows with `jline-native` on the classpath where untrusted code can call the public `INPUT_RECORD.memmove()` method (e.g., Groovy/scripting shells, plugin architectures, shared JVM services). Successful exploitation yields code execution at the privilege level of the JVM process, escaping Java's memory safety model. ### Credits This issue was identified by Micha\u0142 Majchrowicz and Marcin Wyczechowski, members of the AFINE Team.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "3.30.4-5.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
             }
         }
     }
