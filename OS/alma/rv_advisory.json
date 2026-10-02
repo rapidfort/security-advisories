@@ -2203,6 +2203,20 @@
                     }
                 ]
             },
+            "CVE-2026-45942": {
+                "cve_id": "CVE-2026-45942",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix e4b bitmap inconsistency reports\n\nA bitmap inconsistency issue was observed during stress tests under\nmixed huge-page workloads. Ext4 reported multiple e4b bitmap check\nfailures like:\n\next4_mb_complex_scan_group:2508: group 350, 8179 free clusters as\nper group info. But got 8192 blocks\n\nAnalysis and experimentation confirmed that the issue is caused by a\nrace condition between page migration and bitmap modification. Although\nthis timing window is extremely narrow, it is still hit in practice:\n\nfolio_lock                        ext4_mb_load_buddy\n__migrate_folio\n  check ref count\n  folio_mc_copy                     __filemap_get_folio\n                                      folio_try_get(folio)\n                                  ......\n                                  mb_mark_used\n                                  ext4_mb_unload_buddy\n  __folio_migrate_mapping\n    folio_ref_freeze\nfolio_unlock\n\nThe root cause of this issue is that the fast path of load_buddy only\nincrements the folio's reference count, which is insufficient to prevent\nconcurrent folio migration. We observed that the folio migration process\nacquires the folio lock. Therefore, we can determine whether to take the\nfast path in load_buddy by checking the lock status. If the folio is\nlocked, we opt for the slow path (which acquires the lock) to close this\nconcurrency window.\n\nAdditionally, this change addresses the following issues:\n\nWhen the DOUBLE_CHECK macro is enabled to inspect bitmap-related\nissues, the following error may be triggered:\n\ncorruption in group 324 at byte 784(6272): f in copy != ff on\ndisk/prealloc\n\nAnalysis reveals that this is a false positive. There is a specific race\nwindow where the bitmap and the group descriptor become momentarily\ninconsistent, leading to this error report:\n\next4_mb_load_buddy                   ext4_mb_load_buddy\n  __filemap_get_folio(create|lock)\n    folio_lock\n  ext4_mb_init_cache\n    folio_mark_uptodate\n                                     __filemap_get_folio(no lock)\n                                     ......\n                                     mb_mark_used\n                                       mb_mark_used_double\n  mb_cmp_bitmaps\n                                       mb_set_bits(e4b->bd_bitmap)\n  folio_unlock\n\nThe original logic assumed that since mb_cmp_bitmaps is called when the\nbitmap is newly loaded from disk, the folio lock would be sufficient to\nprevent concurrent access. However, this overlooks a specific race\ncondition: if another process attempts to load buddy and finds the folio\nis already in an uptodate state, it will immediately begin using it without\nholding folio lock.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.61.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-45959": {
                 "cve_id": "CVE-2026-45959",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -3123,6 +3137,19 @@
                     }
                 ]
             },
+            "CVE-2026-52972": {
+                "cve_id": "CVE-2026-52972",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: af_alg - Cap AEAD AD length to 0x80000000\n\nIn order to prevent arithmetic overflows when checking the TX\nbuffer size, cap the associated data length to 0x80000000.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-52973": {
                 "cve_id": "CVE-2026-52973",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -3841,6 +3868,20 @@
                     {
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.49.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-53341": {
+                "cve_id": "CVE-2026-53341",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfhandle: fix UAF due to unlocked ->mnt_ns read in may_decode_fh()\n\nmay_decode_fh() accesses mount::mnt_ns without holding any locks; that\nmeans the mount can concurrently be unmounted, and the mnt_namespace can\nconcurrently be freed after an RCU grace period.\n\nThis race can happens as follows, assuming that the mount point was\ncreated by open_tree(..., OPEN_TREE_CLONE):\n\nthread 1            thread 2            RCU\n                    __do_sys_open_by_handle_at\n                      do_handle_open\n                        handle_to_path\n                          may_decode_fh\n                            is_mounted\n                              [mount::mnt_ns access]\n                            [mount::mnt_ns access]\n__do_sys_close\n  fput_close_sync\n    __fput\n      dissolve_on_fput\n        umount_tree\n        class_namespace_excl_destructor\n          namespace_unlock\n            free_mnt_ns\n              mnt_ns_tree_remove\n                call_rcu(mnt_ns_release_rcu)\n                                        mnt_ns_release_rcu\n                                          mnt_ns_release\n                                            kfree\n                            [mnt_namespace::user_ns access] **UAF**\n\nFix it by taking rcu_read_lock() around the mount::mnt_ns access, like\nin __prepend_path().\nAdditionally, document the semantics of mount::mnt_ns, and use WRITE_ONCE()\nfor writers that can race with lockless readers.\n\nThis bug is unreachable unless one of the following is set:\n\n - CONFIG_PREEMPTION\n - CONFIG_RCU_STRICT_GRACE_PERIOD\n\nbecause it requires an RCU grace period to happen during a syscall without\nan explicit preemption.\n\nThis doesn't seem to have interesting security impact; worst-case, it could\nleak the result of an integer comparison to userspace (from the level\ncheck in cap_capable()), cause an endless loop, or crash the kernel by\ndereferencing an invalid address.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.61.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -5199,6 +5240,20 @@
                     }
                 ]
             },
+            "CVE-2026-64556": {
+                "cve_id": "CVE-2026-64556",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf/core: Detach event groups during remove_on_exec\n\nperf_event_remove_on_exec() removes events by calling\nperf_event_exit_event(). For top-level events, this removes the event from\nthe context with DETACH_EXIT only.\n\nThis can leave inconsistent group state when a removed event is a group\nleader and the group contains siblings without remove_on_exec. If the group\nwas active, the surviving siblings can remain active and attached to the\nremoved leader's sibling list, but are no longer represented by a valid\ngroup leader on the PMU context active lists.\n\nA later close of the removed leader uses DETACH_GROUP and can promote the\nstill-active siblings from this stale group state. The next schedule-in can\nthen add an already-linked active_list entry again, corrupting the PMU\ncontext active list.\n\nWith DEBUG_LIST enabled, this is caught as a list_add double-add in\nmerge_sched_in().\n\nFix this by detaching group relationships when remove_on_exec removes an\nevent. This preserves the existing task-exit and revoke behavior, while\nensuring surviving siblings are ungrouped before the removed event leaves\nthe context.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.61.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-64560": {
                 "cve_id": "CVE-2026-64560",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -6063,6 +6118,34 @@
                     {
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.51.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-74753": {
+                "cve_id": "CVE-2026-74753",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Reject exited events as group leaders\n\nperf_event_remove_on_exec() sets remove-on-exec events to the EXIT state\nand detaches their group relationships.  The event's file descriptor can\nremain open, however, and perf_event_open() currently accepts that event\nas a group leader because its early validation rejects only REVOKED and\nDEAD events.\n\nA new sibling can consequently be linked to the detached leader.  When\nthe leader is closed, perf_group_detach() observes that its\nPERF_ATTACH_GROUP bit is already clear and skips the new sibling.  The\nsibling then retains a group_leader pointer to the freed event.\n\nReject group leaders in the EXIT state.  Perform the check while holding\nthe shared context mutex so that an exec in the target task cannot detach\nthe leader between validation and group attachment.\n\n[peterz: make the earlier test fully consistent]",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.61.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-80522": {
+                "cve_id": "CVE-2026-80522",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: tegra - fix rctx->cryptlen calculation in tegra_gcm_do_one_req()\n\nPerform rctx->cryptlen calculation in tegra_gcm_do_one_req() the same way\nit is done in tegra_ccm_crypt_init(). The current formulae may lead to a\ncrash if a caller does not call tegra_gcm_setauthsize() and so ctx->authsize\nremains zero. Then a decrypt operation with incorrect rctx->cryptlen will\nlead to a write beyound rctx->dst_sg buffer.\n\nAs a follow-up cleanup delete struct tegra_aead_ctx->authsize field since\nit appears to be completely unused. Also simplify tegra_ccm_setauthsize()\nand tegra_gcm_setauthsize() functions respectively.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.61.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -11954,23 +12037,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nplatform/x86: dell-wmi-sysman: Avoid buffer overflow in current_password_store()\n\nIf the 'buf' array received from the user contains an empty string, the\n'length' variable will be zero. Accessing the 'buf' array element with\nindex 'length - 1' will result in a buffer overflow.\n\nAdd a check for an empty string.\n\nFound by Linux Verification Center (linuxtesting.org) with SVACE.",
                 "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "CVE-2025-38078": {
-                "cve_id": "CVE-2025-38078",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: pcm: Fix race of buffer access at PCM OSS layer\n\nThe PCM OSS layer tries to clear the buffer with the silence data at\ninitialization (or reconfiguration) of a stream with the explicit call\nof snd_pcm_format_set_silence() with runtime->dma_area.  But this may\nlead to a UAF because the accessed runtime->dma_area might be freed\nconcurrently, as it's performed outside the PCM ops.\n\nFor avoiding it, move the code into the PCM core and perform it inside\nthe buffer access lock, so that it won't be changed during the\noperation.",
-                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -45293,23 +45359,6 @@
                     }
                 ]
             },
-            "CVE-2026-64558": {
-                "cve_id": "CVE-2026-64558",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/pkey: Check length in pkey_pckmo handler implementation\n\nExplicitly check the length of the target buffer in the pkey_pckmo\nimplementation of the key_to_protkey() handler function. The handler\nfunction fails, if the generated output data exceeds the length of the\nprovided target buffer.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
             "CVE-2026-64559": {
                 "cve_id": "CVE-2026-64559",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -63465,6 +63514,40 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvmet-rdma: fix response resource leak on queue teardown\n\nWhen an nvme target with rdma transport is removed while I/Os are in\nflight, a response can be posted but its send completion is never\ndelivered before the connection is torn down. As a result\nnvmet_rdma_send_done() and nvmet_rdma_release_rsp() are never called for\nthe response, and this leaks the allocated RDMA read/write context and\nrequest SGLs.\n\nThese leaks are recreated by running blktests nvme/061 with the rdma\ntransport and the siw driver. Kernel kmemleak feature reports them as\nfollows:\n\n  unreferenced object 0xffff88812bc490c0 (size 32):\n    comm \"kworker/2:1H\", pid 409, jiffies 4307744490\n    backtrace (crc 89afd339):\n      __kmalloc_noprof+0x5f9/0x890\n      sgl_alloc_order+0x7b/0x380\n      nvmet_req_alloc_sgls+0x290/0x4f0 [nvmet]\n      nvmet_rdma_map_sgl_keyed+0x241/0x12e0 [nvmet_rdma]\n      nvmet_rdma_handle_command+0x73e/0xb80 [nvmet_rdma]\n      __ib_process_cq+0x149/0x4c0 [ib_core]\n      ib_cq_poll_work+0x49/0x160 [ib_core]\n      process_one_work+0x8b2/0x1640\n      worker_thread+0x5fd/0xfe0\n      kthread+0x367/0x460\n      ret_from_fork+0x655/0x9d0\n      ret_from_fork_asm+0x1a/0x30\n\n  unreferenced object 0xffff88814bd05e80 (size 64):\n    comm \"kworker/3:1H\", pid 148, jiffies 4295195428\n    backtrace (crc e35510cb):\n      __kmalloc_noprof+0x5f9/0x890\n      rdma_rw_ctx_init+0x333/0x1fa0 [ib_core]\n      nvmet_rdma_map_sgl_keyed+0x5c8/0x12e0 [nvmet_rdma]\n      nvmet_rdma_handle_command+0x73e/0xb80 [nvmet_rdma]\n      __ib_process_cq+0x149/0x4c0 [ib_core]\n      ib_cq_poll_work+0x49/0x160 [ib_core]\n      process_one_work+0x8b2/0x1640\n      worker_thread+0x5fd/0xfe0\n      kthread+0x367/0x460\n      ret_from_fork+0x655/0x9d0\n      ret_from_fork_asm+0x1a/0x30\n\nTo avoid the memory leaks, reclaim the memory of the in-flight responses\nwhen the queue QP is torn down. Call nvmet_rdma_free_rsp_resources()\nthat frees up the RDMA read/write context and the request SGLs of such\nresponses.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-93207": {
+                "cve_id": "CVE-2026-93207",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nSUNRPC: Zero rpc_gss_wire_cred at svcauth_gss_decode_credbody() entry\n\nsvcauth_gss_decode_credbody() writes the caller's\nrpc_gss_wire_cred field by field and assigns gc_ctx.len only on\nthe success tail.  The caller storage is svcdata->clcred, which\nlives in the per-svc_rqst gss_svc_data and is reused across\nrequests.  Early decode failures leave partially decoded state\nmixed with residue from the prior request.\n\nThe trailing body_len tightness check is the sharpest case:\nxdr_stream_decode_opaque_inline() has already written gc_ctx.data\nwith a borrowed inline pointer into the current request's XDR\npages, but gc_ctx.len retains its prior value.  Once the request\npages are released the pooled clcred carries a dangling pointer\npaired with a stale length.\n\nZero the caller's rpc_gss_wire_cred at function entry so that\nevery early-return path leaves a deterministic all-zero cred.\nOn the trailing tightness-check path, gc_ctx.len is now zero\ninstead of stale, which neuters length-driven consumers such as\ngss_svc_searchbyctx() that would otherwise walk the dangling\ndata pointer.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-93228": {
+                "cve_id": "CVE-2026-93228",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Reject Write/Reply chunks with segcount 0\n\nA peer can send a Write or Reply chunk whose segcount field is zero.\nxdr_check_write_chunk() only rejects segcount > rc_maxpages, so zero\npasses the range check, and xdr_inline_decode(stream, 0) returns the\ncurrent (non-NULL) cursor without advancing. The function returns\ntrue and pcl_alloc_write() then links a struct svc_rdma_chunk with\nch_segcount == 0 onto rc_write_pcl or rc_reply_pcl.\n\nAn earlier patch in this series made pcl_for_each_segment() safe for\nch_segcount == 0, so this no longer drives the memory walk it used\nto. Rejecting the malformed frame at the decode boundary is still\nworthwhile as defense in depth: it keeps degenerate zero-segment\nchunks off the parsed chunk lists entirely, so any future consumer\nthat walks ch_segments directly cannot observe one, and it makes the\nzero-floor easy to backport to trees where the macro change is more\nintrusive. RFC 8166 has no meaning for a Write/Reply chunk that\ndescribes no remote buffer, so no legitimate client is affected.\n\nxdr_check_reply_chunk() funnels Reply chunks through\nxdr_check_write_chunk() and inherits the same rejection.\n\npcl_alloc_write() also links each chunk onto the parsed chunk list\nbefore filling its segment array. If a future change weakens the\nsegcount-0 rejection, an incomplete chunk is visible to consumers\nduring the fill loop. Reorder so that list_add_tail() follows the\nsegment fill loop, ensuring only fully-populated chunks appear on\nthe list.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -73026,20 +73109,6 @@
                     }
                 ]
             },
-            "CVE-2026-45942": {
-                "cve_id": "CVE-2026-45942",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix e4b bitmap inconsistency reports\n\nA bitmap inconsistency issue was observed during stress tests under\nmixed huge-page workloads. Ext4 reported multiple e4b bitmap check\nfailures like:\n\next4_mb_complex_scan_group:2508: group 350, 8179 free clusters as\nper group info. But got 8192 blocks\n\nAnalysis and experimentation confirmed that the issue is caused by a\nrace condition between page migration and bitmap modification. Although\nthis timing window is extremely narrow, it is still hit in practice:\n\nfolio_lock                        ext4_mb_load_buddy\n__migrate_folio\n  check ref count\n  folio_mc_copy                     __filemap_get_folio\n                                      folio_try_get(folio)\n                                  ......\n                                  mb_mark_used\n                                  ext4_mb_unload_buddy\n  __folio_migrate_mapping\n    folio_ref_freeze\nfolio_unlock\n\nThe root cause of this issue is that the fast path of load_buddy only\nincrements the folio's reference count, which is insufficient to prevent\nconcurrent folio migration. We observed that the folio migration process\nacquires the folio lock. Therefore, we can determine whether to take the\nfast path in load_buddy by checking the lock status. If the folio is\nlocked, we opt for the slow path (which acquires the lock) to close this\nconcurrency window.\n\nAdditionally, this change addresses the following issues:\n\nWhen the DOUBLE_CHECK macro is enabled to inspect bitmap-related\nissues, the following error may be triggered:\n\ncorruption in group 324 at byte 784(6272): f in copy != ff on\ndisk/prealloc\n\nAnalysis reveals that this is a false positive. There is a specific race\nwindow where the bitmap and the group descriptor become momentarily\ninconsistent, leading to this error report:\n\next4_mb_load_buddy                   ext4_mb_load_buddy\n  __filemap_get_folio(create|lock)\n    folio_lock\n  ext4_mb_init_cache\n    folio_mark_uptodate\n                                     __filemap_get_folio(no lock)\n                                     ......\n                                     mb_mark_used\n                                       mb_mark_used_double\n  mb_cmp_bitmaps\n                                       mb_set_bits(e4b->bd_bitmap)\n  folio_unlock\n\nThe original logic assumed that since mb_cmp_bitmaps is called when the\nbitmap is newly loaded from disk, the folio lock would be sufficient to\nprevent concurrent access. However, this overlooks a specific race\ncondition: if another process attempts to load buddy and finds the folio\nis already in an uptodate state, it will immediately begin using it without\nholding folio lock.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.61.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-45943": {
                 "cve_id": "CVE-2026-45943",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -73549,19 +73618,6 @@
                     }
                 ]
             },
-            "CVE-2026-52972": {
-                "cve_id": "CVE-2026-52972",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: af_alg - Cap AEAD AD length to 0x80000000\n\nIn order to prevent arithmetic overflows when checking the TX\nbuffer size, cap the associated data length to 0x80000000.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-52977": {
                 "cve_id": "CVE-2026-52977",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -74019,20 +74075,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-53341": {
-                "cve_id": "CVE-2026-53341",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfhandle: fix UAF due to unlocked ->mnt_ns read in may_decode_fh()\n\nmay_decode_fh() accesses mount::mnt_ns without holding any locks; that\nmeans the mount can concurrently be unmounted, and the mnt_namespace can\nconcurrently be freed after an RCU grace period.\n\nThis race can happens as follows, assuming that the mount point was\ncreated by open_tree(..., OPEN_TREE_CLONE):\n\nthread 1            thread 2            RCU\n                    __do_sys_open_by_handle_at\n                      do_handle_open\n                        handle_to_path\n                          may_decode_fh\n                            is_mounted\n                              [mount::mnt_ns access]\n                            [mount::mnt_ns access]\n__do_sys_close\n  fput_close_sync\n    __fput\n      dissolve_on_fput\n        umount_tree\n        class_namespace_excl_destructor\n          namespace_unlock\n            free_mnt_ns\n              mnt_ns_tree_remove\n                call_rcu(mnt_ns_release_rcu)\n                                        mnt_ns_release_rcu\n                                          mnt_ns_release\n                                            kfree\n                            [mnt_namespace::user_ns access] **UAF**\n\nFix it by taking rcu_read_lock() around the mount::mnt_ns access, like\nin __prepend_path().\nAdditionally, document the semantics of mount::mnt_ns, and use WRITE_ONCE()\nfor writers that can race with lockless readers.\n\nThis bug is unreachable unless one of the following is set:\n\n - CONFIG_PREEMPTION\n - CONFIG_RCU_STRICT_GRACE_PERIOD\n\nbecause it requires an RCU grace period to happen during a syscall without\nan explicit preemption.\n\nThis doesn't seem to have interesting security impact; worst-case, it could\nleak the result of an integer comparison to userspace (from the level\ncheck in cap_capable()), cause an endless loop, or crash the kernel by\ndereferencing an invalid address.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.61.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -75110,16 +75152,15 @@
                     }
                 ]
             },
-            "CVE-2026-64556": {
-                "cve_id": "CVE-2026-64556",
+            "CVE-2026-64558": {
+                "cve_id": "CVE-2026-64558",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf/core: Detach event groups during remove_on_exec\n\nperf_event_remove_on_exec() removes events by calling\nperf_event_exit_event(). For top-level events, this removes the event from\nthe context with DETACH_EXIT only.\n\nThis can leave inconsistent group state when a removed event is a group\nleader and the group contains siblings without remove_on_exec. If the group\nwas active, the surviving siblings can remain active and attached to the\nremoved leader's sibling list, but are no longer represented by a valid\ngroup leader on the PMU context active lists.\n\nA later close of the removed leader uses DETACH_GROUP and can promote the\nstill-active siblings from this stale group state. The next schedule-in can\nthen add an already-linked active_list entry again, corrupting the PMU\ncontext active list.\n\nWith DEBUG_LIST enabled, this is caught as a list_add double-add in\nmerge_sched_in().\n\nFix this by detaching group relationships when remove_on_exec removes an\nevent. This preserves the existing task-exit and revoke behavior, while\nensuring surviving siblings are ungrouped before the removed event leaves\nthe context.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/pkey: Check length in pkey_pckmo handler implementation\n\nExplicitly check the length of the target buffer in the pkey_pckmo\nimplementation of the key_to_protkey() handler function. The handler\nfunction fails, if the generated output data exceeds the length of the\nprovided target buffer.",
                 "severity": "HIGH",
-                "status": "fixed",
+                "status": "open",
                 "events": [
                     {
-                        "introduced": "6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.61.1.el10_2",
+                        "introduced": "0",
                         "identifier": "el10"
                     }
                 ]
@@ -77065,20 +77106,6 @@
                     }
                 ]
             },
-            "CVE-2026-74753": {
-                "cve_id": "CVE-2026-74753",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Reject exited events as group leaders\n\nperf_event_remove_on_exec() sets remove-on-exec events to the EXIT state\nand detaches their group relationships.  The event's file descriptor can\nremain open, however, and perf_event_open() currently accepts that event\nas a group leader because its early validation rejects only REVOKED and\nDEAD events.\n\nA new sibling can consequently be linked to the detached leader.  When\nthe leader is closed, perf_group_detach() observes that its\nPERF_ATTACH_GROUP bit is already clear and skips the new sibling.  The\nsibling then retains a group_leader pointer to the freed event.\n\nReject group leaders in the EXIT state.  Perform the check while holding\nthe shared context mutex so that an exec in the target task cannot detach\nthe leader between validation and group attachment.\n\n[peterz: make the earlier test fully consistent]",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.61.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-80521": {
                 "cve_id": "CVE-2026-80521",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -77088,20 +77115,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-80522": {
-                "cve_id": "CVE-2026-80522",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: tegra - fix rctx->cryptlen calculation in tegra_gcm_do_one_req()\n\nPerform rctx->cryptlen calculation in tegra_gcm_do_one_req() the same way\nit is done in tegra_ccm_crypt_init(). The current formulae may lead to a\ncrash if a caller does not call tegra_gcm_setauthsize() and so ctx->authsize\nremains zero. Then a decrypt operation with incorrect rctx->cryptlen will\nlead to a write beyound rctx->dst_sg buffer.\n\nAs a follow-up cleanup delete struct tegra_aead_ctx->authsize field since\nit appears to be completely unused. Also simplify tegra_ccm_setauthsize()\nand tegra_gcm_setauthsize() functions respectively.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.61.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -80848,6 +80861,25 @@
                     }
                 ]
             },
+            "CVE-2026-45942": {
+                "cve_id": "CVE-2026-45942",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix e4b bitmap inconsistency reports\n\nA bitmap inconsistency issue was observed during stress tests under\nmixed huge-page workloads. Ext4 reported multiple e4b bitmap check\nfailures like:\n\next4_mb_complex_scan_group:2508: group 350, 8179 free clusters as\nper group info. But got 8192 blocks\n\nAnalysis and experimentation confirmed that the issue is caused by a\nrace condition between page migration and bitmap modification. Although\nthis timing window is extremely narrow, it is still hit in practice:\n\nfolio_lock                        ext4_mb_load_buddy\n__migrate_folio\n  check ref count\n  folio_mc_copy                     __filemap_get_folio\n                                      folio_try_get(folio)\n                                  ......\n                                  mb_mark_used\n                                  ext4_mb_unload_buddy\n  __folio_migrate_mapping\n    folio_ref_freeze\nfolio_unlock\n\nThe root cause of this issue is that the fast path of load_buddy only\nincrements the folio's reference count, which is insufficient to prevent\nconcurrent folio migration. We observed that the folio migration process\nacquires the folio lock. Therefore, we can determine whether to take the\nfast path in load_buddy by checking the lock status. If the folio is\nlocked, we opt for the slow path (which acquires the lock) to close this\nconcurrency window.\n\nAdditionally, this change addresses the following issues:\n\nWhen the DOUBLE_CHECK macro is enabled to inspect bitmap-related\nissues, the following error may be triggered:\n\ncorruption in group 324 at byte 784(6272): f in copy != ff on\ndisk/prealloc\n\nAnalysis reveals that this is a false positive. There is a specific race\nwindow where the bitmap and the group descriptor become momentarily\ninconsistent, leading to this error report:\n\next4_mb_load_buddy                   ext4_mb_load_buddy\n  __filemap_get_folio(create|lock)\n    folio_lock\n  ext4_mb_init_cache\n    folio_mark_uptodate\n                                     __filemap_get_folio(no lock)\n                                     ......\n                                     mb_mark_used\n                                       mb_mark_used_double\n  mb_cmp_bitmaps\n                                       mb_set_bits(e4b->bd_bitmap)\n  folio_unlock\n\nThe original logic assumed that since mb_cmp_bitmaps is called when the\nbitmap is newly loaded from disk, the folio lock would be sufficient to\nprevent concurrent access. However, this overlooks a specific race\ncondition: if another process attempts to load buddy and finds the folio\nis already in an uptodate state, it will immediately begin using it without\nholding folio lock.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-45959": {
                 "cve_id": "CVE-2026-45959",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -81638,6 +81670,25 @@
                     }
                 ]
             },
+            "CVE-2026-46325": {
+                "cve_id": "CVE-2026-46325",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: Fix iova-to-va conversion for MR page sizes != PAGE_SIZE\n\nThe current implementation incorrectly handles memory regions (MRs) with\npage sizes different from the system PAGE_SIZE. The core issue is that\nrxe_set_page() is called with mr->page_size step increments, but the\npage_list stores individual struct page pointers, each representing\nPAGE_SIZE of memory.\n\nib_sg_to_page() has ensured that when i>=1 either\na) SG[i-1].dma_end and SG[i].dma_addr are contiguous\nor\nb) SG[i-1].dma_end and SG[i].dma_addr are mr->page_size aligned.\n\nThis leads to incorrect iova-to-va conversion in scenarios:\n\n1) page_size < PAGE_SIZE (e.g., MR: 4K, system: 64K):\n   ibmr->iova = 0x181800\n   sg[0]: dma_addr=0x181800, len=0x800\n   sg[1]: dma_addr=0x173000, len=0x1000\n\n   Access iova = 0x181800 + 0x810 = 0x182010\n   Expected VA: 0x173010 (second SG, offset 0x10)\n   Before fix:\n     - index = (0x182010 >> 12) - (0x181800 >> 12) = 1\n     - page_offset = 0x182010 & 0xFFF = 0x10\n     - xarray[1] stores system page base 0x170000\n     - Resulting VA: 0x170000 + 0x10 = 0x170010 (wrong)\n\n2) page_size > PAGE_SIZE (e.g., MR: 64K, system: 4K):\n   ibmr->iova = 0x18f800\n   sg[0]: dma_addr=0x18f800, len=0x800\n   sg[1]: dma_addr=0x170000, len=0x1000\n\n   Access iova = 0x18f800 + 0x810 = 0x190010\n   Expected VA: 0x170010 (second SG, offset 0x10)\n   Before fix:\n     - index = (0x190010 >> 16) - (0x18f800 >> 16) = 1\n     - page_offset = 0x190010 & 0xFFFF = 0x10\n     - xarray[1] stores system page for dma_addr 0x170000\n     - Resulting VA: system page of 0x170000 + 0x10 = 0x170010 (wrong)\n\nYi Zhang reported a kernel panic[1] years ago related to this defect.\n\nSolution:\n1. Replace xarray with pre-allocated rxe_mr_page array for sequential\n   indexing (all MR page indices are contiguous)\n2. Each rxe_mr_page stores both struct page* and offset within the\n   system page\n3. Handle MR page_size != PAGE_SIZE relationships:\n   - page_size > PAGE_SIZE: Split MR pages into multiple system pages\n   - page_size <= PAGE_SIZE: Store offset within system page\n4. Add boundary checks and compatibility validation\n\nThis ensures correct iova-to-va conversion regardless of MR page size\nand system PAGE_SIZE relationship, while improving performance through\narray-based sequential access.\n\nTests on 4K and 64K PAGE_SIZE hosts:\n- rdma-core/pytests\n  $ ./build/bin/run_tests.py  --dev eth0_rxe\n- blktest:\n  $ TIMEOUT=30 QUICK_RUN=1 USE_RXE=1 NVMET_TRTYPES=rdma ./check nvme srp rnbd\n\n[1] https://lore.kernel.org/all/CAHj4cs9XRqE25jyVw9rj9YugffLn5+f=1znaBEnu1usLOciD+g@mail.gmail.com/T/",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-46330": {
                 "cve_id": "CVE-2026-46330",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -81886,6 +81937,25 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.49.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-52972": {
+                "cve_id": "CVE-2026-52972",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: af_alg - Cap AEAD AD length to 0x80000000\n\nIn order to prevent arithmetic overflows when checking the TX\nbuffer size, cap the associated data length to 0x80000000.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -82609,6 +82679,25 @@
                     }
                 ]
             },
+            "CVE-2026-53341": {
+                "cve_id": "CVE-2026-53341",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfhandle: fix UAF due to unlocked ->mnt_ns read in may_decode_fh()\n\nmay_decode_fh() accesses mount::mnt_ns without holding any locks; that\nmeans the mount can concurrently be unmounted, and the mnt_namespace can\nconcurrently be freed after an RCU grace period.\n\nThis race can happens as follows, assuming that the mount point was\ncreated by open_tree(..., OPEN_TREE_CLONE):\n\nthread 1            thread 2            RCU\n                    __do_sys_open_by_handle_at\n                      do_handle_open\n                        handle_to_path\n                          may_decode_fh\n                            is_mounted\n                              [mount::mnt_ns access]\n                            [mount::mnt_ns access]\n__do_sys_close\n  fput_close_sync\n    __fput\n      dissolve_on_fput\n        umount_tree\n        class_namespace_excl_destructor\n          namespace_unlock\n            free_mnt_ns\n              mnt_ns_tree_remove\n                call_rcu(mnt_ns_release_rcu)\n                                        mnt_ns_release_rcu\n                                          mnt_ns_release\n                                            kfree\n                            [mnt_namespace::user_ns access] **UAF**\n\nFix it by taking rcu_read_lock() around the mount::mnt_ns access, like\nin __prepend_path().\nAdditionally, document the semantics of mount::mnt_ns, and use WRITE_ONCE()\nfor writers that can race with lockless readers.\n\nThis bug is unreachable unless one of the following is set:\n\n - CONFIG_PREEMPTION\n - CONFIG_RCU_STRICT_GRACE_PERIOD\n\nbecause it requires an RCU grace period to happen during a syscall without\nan explicit preemption.\n\nThis doesn't seem to have interesting security impact; worst-case, it could\nleak the result of an integer comparison to userspace (from the level\ncheck in cap_capable()), cause an endless loop, or crash the kernel by\ndereferencing an invalid address.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-53356": {
                 "cve_id": "CVE-2026-53356",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -82876,6 +82965,25 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.49.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-63875": {
+                "cve_id": "CVE-2026-63875",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm64: tlb: Flush walk cache when unsharing PMD tables\n\nWhen huge_pmd_unshare() is called to unshare a PMD table, the\ntlb_unshare_pmd_ptdesc() function sets tlb->unshared_tables=true\nbut the aarch64 tlb_flush() only checked tlb->freed_tables to\ndetermine whether to use TLBF_NONE (vae1is, invalidates walk\ncache) or TLBF_NOWALKCACHE (vale1is, leaf-only).\n\nThis caused the stale PMD page table entry to remain in the walk cache\nafter unshare, potentially leading to incorrect page table walks.\n\nFix by including unshared_tables in the check, so that when\nunsharing tables, TLBF_NONE is used and the walk cache is properly\ninvalidated.\n\nHere is the detailed distinction between vae1is and vale1is:\n\n| Instruction Combination  | Actual Invalidation Scope                         |\n| ------------------------ | --------------------------------------------------|\n| `VAE1IS`  + TTL=`0`      | All entries at all levels (full invalidation)     |\n| `VAE1IS`  + TTL=`2` (L2) | Non-leaf at Level 0/1 + leaf at Level 2           |\n| `VALE1IS` + TTL=`0`      | Leaf entries at all levels (non-leaf not cleared) |\n| `VALE1IS` + TTL=`2` (L2) | Leaf entry at Level 2 only                        |",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -83393,6 +83501,25 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.52.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-64102": {
+                "cve_id": "CVE-2026-64102",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/siw: Reject MPA FPDU length underflow before signed receive math\n\nA malicious connected siw peer can send an iWARP FPDU whose MPA length\nfield (c_hdr->mpa_len, 16 bit big-endian, peer-controlled) is smaller\nthan the fixed DDP/RDMAP header for the announced opcode. Soft-iWARP\nparses the full header in siw_get_hdr() based on iwarp_pktinfo[opcode]\n.hdr_len, but never compares mpa_len against that header length.\n\nsiw_tcp_rx_data() then derives\n\n    srx->fpdu_part_rem = be16_to_cpu(mpa_len) - fpdu_part_rcvd\n                         + MPA_HDR_SIZE;\n\nwhere fpdu_part_rcvd equals iwarp_pktinfo[opcode].hdr_len at this\npoint. For a tagged WRITE (hdr_len 16, MPA_HDR_SIZE 2) the smallest\non-wire mpa_len of 0 yields fpdu_part_rem = -14, and any mpa_len below\nhdr_len - MPA_HDR_SIZE underflows to a negative int.\n\nThe signed value then flows into siw_proc_write()/siw_proc_rresp() as\n\n    bytes = min(srx->fpdu_part_rem, srx->skb_new);\n\nis handed to siw_check_mem() as an int len (whose interval check\naddr + len > mem->va + mem->len is satisfied for a valid base when\nlen is negative), and reaches siw_rx_data() -> siw_rx_kva() /\nsiw_rx_umem() -> skb_copy_bits() as a signed copy length. The header\ncopy branch in skb_copy_bits() promotes that to size_t, producing a\nmulti-gigabyte read.\n\nKASAN under a KUnit harness that drives the real kernel TCP receive\npath -- a loopback AF_INET socketpair, the malformed FPDU written via\nkernel_sendmsg, sk_data_ready firing in softirq, tcp_read_sock\ndispatching to siw_tcp_rx_data -- reports:\n\n    BUG: KASAN: use-after-free in skb_copy_bits+0x284/0x480\n    Read of size 4294967295 at addr ffff888...\n    Call Trace:\n     skb_copy_bits\n     siw_rx_kva\n     siw_rx_data\n     siw_check_mem\n     siw_proc_write\n     siw_tcp_rx_data\n     __tcp_read_sock\n     siw_qp_llp_data_ready\n     tcp_data_ready\n     tcp_data_queue\n\nAdd the missing invariant at the earliest point where the peer header\nis fully assembled. iwarp_pktinfo[*].hdr_len - MPA_HDR_SIZE is exactly\nthe value the siw transmitter uses as the minimum mpa_len for each\nopcode (drivers/infiniband/sw/siw/siw_qp.c:33), so this matches the\nprotocol contract. Out-of-range FPDUs terminate the connection with\nTERM_ERROR_LAYER_LLP / LLP_ETYPE_MPA / LLP_ECODE_FPDU_START -- which\nis RFC 5044 Section 8 error code 3 (\"Marker and ULPDU Length fields\ndo not agree on the start of an FPDU\"), the correct framing-error\nclass for this inconsistency.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -83919,6 +84046,25 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.38.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-64556": {
+                "cve_id": "CVE-2026-64556",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf/core: Detach event groups during remove_on_exec\n\nperf_event_remove_on_exec() removes events by calling\nperf_event_exit_event(). For top-level events, this removes the event from\nthe context with DETACH_EXIT only.\n\nThis can leave inconsistent group state when a removed event is a group\nleader and the group contains siblings without remove_on_exec. If the group\nwas active, the surviving siblings can remain active and attached to the\nremoved leader's sibling list, but are no longer represented by a valid\ngroup leader on the PMU context active lists.\n\nA later close of the removed leader uses DETACH_GROUP and can promote the\nstill-active siblings from this stale group state. The next schedule-in can\nthen add an already-linked active_list entry again, corrupting the PMU\ncontext active list.\n\nWith DEBUG_LIST enabled, this is caught as a list_add double-add in\nmerge_sched_in().\n\nFix this by detaching group relationships when remove_on_exec removes an\nevent. This preserves the existing task-exit and revoke behavior, while\nensuring surviving siblings are ungrouped before the removed event leaves\nthe context.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -84912,6 +85058,44 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.42.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-74753": {
+                "cve_id": "CVE-2026-74753",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Reject exited events as group leaders\n\nperf_event_remove_on_exec() sets remove-on-exec events to the EXIT state\nand detaches their group relationships.  The event's file descriptor can\nremain open, however, and perf_event_open() currently accepts that event\nas a group leader because its early validation rejects only REVOKED and\nDEAD events.\n\nA new sibling can consequently be linked to the detached leader.  When\nthe leader is closed, perf_group_detach() observes that its\nPERF_ATTACH_GROUP bit is already clear and skips the new sibling.  The\nsibling then retains a group_leader pointer to the freed event.\n\nReject group leaders in the EXIT state.  Perform the check while holding\nthe shared context mutex so that an exec in the target task cannot detach\nthe leader between validation and group attachment.\n\n[peterz: make the earlier test fully consistent]",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-80522": {
+                "cve_id": "CVE-2026-80522",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: tegra - fix rctx->cryptlen calculation in tegra_gcm_do_one_req()\n\nPerform rctx->cryptlen calculation in tegra_gcm_do_one_req() the same way\nit is done in tegra_ccm_crypt_init(). The current formulae may lead to a\ncrash if a caller does not call tegra_gcm_setauthsize() and so ctx->authsize\nremains zero. Then a decrypt operation with incorrect rctx->cryptlen will\nlead to a write beyound rctx->dst_sg buffer.\n\nAs a follow-up cleanup delete struct tegra_aead_ctx->authsize field since\nit appears to be completely unused. Also simplify tegra_ccm_setauthsize()\nand tegra_gcm_setauthsize() functions respectively.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -90852,23 +91036,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nplatform/x86: dell-wmi-sysman: Avoid buffer overflow in current_password_store()\n\nIf the 'buf' array received from the user contains an empty string, the\n'length' variable will be zero. Accessing the 'buf' array element with\nindex 'length - 1' will result in a buffer overflow.\n\nAdd a check for an empty string.\n\nFound by Linux Verification Center (linuxtesting.org) with SVACE.",
                 "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "CVE-2025-38078": {
-                "cve_id": "CVE-2025-38078",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: pcm: Fix race of buffer access at PCM OSS layer\n\nThe PCM OSS layer tries to clear the buffer with the silence data at\ninitialization (or reconfiguration) of a stream with the explicit call\nof snd_pcm_format_set_silence() with runtime->dma_area.  But this may\nlead to a UAF because the accessed runtime->dma_area might be freed\nconcurrently, as it's performed outside the PCM ops.\n\nFor avoiding it, move the code into the PCM core and perform it inside\nthe buffer access lock, so that it won't be changed during the\noperation.",
-                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -124191,23 +124358,6 @@
                     }
                 ]
             },
-            "CVE-2026-64558": {
-                "cve_id": "CVE-2026-64558",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/pkey: Check length in pkey_pckmo handler implementation\n\nExplicitly check the length of the target buffer in the pkey_pckmo\nimplementation of the key_to_protkey() handler function. The handler\nfunction fails, if the generated output data exceeds the length of the\nprovided target buffer.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
             "CVE-2026-64559": {
                 "cve_id": "CVE-2026-64559",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -142363,6 +142513,40 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvmet-rdma: fix response resource leak on queue teardown\n\nWhen an nvme target with rdma transport is removed while I/Os are in\nflight, a response can be posted but its send completion is never\ndelivered before the connection is torn down. As a result\nnvmet_rdma_send_done() and nvmet_rdma_release_rsp() are never called for\nthe response, and this leaks the allocated RDMA read/write context and\nrequest SGLs.\n\nThese leaks are recreated by running blktests nvme/061 with the rdma\ntransport and the siw driver. Kernel kmemleak feature reports them as\nfollows:\n\n  unreferenced object 0xffff88812bc490c0 (size 32):\n    comm \"kworker/2:1H\", pid 409, jiffies 4307744490\n    backtrace (crc 89afd339):\n      __kmalloc_noprof+0x5f9/0x890\n      sgl_alloc_order+0x7b/0x380\n      nvmet_req_alloc_sgls+0x290/0x4f0 [nvmet]\n      nvmet_rdma_map_sgl_keyed+0x241/0x12e0 [nvmet_rdma]\n      nvmet_rdma_handle_command+0x73e/0xb80 [nvmet_rdma]\n      __ib_process_cq+0x149/0x4c0 [ib_core]\n      ib_cq_poll_work+0x49/0x160 [ib_core]\n      process_one_work+0x8b2/0x1640\n      worker_thread+0x5fd/0xfe0\n      kthread+0x367/0x460\n      ret_from_fork+0x655/0x9d0\n      ret_from_fork_asm+0x1a/0x30\n\n  unreferenced object 0xffff88814bd05e80 (size 64):\n    comm \"kworker/3:1H\", pid 148, jiffies 4295195428\n    backtrace (crc e35510cb):\n      __kmalloc_noprof+0x5f9/0x890\n      rdma_rw_ctx_init+0x333/0x1fa0 [ib_core]\n      nvmet_rdma_map_sgl_keyed+0x5c8/0x12e0 [nvmet_rdma]\n      nvmet_rdma_handle_command+0x73e/0xb80 [nvmet_rdma]\n      __ib_process_cq+0x149/0x4c0 [ib_core]\n      ib_cq_poll_work+0x49/0x160 [ib_core]\n      process_one_work+0x8b2/0x1640\n      worker_thread+0x5fd/0xfe0\n      kthread+0x367/0x460\n      ret_from_fork+0x655/0x9d0\n      ret_from_fork_asm+0x1a/0x30\n\nTo avoid the memory leaks, reclaim the memory of the in-flight responses\nwhen the queue QP is torn down. Call nvmet_rdma_free_rsp_resources()\nthat frees up the RDMA read/write context and the request SGLs of such\nresponses.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-93207": {
+                "cve_id": "CVE-2026-93207",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nSUNRPC: Zero rpc_gss_wire_cred at svcauth_gss_decode_credbody() entry\n\nsvcauth_gss_decode_credbody() writes the caller's\nrpc_gss_wire_cred field by field and assigns gc_ctx.len only on\nthe success tail.  The caller storage is svcdata->clcred, which\nlives in the per-svc_rqst gss_svc_data and is reused across\nrequests.  Early decode failures leave partially decoded state\nmixed with residue from the prior request.\n\nThe trailing body_len tightness check is the sharpest case:\nxdr_stream_decode_opaque_inline() has already written gc_ctx.data\nwith a borrowed inline pointer into the current request's XDR\npages, but gc_ctx.len retains its prior value.  Once the request\npages are released the pooled clcred carries a dangling pointer\npaired with a stale length.\n\nZero the caller's rpc_gss_wire_cred at function entry so that\nevery early-return path leaves a deterministic all-zero cred.\nOn the trailing tightness-check path, gc_ctx.len is now zero\ninstead of stale, which neuters length-driven consumers such as\ngss_svc_searchbyctx() that would otherwise walk the dangling\ndata pointer.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
+            "CVE-2026-93228": {
+                "cve_id": "CVE-2026-93228",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Reject Write/Reply chunks with segcount 0\n\nA peer can send a Write or Reply chunk whose segcount field is zero.\nxdr_check_write_chunk() only rejects segcount > rc_maxpages, so zero\npasses the range check, and xdr_inline_decode(stream, 0) returns the\ncurrent (non-NULL) cursor without advancing. The function returns\ntrue and pcl_alloc_write() then links a struct svc_rdma_chunk with\nch_segcount == 0 onto rc_write_pcl or rc_reply_pcl.\n\nAn earlier patch in this series made pcl_for_each_segment() safe for\nch_segcount == 0, so this no longer drives the memory walk it used\nto. Rejecting the malformed frame at the decode boundary is still\nworthwhile as defense in depth: it keeps degenerate zero-segment\nchunks off the parsed chunk lists entirely, so any future consumer\nthat walks ch_segments directly cannot observe one, and it makes the\nzero-floor easy to backport to trees where the macro change is more\nintrusive. RFC 8166 has no meaning for a Write/Reply chunk that\ndescribes no remote buffer, so no legitimate client is affected.\n\nxdr_check_reply_chunk() funnels Reply chunks through\nxdr_check_write_chunk() and inherits the same rejection.\n\npcl_alloc_write() also links each chunk onto the parsed chunk list\nbefore filling its segment array. If a future change weakens the\nsegcount-0 rejection, an incomplete chunk is visible to consumers\nduring the fill loop. Reorder so that list_add_tail() follows the\nsegment fill loop, ensuring only fully-populated chunks appear on\nthe list.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -173258,20 +173442,6 @@
                     }
                 ]
             },
-            "CVE-2026-45942": {
-                "cve_id": "CVE-2026-45942",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix e4b bitmap inconsistency reports\n\nA bitmap inconsistency issue was observed during stress tests under\nmixed huge-page workloads. Ext4 reported multiple e4b bitmap check\nfailures like:\n\next4_mb_complex_scan_group:2508: group 350, 8179 free clusters as\nper group info. But got 8192 blocks\n\nAnalysis and experimentation confirmed that the issue is caused by a\nrace condition between page migration and bitmap modification. Although\nthis timing window is extremely narrow, it is still hit in practice:\n\nfolio_lock                        ext4_mb_load_buddy\n__migrate_folio\n  check ref count\n  folio_mc_copy                     __filemap_get_folio\n                                      folio_try_get(folio)\n                                  ......\n                                  mb_mark_used\n                                  ext4_mb_unload_buddy\n  __folio_migrate_mapping\n    folio_ref_freeze\nfolio_unlock\n\nThe root cause of this issue is that the fast path of load_buddy only\nincrements the folio's reference count, which is insufficient to prevent\nconcurrent folio migration. We observed that the folio migration process\nacquires the folio lock. Therefore, we can determine whether to take the\nfast path in load_buddy by checking the lock status. If the folio is\nlocked, we opt for the slow path (which acquires the lock) to close this\nconcurrency window.\n\nAdditionally, this change addresses the following issues:\n\nWhen the DOUBLE_CHECK macro is enabled to inspect bitmap-related\nissues, the following error may be triggered:\n\ncorruption in group 324 at byte 784(6272): f in copy != ff on\ndisk/prealloc\n\nAnalysis reveals that this is a false positive. There is a specific race\nwindow where the bitmap and the group descriptor become momentarily\ninconsistent, leading to this error report:\n\next4_mb_load_buddy                   ext4_mb_load_buddy\n  __filemap_get_folio(create|lock)\n    folio_lock\n  ext4_mb_init_cache\n    folio_mark_uptodate\n                                     __filemap_get_folio(no lock)\n                                     ......\n                                     mb_mark_used\n                                       mb_mark_used_double\n  mb_cmp_bitmaps\n                                       mb_set_bits(e4b->bd_bitmap)\n  folio_unlock\n\nThe original logic assumed that since mb_cmp_bitmaps is called when the\nbitmap is newly loaded from disk, the folio lock would be sufficient to\nprevent concurrent access. However, this overlooks a specific race\ncondition: if another process attempts to load buddy and finds the folio\nis already in an uptodate state, it will immediately begin using it without\nholding folio lock.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-45953": {
                 "cve_id": "CVE-2026-45953",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -173416,34 +173586,6 @@
                     }
                 ]
             },
-            "CVE-2026-46325": {
-                "cve_id": "CVE-2026-46325",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: Fix iova-to-va conversion for MR page sizes != PAGE_SIZE\n\nThe current implementation incorrectly handles memory regions (MRs) with\npage sizes different from the system PAGE_SIZE. The core issue is that\nrxe_set_page() is called with mr->page_size step increments, but the\npage_list stores individual struct page pointers, each representing\nPAGE_SIZE of memory.\n\nib_sg_to_page() has ensured that when i>=1 either\na) SG[i-1].dma_end and SG[i].dma_addr are contiguous\nor\nb) SG[i-1].dma_end and SG[i].dma_addr are mr->page_size aligned.\n\nThis leads to incorrect iova-to-va conversion in scenarios:\n\n1) page_size < PAGE_SIZE (e.g., MR: 4K, system: 64K):\n   ibmr->iova = 0x181800\n   sg[0]: dma_addr=0x181800, len=0x800\n   sg[1]: dma_addr=0x173000, len=0x1000\n\n   Access iova = 0x181800 + 0x810 = 0x182010\n   Expected VA: 0x173010 (second SG, offset 0x10)\n   Before fix:\n     - index = (0x182010 >> 12) - (0x181800 >> 12) = 1\n     - page_offset = 0x182010 & 0xFFF = 0x10\n     - xarray[1] stores system page base 0x170000\n     - Resulting VA: 0x170000 + 0x10 = 0x170010 (wrong)\n\n2) page_size > PAGE_SIZE (e.g., MR: 64K, system: 4K):\n   ibmr->iova = 0x18f800\n   sg[0]: dma_addr=0x18f800, len=0x800\n   sg[1]: dma_addr=0x170000, len=0x1000\n\n   Access iova = 0x18f800 + 0x810 = 0x190010\n   Expected VA: 0x170010 (second SG, offset 0x10)\n   Before fix:\n     - index = (0x190010 >> 16) - (0x18f800 >> 16) = 1\n     - page_offset = 0x190010 & 0xFFFF = 0x10\n     - xarray[1] stores system page for dma_addr 0x170000\n     - Resulting VA: system page of 0x170000 + 0x10 = 0x170010 (wrong)\n\nYi Zhang reported a kernel panic[1] years ago related to this defect.\n\nSolution:\n1. Replace xarray with pre-allocated rxe_mr_page array for sequential\n   indexing (all MR page indices are contiguous)\n2. Each rxe_mr_page stores both struct page* and offset within the\n   system page\n3. Handle MR page_size != PAGE_SIZE relationships:\n   - page_size > PAGE_SIZE: Split MR pages into multiple system pages\n   - page_size <= PAGE_SIZE: Store offset within system page\n4. Add boundary checks and compatibility validation\n\nThis ensures correct iova-to-va conversion regardless of MR page size\nand system PAGE_SIZE relationship, while improving performance through\narray-based sequential access.\n\nTests on 4K and 64K PAGE_SIZE hosts:\n- rdma-core/pytests\n  $ ./build/bin/run_tests.py  --dev eth0_rxe\n- blktest:\n  $ TIMEOUT=30 QUICK_RUN=1 USE_RXE=1 NVMET_TRTYPES=rdma ./check nvme srp rnbd\n\n[1] https://lore.kernel.org/all/CAHj4cs9XRqE25jyVw9rj9YugffLn5+f=1znaBEnu1usLOciD+g@mail.gmail.com/T/",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-52972": {
-                "cve_id": "CVE-2026-52972",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: af_alg - Cap AEAD AD length to 0x80000000\n\nIn order to prevent arithmetic overflows when checking the TX\nbuffer size, cap the associated data length to 0x80000000.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-52977": {
                 "cve_id": "CVE-2026-52977",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -173563,20 +173705,6 @@
                     }
                 ]
             },
-            "CVE-2026-53341": {
-                "cve_id": "CVE-2026-53341",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfhandle: fix UAF due to unlocked ->mnt_ns read in may_decode_fh()\n\nmay_decode_fh() accesses mount::mnt_ns without holding any locks; that\nmeans the mount can concurrently be unmounted, and the mnt_namespace can\nconcurrently be freed after an RCU grace period.\n\nThis race can happens as follows, assuming that the mount point was\ncreated by open_tree(..., OPEN_TREE_CLONE):\n\nthread 1            thread 2            RCU\n                    __do_sys_open_by_handle_at\n                      do_handle_open\n                        handle_to_path\n                          may_decode_fh\n                            is_mounted\n                              [mount::mnt_ns access]\n                            [mount::mnt_ns access]\n__do_sys_close\n  fput_close_sync\n    __fput\n      dissolve_on_fput\n        umount_tree\n        class_namespace_excl_destructor\n          namespace_unlock\n            free_mnt_ns\n              mnt_ns_tree_remove\n                call_rcu(mnt_ns_release_rcu)\n                                        mnt_ns_release_rcu\n                                          mnt_ns_release\n                                            kfree\n                            [mnt_namespace::user_ns access] **UAF**\n\nFix it by taking rcu_read_lock() around the mount::mnt_ns access, like\nin __prepend_path().\nAdditionally, document the semantics of mount::mnt_ns, and use WRITE_ONCE()\nfor writers that can race with lockless readers.\n\nThis bug is unreachable unless one of the following is set:\n\n - CONFIG_PREEMPTION\n - CONFIG_RCU_STRICT_GRACE_PERIOD\n\nbecause it requires an RCU grace period to happen during a syscall without\nan explicit preemption.\n\nThis doesn't seem to have interesting security impact; worst-case, it could\nleak the result of an integer comparison to userspace (from the level\ncheck in cap_capable()), cause an endless loop, or crash the kernel by\ndereferencing an invalid address.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-63802": {
                 "cve_id": "CVE-2026-63802",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -173670,20 +173798,6 @@
                     }
                 ]
             },
-            "CVE-2026-63875": {
-                "cve_id": "CVE-2026-63875",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm64: tlb: Flush walk cache when unsharing PMD tables\n\nWhen huge_pmd_unshare() is called to unshare a PMD table, the\ntlb_unshare_pmd_ptdesc() function sets tlb->unshared_tables=true\nbut the aarch64 tlb_flush() only checked tlb->freed_tables to\ndetermine whether to use TLBF_NONE (vae1is, invalidates walk\ncache) or TLBF_NOWALKCACHE (vale1is, leaf-only).\n\nThis caused the stale PMD page table entry to remain in the walk cache\nafter unshare, potentially leading to incorrect page table walks.\n\nFix by including unshared_tables in the check, so that when\nunsharing tables, TLBF_NONE is used and the walk cache is properly\ninvalidated.\n\nHere is the detailed distinction between vae1is and vale1is:\n\n| Instruction Combination  | Actual Invalidation Scope                         |\n| ------------------------ | --------------------------------------------------|\n| `VAE1IS`  + TTL=`0`      | All entries at all levels (full invalidation)     |\n| `VAE1IS`  + TTL=`2` (L2) | Non-leaf at Level 0/1 + leaf at Level 2           |\n| `VALE1IS` + TTL=`0`      | Leaf entries at all levels (non-leaf not cleared) |\n| `VALE1IS` + TTL=`2` (L2) | Leaf entry at Level 2 only                        |",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-63993": {
                 "cve_id": "CVE-2026-63993",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -173707,20 +173821,6 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "0:5.14.0-687.51.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-64102": {
-                "cve_id": "CVE-2026-64102",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/siw: Reject MPA FPDU length underflow before signed receive math\n\nA malicious connected siw peer can send an iWARP FPDU whose MPA length\nfield (c_hdr->mpa_len, 16 bit big-endian, peer-controlled) is smaller\nthan the fixed DDP/RDMAP header for the announced opcode. Soft-iWARP\nparses the full header in siw_get_hdr() based on iwarp_pktinfo[opcode]\n.hdr_len, but never compares mpa_len against that header length.\n\nsiw_tcp_rx_data() then derives\n\n    srx->fpdu_part_rem = be16_to_cpu(mpa_len) - fpdu_part_rcvd\n                         + MPA_HDR_SIZE;\n\nwhere fpdu_part_rcvd equals iwarp_pktinfo[opcode].hdr_len at this\npoint. For a tagged WRITE (hdr_len 16, MPA_HDR_SIZE 2) the smallest\non-wire mpa_len of 0 yields fpdu_part_rem = -14, and any mpa_len below\nhdr_len - MPA_HDR_SIZE underflows to a negative int.\n\nThe signed value then flows into siw_proc_write()/siw_proc_rresp() as\n\n    bytes = min(srx->fpdu_part_rem, srx->skb_new);\n\nis handed to siw_check_mem() as an int len (whose interval check\naddr + len > mem->va + mem->len is satisfied for a valid base when\nlen is negative), and reaches siw_rx_data() -> siw_rx_kva() /\nsiw_rx_umem() -> skb_copy_bits() as a signed copy length. The header\ncopy branch in skb_copy_bits() promotes that to size_t, producing a\nmulti-gigabyte read.\n\nKASAN under a KUnit harness that drives the real kernel TCP receive\npath -- a loopback AF_INET socketpair, the malformed FPDU written via\nkernel_sendmsg, sk_data_ready firing in softirq, tcp_read_sock\ndispatching to siw_tcp_rx_data -- reports:\n\n    BUG: KASAN: use-after-free in skb_copy_bits+0x284/0x480\n    Read of size 4294967295 at addr ffff888...\n    Call Trace:\n     skb_copy_bits\n     siw_rx_kva\n     siw_rx_data\n     siw_check_mem\n     siw_proc_write\n     siw_tcp_rx_data\n     __tcp_read_sock\n     siw_qp_llp_data_ready\n     tcp_data_ready\n     tcp_data_queue\n\nAdd the missing invariant at the earliest point where the peer header\nis fully assembled. iwarp_pktinfo[*].hdr_len - MPA_HDR_SIZE is exactly\nthe value the siw transmitter uses as the minimum mpa_len for each\nopcode (drivers/infiniband/sw/siw/siw_qp.c:33), so this matches the\nprotocol contract. Out-of-range FPDUs terminate the connection with\nTERM_ERROR_LAYER_LLP / LLP_ETYPE_MPA / LLP_ECODE_FPDU_START -- which\nis RFC 5044 Section 8 error code 3 (\"Marker and ULPDU Length fields\ndo not agree on the start of an FPDU\"), the correct framing-error\nclass for this inconsistency.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -173805,16 +173905,15 @@
                     }
                 ]
             },
-            "CVE-2026-64556": {
-                "cve_id": "CVE-2026-64556",
+            "CVE-2026-64558": {
+                "cve_id": "CVE-2026-64558",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf/core: Detach event groups during remove_on_exec\n\nperf_event_remove_on_exec() removes events by calling\nperf_event_exit_event(). For top-level events, this removes the event from\nthe context with DETACH_EXIT only.\n\nThis can leave inconsistent group state when a removed event is a group\nleader and the group contains siblings without remove_on_exec. If the group\nwas active, the surviving siblings can remain active and attached to the\nremoved leader's sibling list, but are no longer represented by a valid\ngroup leader on the PMU context active lists.\n\nA later close of the removed leader uses DETACH_GROUP and can promote the\nstill-active siblings from this stale group state. The next schedule-in can\nthen add an already-linked active_list entry again, corrupting the PMU\ncontext active list.\n\nWith DEBUG_LIST enabled, this is caught as a list_add double-add in\nmerge_sched_in().\n\nFix this by detaching group relationships when remove_on_exec removes an\nevent. This preserves the existing task-exit and revoke behavior, while\nensuring surviving siblings are ungrouped before the removed event leaves\nthe context.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/pkey: Check length in pkey_pckmo handler implementation\n\nExplicitly check the length of the target buffer in the pkey_pckmo\nimplementation of the key_to_protkey() handler function. The handler\nfunction fails, if the generated output data exceeds the length of the\nprovided target buffer.",
                 "severity": "HIGH",
-                "status": "fixed",
+                "status": "open",
                 "events": [
                     {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
+                        "introduced": "0",
                         "identifier": "el9"
                     }
                 ]
@@ -174338,34 +174437,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-74753": {
-                "cve_id": "CVE-2026-74753",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Reject exited events as group leaders\n\nperf_event_remove_on_exec() sets remove-on-exec events to the EXIT state\nand detaches their group relationships.  The event's file descriptor can\nremain open, however, and perf_event_open() currently accepts that event\nas a group leader because its early validation rejects only REVOKED and\nDEAD events.\n\nA new sibling can consequently be linked to the detached leader.  When\nthe leader is closed, perf_group_detach() observes that its\nPERF_ATTACH_GROUP bit is already clear and skips the new sibling.  The\nsibling then retains a group_leader pointer to the freed event.\n\nReject group leaders in the EXIT state.  Perform the check while holding\nthe shared context mutex so that an exec in the target task cannot detach\nthe leader between validation and group attachment.\n\n[peterz: make the earlier test fully consistent]",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-80522": {
-                "cve_id": "CVE-2026-80522",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: tegra - fix rctx->cryptlen calculation in tegra_gcm_do_one_req()\n\nPerform rctx->cryptlen calculation in tegra_gcm_do_one_req() the same way\nit is done in tegra_ccm_crypt_init(). The current formulae may lead to a\ncrash if a caller does not call tegra_gcm_setauthsize() and so ctx->authsize\nremains zero. Then a decrypt operation with incorrect rctx->cryptlen will\nlead to a write beyound rctx->dst_sg buffer.\n\nAs a follow-up cleanup delete struct tegra_aead_ctx->authsize field since\nit appears to be completely unused. Also simplify tegra_ccm_setauthsize()\nand tegra_gcm_setauthsize() functions respectively.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
