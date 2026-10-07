@@ -43584,6 +43584,20 @@
                     }
                 ]
             },
+            "CVE-2026-80727": {
+                "cve_id": "CVE-2026-80727",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mce: Set up the polling timer before CMCI discovery\n\nI hit the following on one of my machines:\n\n  mce: CPU0 BANK15 CMCI inherited storm\n  ------------[ cut here ]------------\n  ODEBUG: assert_init not available (active state 0) object: (____ptrval____) object type: timer_list hint: 0x0\n  WARNING: lib/debugobjects.c:632 at debug_object_assert_init+0x178/0x230, CPU#0: swapper/0/0\n  CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 7.2.0-rc5 #3 PREEMPTLAZY\n  RIP: 0010:debug_object_assert_init+0x18f/0x230\n  Call Trace:\n   <TASK>\n   __mod_timer\n   mce_timer_kick\n   cmci_discover\n   intel_init_cmci\n   mce_intel_feature_init\n   mcheck_cpu_init\n   identify_cpu\n   identify_boot_cpu\n   arch_cpu_finalize_init\n   start_kernel\n\nA second splat follows right after, from timer_setup() finding that same\ntimer already queued:\n\n  ODEBUG: init active (active state 0) object: (____ptrval____) object type: timer_list hint: stub_timer+0x0/0x10\n\nThis is happening because CMCI storm detection is trying to modify the timer\nbefore latter was properly set up.\n\nSet up the timer first. __mcheck_cpu_setup_timer() only calls timer_setup(),\nand depends on neither the generic nor the vendor init.\n\n  [ bp: Massage commit message. ]",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-80788": {
                 "cve_id": "CVE-2026-80788",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -46790,6 +46804,34 @@
                     }
                 ]
             },
+            "CVE-2026-89777": {
+                "cve_id": "CVE-2026-89777",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89811": {
+                "cve_id": "CVE-2026-89811",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Add TLB flush after MES queue eviction/suspension\n\nMES (Micro Engine Scheduler) does not perform heavy-weight TLB\ninvalidation after unmapping queues, unlike HWS which does this\nautomatically. This causes a race condition where in-flight DMA\ndescriptors can access memory that has been unmapped, leading to page\nfaults and GPU queue hangs during SVM page migration.\n\nThe issue manifests as KFDSVMRangeTest.MultiThreadMigrationTest\nfailures on gfx1151 (Strix Point) with XNACK mode 1 enabled - the GPU\ncompute queue hangs with packets submitted but never consumed.\n\nAdd kfd_flush_tlb() calls after MES queue removal in two locations:\n- evict_process_queues_cpsch(): after all queues removed during eviction\n- suspend_queues(): after debug/criu queue suspension (with mem_fence barrier)\n\nThis ensures all in-flight memory accesses from unmapped queues are\nflushed before memory is freed or migrated.\n\n(cherry picked from commit f5c4f88e0f9c45a8fb9dfac0c1df726c95e41b77)",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89815": {
                 "cve_id": "CVE-2026-89815",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -46846,6 +46888,20 @@
                     }
                 ]
             },
+            "CVE-2026-89894": {
+                "cve_id": "CVE-2026-89894",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cx231xx: reject geometry changes while the VBI queue is busy\n\nvidioc_s_fmt_vid_cap() and vidioc_s_std() change the device-wide\ndev->width / dev->norm but only refuse the change when the *video* queue\n(dev->vidq) is busy. The VBI queue (dev->vbiq) shares that same geometry:\ncx231xx_init_vbi_isoc() latches dma_q->lines_per_field from dev->norm,\nthe VBI videobuf2 plane is sized from dev->width / dev->norm in\nvbi_queue_setup() and vbi_buf_prepare(), and cx231xx_do_vbi_copy() then\nrecomputes the destination offset from the *live* dev->width and the\nlatched lines_per_field on every URB completion:\n\n\toffset = lines_completed * (dev->width << 1) + ...;\n\tif (dma_q->current_field == 2)\n\t\toffset += dev->width * 2 * dma_q->lines_per_field;\n\tmemcpy(plane + offset, p_buffer, lencopy);\n\nBecause the VBI node shares video_ioctl_ops with the video node, an\napplication can size a small VBI plane (REQBUFS/QBUF with a small width,\nor with the NTSC standard), then enlarge dev->width (or switch dev->norm\nto PAL) through the video node while the VBI stream is running -- the\nchange is allowed because only dev->vidq is checked -- and let the device\ndeliver a field-2 VBI payload. cx231xx_do_vbi_copy() now computes the\noffset with the larger geometry and memcpy()s past the end of the smaller\nplane that was already allocated, a heap out-of-bounds write whose offset\nis attacker-chosen and whose contents come from the device. The\nper-field guard in cx231xx_copy_vbi_line() does not help: it bounds the\ncopy against the latched lines_per_field, not the plane's real capacity,\nand vb2 does not re-run buf_prepare() for an already prepared buffer.\n\nRefuse the format/standard change when the VBI queue is busy as well, so\nthe geometry cannot change underneath an allocated VBI buffer.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89912": {
                 "cve_id": "CVE-2026-89912",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -46893,6 +46949,20 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: s390: Fix memory leak in guest debug handling\n\nbp_data is freed only for the error case by kfree(bp_data).\nEvery successful KVM_SET_GUEST_DEBUG will leak bp_data.",
                 "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89932": {
+                "cve_id": "CVE-2026-89932",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: nVMX: Always flush vpid02 on first use\n\nMake sure vpid02 is always flushed on first use by setting last_vpid=0\nwhen allocating vpid02.  nested_vmx_transition_tlb_flush() will always\ndetect a VPID change on first VM-Enter after VMXON, because VPID=0 in\nvmcs12 is not allowed if L1 enables VPID.\n\nThis avoids using stale TLB entries from a previous lifetime of the\nVPID, that might have been associated with a different vCPU (or a\ncompletely different VM).\n\nNote that last_vpid is already being initialized as 0 when the vCPU is\ncreated, but it is not reset when vpid02 is freed on VMXOFF. Hence, the\nproblem can only occur if L1 does VMXOFF -> VMXON, runs an L2, and KVM\nhappens to reuse a VPID that has TLB entries on the physical CPU.",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -47000,6 +47070,34 @@
                     }
                 ]
             },
+            "CVE-2026-90036": {
+                "cve_id": "CVE-2026-90036",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during blocked-lock reaping\n\nA bare lock owner -- its only remaining reference a blocked lock on\nnn->blocked_locks_lru -- holds a raw pointer to its nfs4_client but\nno reference keeping the client alive. When the per-net laundromat\nreaps such a lock, freeing the nbl drops the owner reference\nheld through flc_owner, and the final nfs4_put_stateowner()\ntakes the client's cl_lock. Because the laundromat detaches the\nnbl first, __destroy_client() no longer finds it, so a concurrent\nforce_expire_client() can free the client before nfs4_put_stateowner()\nruns, dereferencing cl_lock in freed memory.\n\nPin the client with cl_rpc_users before dropping\nnn->blocked_locks_lock, and skip clients already expiring, whose\nblocked locks __destroy_client() frees while holding an owner\nreference. Take nn->client_lock outside nn->blocked_locks_lock.\nEvery other site holds nn->blocked_locks_lock as a leaf, acquiring\nno further lock, so placing nn->client_lock outside it cannot form\na lock-order cycle.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-90049": {
+                "cve_id": "CVE-2026-90049",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: don't skb_tx_error() the source skb in skb_zerocopy()\n\nskb_zerocopy() copies frags from @from into @to. On an\nskb_orphan_frags() failure it calls skb_tx_error(@from), a destructive\noperation on the source skb the copy helper does not own. That completes\n@from's zerocopy uarg and clears SKBFL_ALL_ZEROCOPY, including the\nSKBFL_SHARED_FRAG page-ownership marker.\n\nBoth callers already report the failure on their own drop path.\nnfnetlink_queue does it at nla_put_failure, and Open vSwitch does it in\nthe flow-miss drop arm of ovs_dp_process_packet(), so nothing is lost by\ndropping it here.\n\nOn Open vSwitch's OVS_ACTION_ATTR_USERSPACE path the skb is not freed on\nthis error: do_execute_actions() ignores output_userspace()'s return\nvalue and, unless the upcall was the last action, keeps forwarding the\nsame skb through the flow's remaining actions. The uarg is completed\nwhile that skb is still in flight, telling the producer its buffers are\nfree, and SKBFL_SHARED_FRAG is cleared on an skb the rest of the stack\nstill handles. That flag is what makes esp_input() call skb_cow_data()\ninstead of decrypting in place, so a later local ESP delivery can\ndecrypt over frags the skb does not own privately.\n\nLeave error reporting to the callers.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-90065": {
                 "cve_id": "CVE-2026-90065",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -47088,6 +47186,20 @@
                 "cve_id": "CVE-2026-90126",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrtc: pcf8563: fix clock provider leak on unbind\n\npcf8563_clkout_register_clk() registers the CLKOUT clock provider with\nof_clk_add_provider(), but nothing ever unwinds it: there is no\nof_clk_del_provider() call and the driver has no remove callback. Each\nof_clk_add_provider() allocates a struct of_clk_provider, takes a\nreference on the OF node and adds an entry to the global of_clk_providers\nlist, none of which is released when the device is unbound. Every\nbind/unbind (or module reload) therefore leaks a provider structure and\nan of_node reference.\n\nThe clock itself is already device-managed (devm_clk_register()); only\nthe provider registration was not. Use devm_of_clk_add_hw_provider() so\nthe provider is removed automatically on unbind. Tie it to the parent\ni2c device, whose OF node carries the #clock-cells and clock-output-names\nproperties (the RTC class device has no OF node of its own).",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-90136": {
+                "cve_id": "CVE-2026-90136",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nplatform/x86/amd/hsmp: Reject negative power cap writes in hwmon\n\nhsmp_hwmon_write() takes the user-supplied hwmon value as a signed long\nand assigns \"val / MICROWATT_PER_MILLIWATT\" to msg.args[0], which is a\n__u32.  MICROWATT_PER_MILLIWATT is an unsigned long, so a negative write\nto power1_cap (e.g. \"echo -1 > power1_cap\") is first converted to a huge\nunsigned value by the division and then stored into the u32 argument.\n\nAs a result a nonsensical, multi-gigawatt socket power limit is sent to\nthe SMU via HSMP_SET_SOCKET_POWER_LIMIT instead of the write being\nrejected.\n\nReject negative values with -EINVAL before the conversion.\n\nTested with HSMP enabled:\n\n  CAP=$(dirname $(grep -l amd_hsmp_hwmon \\\n        /sys/class/hwmon/hwmon*/name | head -1))/power1_cap\n\n  # negative write\n  echo -1000000 > $CAP ; echo \"ret=$?\"\n  # valid positive write must still work\n  echo 400000000 > $CAP ; echo \"ret=$?\"\n\nBefore:\n  # echo -1000000 > $CAP ; echo \"ret=$?\"\n  ret=0                             <- accepted; bogus limit sent to SMU\n  # echo 400000000 > $CAP ; echo \"ret=$?\"\n  ret=0\n\nAfter:\n  # echo -1000000 > $CAP ; echo \"ret=$?\"\n  bash: echo: write error: Invalid argument\n  ret=1                             <- rejected with -EINVAL\n  # echo 400000000 > $CAP ; echo \"ret=$?\"\n  ret=0                             <- valid write still works",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -47196,6 +47308,20 @@
                     }
                 ]
             },
+            "CVE-2026-90202": {
+                "cve_id": "CVE-2026-90202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpt3sas: Avoid freeing unallocated PCIe SGL buffers\n\n_base_release_memory_pools() unconditionally frees every\nioc->pcie_sg_lookup[] entry, including ones the setup loop never\nallocated after a partial failure, causing a \"bad dma\" warning on debug\nkernels or a NULL pointer dereference otherwise.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-90219": {
                 "cve_id": "CVE-2026-90219",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -47294,11 +47420,39 @@
                     }
                 ]
             },
+            "CVE-2026-90271": {
+                "cve_id": "CVE-2026-90271",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm_mpam: Fix a NULL pointer dereference on unbinding after an error interrupt\n\nIf a user unbinds an MSC after mpam_disable() has been run in response\nto an error interrupt then a dereference of a NULL pointer occurs as\nmpam_disable() sets the drvdata to NULL. Add an early return to the driver\nremove callback to avoid this.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-90283": {
                 "cve_id": "CVE-2026-90283",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhugetlbfs: release subpool on fill_super failure\n\nhugetlbfs_fill_super() allocates a hugepage subpool when size or min_size\nmount options are specified.  hugepage_new_subpool() may also reserve huge\npages for min_size.\n\nIf root dentry creation fails after the subpool is created, the failure\npath frees the subpool with kfree().  This bypasses hugepage_put_subpool()\nand can leave min_size reservations charged.\n\nUse hugepage_put_subpool() on the failure path, matching the normal\nput_super path.",
                 "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-90315": {
+                "cve_id": "CVE-2026-90315",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI/sysfs: Add lockdown checks to legacy I/O and memory handlers\n\nCurrently, the legacy I/O and memory sysfs handlers do not check\nsecurity_locked_down(LOCKDOWN_PCI_ACCESS), leaving the legacy_io and\nlegacy_mem files unprotected when the kernel is locked down.\n\nCommit eb627e17727e (\"PCI: Lock down BAR access when the kernel is locked\ndown\") added the check to pci_write_config(), pci_mmap_resource(), and\npci_write_resource_io() to prevent userspace from programming DMA-capable\nhardware that could be used to modify kernel code, but did not cover the\nlegacy handlers.\n\nAs a result, root can still write arbitrary I/O ports and map the legacy\nI/O and memory spaces while the kernel is locked down, which is the same\ncapability the lockdown is meant to remove.\n\nAdd the same check to pci_write_legacy_io(), pci_mmap_legacy_mem(), and\npci_mmap_legacy_io().\n\nThese generic handlers cover both architectures that define HAVE_PCI_LEGACY\n(such as Alpha and PowerPC).\n\n[bhelgaas: add Link]",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -47476,6 +47630,20 @@
                     }
                 ]
             },
+            "CVE-2026-92493": {
+                "cve_id": "CVE-2026-92493",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncpufreq: amd-pstate-ut: Skip tests when amd-pstate driver is not active\n\nThe crash issue may occur when modprobe amd_pstate_ut on intel platform.\n\n   amd_pstate_ut: 1    amd_pstate_ut_acpi_cpc_valid  success!\n   amd_pstate_ut: 2    amd_pstate_ut_check_enabled   success!\n   BUG: kernel NULL pointer dereference, address: 0000000000000080\n   #PF: supervisor read access in kernel mode\n   #PF: error_code(0x0000) - not-present page\n   PGD 0 P4D 0\n   Oops: 0000 [#1] SMP NOPTI\n   CPU: 0 PID: 20300 Comm: modprobe\n   Kdump: loaded Tainted: G O 6.6.0-0010.rc1.ctl4.x86_64 #1\n   Hardware name: FiberHome R2200 V5/Xeon Boards, BIOS 3.1a 02/24/2020\n   RIP: 0010:amd_pstate_ut_check_perf+0x141/0x280 [amd_pstate_ut]\n   Call Trace:\n    <TASK>\n    amd_pstate_ut_init+0x1b/0xff0 [amd_pstate_ut]\n    ? __pfx_amd_pstate_ut_init+0x10/0x10 [amd_pstate_ut]\n    do_one_initcall+0x42/0x2e0\n    ? kmalloc_trace+0x26/0x90\n    do_init_module+0x60/0x240\n    __se_sys_init_module+0x185/0x1c0\n    do_syscall_64+0x62/0x190\n    entry_SYSCALL_64_after_hwframe+0x76/0x7e\n    </TASK>\n\nAdd state detection to amd pstate driver to prevent amd_pstate_ut driver\nfrom testing on non-AMD platforms.\n\n(ML: adjust title)",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-92494": {
                 "cve_id": "CVE-2026-92494",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -47607,6 +47775,20 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvmet-rdma: fix response resource leak on queue teardown\n\nWhen an nvme target with rdma transport is removed while I/Os are in\nflight, a response can be posted but its send completion is never\ndelivered before the connection is torn down. As a result\nnvmet_rdma_send_done() and nvmet_rdma_release_rsp() are never called for\nthe response, and this leaks the allocated RDMA read/write context and\nrequest SGLs.\n\nThese leaks are recreated by running blktests nvme/061 with the rdma\ntransport and the siw driver. Kernel kmemleak feature reports them as\nfollows:\n\n  unreferenced object 0xffff88812bc490c0 (size 32):\n    comm \"kworker/2:1H\", pid 409, jiffies 4307744490\n    backtrace (crc 89afd339):\n      __kmalloc_noprof+0x5f9/0x890\n      sgl_alloc_order+0x7b/0x380\n      nvmet_req_alloc_sgls+0x290/0x4f0 [nvmet]\n      nvmet_rdma_map_sgl_keyed+0x241/0x12e0 [nvmet_rdma]\n      nvmet_rdma_handle_command+0x73e/0xb80 [nvmet_rdma]\n      __ib_process_cq+0x149/0x4c0 [ib_core]\n      ib_cq_poll_work+0x49/0x160 [ib_core]\n      process_one_work+0x8b2/0x1640\n      worker_thread+0x5fd/0xfe0\n      kthread+0x367/0x460\n      ret_from_fork+0x655/0x9d0\n      ret_from_fork_asm+0x1a/0x30\n\n  unreferenced object 0xffff88814bd05e80 (size 64):\n    comm \"kworker/3:1H\", pid 148, jiffies 4295195428\n    backtrace (crc e35510cb):\n      __kmalloc_noprof+0x5f9/0x890\n      rdma_rw_ctx_init+0x333/0x1fa0 [ib_core]\n      nvmet_rdma_map_sgl_keyed+0x5c8/0x12e0 [nvmet_rdma]\n      nvmet_rdma_handle_command+0x73e/0xb80 [nvmet_rdma]\n      __ib_process_cq+0x149/0x4c0 [ib_core]\n      ib_cq_poll_work+0x49/0x160 [ib_core]\n      process_one_work+0x8b2/0x1640\n      worker_thread+0x5fd/0xfe0\n      kthread+0x367/0x460\n      ret_from_fork+0x655/0x9d0\n      ret_from_fork_asm+0x1a/0x30\n\nTo avoid the memory leaks, reclaim the memory of the in-flight responses\nwhen the queue QP is torn down. Call nvmet_rdma_free_rsp_resources()\nthat frees up the RDMA read/write context and the request SGLs of such\nresponses.",
                 "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-93161": {
+                "cve_id": "CVE-2026-93161",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: qat - clear AES key schedule from stack\n\nqat_alg_xts_reverse_key() expands the forward XTS AES key on the stack.\nThat schedule contains key material and can remain in the stack frame.\n\nClear the temporary crypto_aes_ctx with memzero_explicit() after the copy.",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -50938,7 +51120,7 @@
                 "cve_id": "CVE-2026-98054",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nASoC: Intel: avs: Fix unbalanced module reference count\n\nstrace_open() invokes try_module_get() which on success takes\nthe module reference.  If any follow up operation causes\nstrace_open() to fail, the refcount shall be put down.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
