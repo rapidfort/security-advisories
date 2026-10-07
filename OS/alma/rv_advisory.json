@@ -73075,6 +73075,60 @@
                     }
                 ]
             },
+            "CVE-2026-98354": {
+                "cve_id": "CVE-2026-98354",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/mad: Fix receive buffer leak when PKey enforcement fails\n\nib_mad_complete_recv() initializes mad_recv_wc->rmpp_list and then runs\nib_mad_enforce_security() before linking recv_buf onto that list.  On\nfailure it calls ib_free_recv_mad(), which only walks rmpp_list and frees\nthe ib_mad_private of every buffer found there.  As the list is still\nempty at that point, nothing is freed at all.\n\nThe caller cannot clean up either: ib_mad_recv_done() sets recv to NULL\nright after ib_mad_complete_recv() returns, assuming the MAD layer took\nownership of the buffer.  Every MAD that fails the PKey check therefore\nleaks one ib_mad_private (about 300 bytes per IB port MAD, ~2K for OPA),\nand a remote node can trigger this repeatedly by sending MADs with a\nwrong PKey.\n\nLink recv_buf onto rmpp_list right after the list is initialized, so the\nerror path has something to free.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98356": {
+                "cve_id": "CVE-2026-98356",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/bnxt_re: check create_singlethread_workqueue() in DCB setup\n\nbnxt_re_init_dcb_wq() ignores a failed allocation. The async DCB\nhandler later calls queue_work() on the NULL pointer.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98357": {
+                "cve_id": "CVE-2026-98357",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: wait for deferred control PDU completions before releasing the connection\n\nisert_send_done() hands ISTATE_SEND_TASKMGTRSP, ISTATE_SEND_REJECT and\nISTATE_SEND_TEXTRSP completions off to isert_comp_wq and returns.  The work\nitem then runs isert_completion_put() -> isert_put_cmd(), which reads\nisert_conn->conn and takes conn->cmd_lock.\n\nNothing orders that work item against teardown.  isert_wait_conn() queues\nisert_release_work, which frees isert_conn, and iscsit_close_connection()\nfrees the iscsit_conn right after it returns, so the queued work can run\nagainst freed memory.\n\nCount the deferred control PDU completions per connection and let\nisert_wait_conn() wait for them before the release work is queued.\n\nISTATE_SEND_LOGOUTRSP is deliberately not counted: that branch runs\niscsit_logout_post_handler(), which ends up waiting for\nconn->conn_wait_comp, and that completion is only sent by\niscsit_close_connection() after it has called iscsit_wait_conn().\nWaiting for it here would deadlock.  Its wait stays the existing\nisert_wait4logout().\n\nThe splat below is from a kernel with tracing printk()s and an msleep(200)\ninjected into isert_do_control_comp() to widen the window:\n\n  BUG: KASAN: slab-use-after-free in isert_put_cmd+0x53d/0x620\n  Read of size 8 at addr ffff8881054f1038 by task kworker/u17:1/182\n\n  CPU: 0 UID: 0 PID: 182 Comm: kworker/u17:1 Tainted: G    B               7.2.0-rc5-TWIDE-gb8babf08acc7 #1 PREEMPT(lazy)\n  Tainted: [B]=BAD_PAGE\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n  Workqueue: isert_comp_wq isert_do_control_comp\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x53/0x70\n   print_report+0xd0/0x630\n   ? __pfx__raw_spin_lock_irqsave+0x10/0x10\n   ? _raw_spin_unlock_irqrestore+0x3e/0x70\n   ? isert_put_cmd+0x53d/0x620\n   kasan_report+0xce/0x100\n   ? isert_put_cmd+0x53d/0x620\n   isert_put_cmd+0x53d/0x620\n   ? isert_completion_put+0x305/0x330\n   ? isert_do_control_comp+0x2ef/0x310\n   process_one_work+0x633/0x1030\n   ? assign_work+0x11d/0x370\n   worker_thread+0x45b/0xd10\n   ? __pfx_worker_thread+0x10/0x10\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x2c6/0x3b0\n   ? recalc_sigpending+0x15c/0x1e0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x36e/0x5a0\n   ? __pfx_ret_from_fork+0x10/0x10\n   ? __switch_to+0x572/0xdd0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\n  Allocated by task 48:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   __kasan_kmalloc+0x8f/0xa0\n   __kmalloc_cache_noprof+0x158/0x370\n   isert_cma_handler+0x1e3/0x2ae0\n   cma_cm_event_handler+0x3e/0x240\n   cma_ib_req_handler+0x17d9/0x4490\n   cm_process_work+0x41/0x330\n   cm_work_handler+0x5727/0xc160\n   process_one_work+0x633/0x1030\n   worker_thread+0x45b/0xd10\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30\n\n  Freed by task 184:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kfree+0x121/0x380\n   iscsit_close_connection+0x7cf/0x1e60\n   iscsit_take_action_for_connection_exit+0x1b6/0x360\n   iscsi_target_tx_thread+0x472/0x690\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2022-50088": {
                 "cve_id": "CVE-2022-50088",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -83785,45 +83839,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naccel/qaic: Address potential out-of-bounds read in resp_worker()\n\nAlthough 'commit 2feec5ae5df7 (\"accel/qaic: Handle DBC deactivation if the\nowner went away\")' fixes the scenario it was intended for by walking the\nmessage and only decoding QAIC_TRANS_DEACTIVATE_FROM_DEV, if present, it\nskipped over the bounds checking code that is included in decode_message().\nThis could lead to issues such as reading past the slab allocation's end,\ninfinite loops or kernel panics. For those issues to happen, a malformed\nwire message is needed to be sent from the device.\n\nInstead of duplicating the bounds checking code already present in\ndecode_message(), use the function inside resp_worker().",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-98354": {
-                "cve_id": "CVE-2026-98354",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/mad: Fix receive buffer leak when PKey enforcement fails\n\nib_mad_complete_recv() initializes mad_recv_wc->rmpp_list and then runs\nib_mad_enforce_security() before linking recv_buf onto that list.  On\nfailure it calls ib_free_recv_mad(), which only walks rmpp_list and frees\nthe ib_mad_private of every buffer found there.  As the list is still\nempty at that point, nothing is freed at all.\n\nThe caller cannot clean up either: ib_mad_recv_done() sets recv to NULL\nright after ib_mad_complete_recv() returns, assuming the MAD layer took\nownership of the buffer.  Every MAD that fails the PKey check therefore\nleaks one ib_mad_private (about 300 bytes per IB port MAD, ~2K for OPA),\nand a remote node can trigger this repeatedly by sending MADs with a\nwrong PKey.\n\nLink recv_buf onto rmpp_list right after the list is initialized, so the\nerror path has something to free.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-98356": {
-                "cve_id": "CVE-2026-98356",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/bnxt_re: check create_singlethread_workqueue() in DCB setup\n\nbnxt_re_init_dcb_wq() ignores a failed allocation. The async DCB\nhandler later calls queue_work() on the NULL pointer.",
-                "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-98357": {
-                "cve_id": "CVE-2026-98357",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: wait for deferred control PDU completions before releasing the connection\n\nisert_send_done() hands ISTATE_SEND_TASKMGTRSP, ISTATE_SEND_REJECT and\nISTATE_SEND_TEXTRSP completions off to isert_comp_wq and returns.  The work\nitem then runs isert_completion_put() -> isert_put_cmd(), which reads\nisert_conn->conn and takes conn->cmd_lock.\n\nNothing orders that work item against teardown.  isert_wait_conn() queues\nisert_release_work, which frees isert_conn, and iscsit_close_connection()\nfrees the iscsit_conn right after it returns, so the queued work can run\nagainst freed memory.\n\nCount the deferred control PDU completions per connection and let\nisert_wait_conn() wait for them before the release work is queued.\n\nISTATE_SEND_LOGOUTRSP is deliberately not counted: that branch runs\niscsit_logout_post_handler(), which ends up waiting for\nconn->conn_wait_comp, and that completion is only sent by\niscsit_close_connection() after it has called iscsit_wait_conn().\nWaiting for it here would deadlock.  Its wait stays the existing\nisert_wait4logout().\n\nThe splat below is from a kernel with tracing printk()s and an msleep(200)\ninjected into isert_do_control_comp() to widen the window:\n\n  BUG: KASAN: slab-use-after-free in isert_put_cmd+0x53d/0x620\n  Read of size 8 at addr ffff8881054f1038 by task kworker/u17:1/182\n\n  CPU: 0 UID: 0 PID: 182 Comm: kworker/u17:1 Tainted: G    B               7.2.0-rc5-TWIDE-gb8babf08acc7 #1 PREEMPT(lazy)\n  Tainted: [B]=BAD_PAGE\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n  Workqueue: isert_comp_wq isert_do_control_comp\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x53/0x70\n   print_report+0xd0/0x630\n   ? __pfx__raw_spin_lock_irqsave+0x10/0x10\n   ? _raw_spin_unlock_irqrestore+0x3e/0x70\n   ? isert_put_cmd+0x53d/0x620\n   kasan_report+0xce/0x100\n   ? isert_put_cmd+0x53d/0x620\n   isert_put_cmd+0x53d/0x620\n   ? isert_completion_put+0x305/0x330\n   ? isert_do_control_comp+0x2ef/0x310\n   process_one_work+0x633/0x1030\n   ? assign_work+0x11d/0x370\n   worker_thread+0x45b/0xd10\n   ? __pfx_worker_thread+0x10/0x10\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x2c6/0x3b0\n   ? recalc_sigpending+0x15c/0x1e0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x36e/0x5a0\n   ? __pfx_ret_from_fork+0x10/0x10\n   ? __switch_to+0x572/0xdd0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\n  Allocated by task 48:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   __kasan_kmalloc+0x8f/0xa0\n   __kmalloc_cache_noprof+0x158/0x370\n   isert_cma_handler+0x1e3/0x2ae0\n   cma_cm_event_handler+0x3e/0x240\n   cma_ib_req_handler+0x17d9/0x4490\n   cm_process_work+0x41/0x330\n   cm_work_handler+0x5727/0xc160\n   process_one_work+0x633/0x1030\n   worker_thread+0x45b/0xd10\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30\n\n  Freed by task 184:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kfree+0x121/0x380\n   iscsit_close_connection+0x7cf/0x1e60\n   iscsit_take_action_for_connection_exit+0x1b6/0x360\n   iscsi_target_tx_thread+0x472/0x690\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -157007,6 +157022,60 @@
                     }
                 ]
             },
+            "CVE-2026-98354": {
+                "cve_id": "CVE-2026-98354",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/mad: Fix receive buffer leak when PKey enforcement fails\n\nib_mad_complete_recv() initializes mad_recv_wc->rmpp_list and then runs\nib_mad_enforce_security() before linking recv_buf onto that list.  On\nfailure it calls ib_free_recv_mad(), which only walks rmpp_list and frees\nthe ib_mad_private of every buffer found there.  As the list is still\nempty at that point, nothing is freed at all.\n\nThe caller cannot clean up either: ib_mad_recv_done() sets recv to NULL\nright after ib_mad_complete_recv() returns, assuming the MAD layer took\nownership of the buffer.  Every MAD that fails the PKey check therefore\nleaks one ib_mad_private (about 300 bytes per IB port MAD, ~2K for OPA),\nand a remote node can trigger this repeatedly by sending MADs with a\nwrong PKey.\n\nLink recv_buf onto rmpp_list right after the list is initialized, so the\nerror path has something to free.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98356": {
+                "cve_id": "CVE-2026-98356",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/bnxt_re: check create_singlethread_workqueue() in DCB setup\n\nbnxt_re_init_dcb_wq() ignores a failed allocation. The async DCB\nhandler later calls queue_work() on the NULL pointer.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98357": {
+                "cve_id": "CVE-2026-98357",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: wait for deferred control PDU completions before releasing the connection\n\nisert_send_done() hands ISTATE_SEND_TASKMGTRSP, ISTATE_SEND_REJECT and\nISTATE_SEND_TEXTRSP completions off to isert_comp_wq and returns.  The work\nitem then runs isert_completion_put() -> isert_put_cmd(), which reads\nisert_conn->conn and takes conn->cmd_lock.\n\nNothing orders that work item against teardown.  isert_wait_conn() queues\nisert_release_work, which frees isert_conn, and iscsit_close_connection()\nfrees the iscsit_conn right after it returns, so the queued work can run\nagainst freed memory.\n\nCount the deferred control PDU completions per connection and let\nisert_wait_conn() wait for them before the release work is queued.\n\nISTATE_SEND_LOGOUTRSP is deliberately not counted: that branch runs\niscsit_logout_post_handler(), which ends up waiting for\nconn->conn_wait_comp, and that completion is only sent by\niscsit_close_connection() after it has called iscsit_wait_conn().\nWaiting for it here would deadlock.  Its wait stays the existing\nisert_wait4logout().\n\nThe splat below is from a kernel with tracing printk()s and an msleep(200)\ninjected into isert_do_control_comp() to widen the window:\n\n  BUG: KASAN: slab-use-after-free in isert_put_cmd+0x53d/0x620\n  Read of size 8 at addr ffff8881054f1038 by task kworker/u17:1/182\n\n  CPU: 0 UID: 0 PID: 182 Comm: kworker/u17:1 Tainted: G    B               7.2.0-rc5-TWIDE-gb8babf08acc7 #1 PREEMPT(lazy)\n  Tainted: [B]=BAD_PAGE\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n  Workqueue: isert_comp_wq isert_do_control_comp\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x53/0x70\n   print_report+0xd0/0x630\n   ? __pfx__raw_spin_lock_irqsave+0x10/0x10\n   ? _raw_spin_unlock_irqrestore+0x3e/0x70\n   ? isert_put_cmd+0x53d/0x620\n   kasan_report+0xce/0x100\n   ? isert_put_cmd+0x53d/0x620\n   isert_put_cmd+0x53d/0x620\n   ? isert_completion_put+0x305/0x330\n   ? isert_do_control_comp+0x2ef/0x310\n   process_one_work+0x633/0x1030\n   ? assign_work+0x11d/0x370\n   worker_thread+0x45b/0xd10\n   ? __pfx_worker_thread+0x10/0x10\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x2c6/0x3b0\n   ? recalc_sigpending+0x15c/0x1e0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x36e/0x5a0\n   ? __pfx_ret_from_fork+0x10/0x10\n   ? __switch_to+0x572/0xdd0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\n  Allocated by task 48:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   __kasan_kmalloc+0x8f/0xa0\n   __kmalloc_cache_noprof+0x158/0x370\n   isert_cma_handler+0x1e3/0x2ae0\n   cma_cm_event_handler+0x3e/0x240\n   cma_ib_req_handler+0x17d9/0x4490\n   cm_process_work+0x41/0x330\n   cm_work_handler+0x5727/0xc160\n   process_one_work+0x633/0x1030\n   worker_thread+0x45b/0xd10\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30\n\n  Freed by task 184:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kfree+0x121/0x380\n   iscsit_close_connection+0x7cf/0x1e60\n   iscsit_take_action_for_connection_exit+0x1b6/0x360\n   iscsi_target_tx_thread+0x472/0x690\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2019-16089": {
                 "cve_id": "CVE-2019-16089",
                 "title": "An issue was discovered in the Linux kernel through 5.2.13. nbd_g ...",
@@ -183716,45 +183785,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsched/rt,dl: Skip migrate-disabled tasks when picking a push candidate\n\nA migrate_disable()'d RT task cannot be moved to another CPU, but the\nscheduler still keeps such a task on that CPU's pushable list\n(rq->rt.pushable_tasks) and still marks the runqueue RT-overloaded\n(rq->rt.overloaded = 1). So the RT balancer keeps treating this CPU as\nhaving a task to move away, and keeps trying to move the task, but the\npush can never succeed. When the head is pinned, push_rt_task() does not\ngive up either. It falls back to pushing rq->curr instead, using the\nper-CPU stopper, as added by commit a7c81556ec4d (\"sched: Fix\nmigrate_disable() vs rt/dl balancing\").\n\nThe CPU spends tens of milliseconds in this retry loop. The core is\nisolated for real-time work, but during the loop nearly half of its time\nis consumed by pushes that cannot succeed.\n\nAn ftrace capture of the affected CPU, with sched_switch enabled and\ncommit 94894c9c477e (\"sched/rt: Skip currently executing CPU in\nrto_next_cpu()\") applied, shows where the CPU time went. Two SCHED_FIFO\ntasks at equal priority shared the CPU, taskA migrate_disable()'d and\nqueued, taskB as rq->curr. In one 89 ms window, taskB got only 52 ms of\nCPU. The other 37 ms went to the stopper thread.\n\nThe scheduler kept trying to push taskA, the pinned head of the pushable\nlist, fell back to pushing taskB instead, and woke the stopper 5204\ntimes. Every one of those pushes failed and no task was moved. taskA\nstayed runnable and queued the whole time, and never ran.\n\nPushing taskB fails on a re-check. find_lock_lowest_rq() drops the rq\nlock to take the target rq lock, then checks again with\n\"task != pick_next_pushable_task(rq)\".\n\nThe task being pushed is taskB, but the pick returns taskA, the head of\nthe pushable list. taskB is rq->curr, and set_next_task_rt() removes the\nrunning task from that list, so taskB can never be the head. The check\nexpects a candidate taken from the pushable list, but the fallback\npushes rq->curr, which is never on that list. So the check fails every\ntime.\n\n   .--> push-IPI arrives\n   |          |\n   |          v\n   |     pushable head = taskA   ->  pinned, cannot be pushed\n   |          |\n   |          v\n   |     so push taskB instead   ->  wake migration/N, a stop-class\n   |          |                      thread, so it preempts taskB\n   |          v\n   |     re-check compares taskB against the pushable head,\n   |     which is still taskA                        ->  give up\n   |          |\n   |          v\n   |     nothing moved, taskA still queued, rq still overloaded\n   |          |\n   '----------'\n         repeats every ~17 us, 5204 times, for 89 ms\n\n   The loop cannot stop itself. Every round leaves the runqueue\n   exactly as it was, so the next push-IPI does the same thing. In\n   the capture it ended only when taskB went to sleep on its own.\n   taskA was then picked locally and left the pushable list.\n\n   CPU time per task in the window, from sched_switch:\n\n     taskB         51.95 ms   real work\n     migration/N   37.18 ms   nothing moved\n     taskA          0.00 ms   queued the whole time, never picked\n     idle           0.01 ms\n\n   Counts over the same window:\n\n      7667  push-IPIs handled on this CPU\n     17481  pick_next_pushable_task() returned taskA, still pinned\n      5204  find_lock_lowest_rq() gave up on the re-check\n         1  push that actually completed\n         0  migrations of taskA\n\n   The CPU times and the window length come from the standard\n   sched_switch tracepoint. The counts needed tracepoints added inside\n   the RT balancer for this investigation.\n\nThe self-IPI path is closed by the rto_next_cpu() fix above, and that\npart works. But the runqueue is still marked overloaded, because the\npinned task is still advertised as pushable. Other CPUs now send the\npush-IPIs during their own RT balancing, and the same loop runs again.\nClosing the self-IPI path did not stop a pinn\n---truncated---",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-98354": {
-                "cve_id": "CVE-2026-98354",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/mad: Fix receive buffer leak when PKey enforcement fails\n\nib_mad_complete_recv() initializes mad_recv_wc->rmpp_list and then runs\nib_mad_enforce_security() before linking recv_buf onto that list.  On\nfailure it calls ib_free_recv_mad(), which only walks rmpp_list and frees\nthe ib_mad_private of every buffer found there.  As the list is still\nempty at that point, nothing is freed at all.\n\nThe caller cannot clean up either: ib_mad_recv_done() sets recv to NULL\nright after ib_mad_complete_recv() returns, assuming the MAD layer took\nownership of the buffer.  Every MAD that fails the PKey check therefore\nleaks one ib_mad_private (about 300 bytes per IB port MAD, ~2K for OPA),\nand a remote node can trigger this repeatedly by sending MADs with a\nwrong PKey.\n\nLink recv_buf onto rmpp_list right after the list is initialized, so the\nerror path has something to free.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-98356": {
-                "cve_id": "CVE-2026-98356",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/bnxt_re: check create_singlethread_workqueue() in DCB setup\n\nbnxt_re_init_dcb_wq() ignores a failed allocation. The async DCB\nhandler later calls queue_work() on the NULL pointer.",
-                "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-98357": {
-                "cve_id": "CVE-2026-98357",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: wait for deferred control PDU completions before releasing the connection\n\nisert_send_done() hands ISTATE_SEND_TASKMGTRSP, ISTATE_SEND_REJECT and\nISTATE_SEND_TEXTRSP completions off to isert_comp_wq and returns.  The work\nitem then runs isert_completion_put() -> isert_put_cmd(), which reads\nisert_conn->conn and takes conn->cmd_lock.\n\nNothing orders that work item against teardown.  isert_wait_conn() queues\nisert_release_work, which frees isert_conn, and iscsit_close_connection()\nfrees the iscsit_conn right after it returns, so the queued work can run\nagainst freed memory.\n\nCount the deferred control PDU completions per connection and let\nisert_wait_conn() wait for them before the release work is queued.\n\nISTATE_SEND_LOGOUTRSP is deliberately not counted: that branch runs\niscsit_logout_post_handler(), which ends up waiting for\nconn->conn_wait_comp, and that completion is only sent by\niscsit_close_connection() after it has called iscsit_wait_conn().\nWaiting for it here would deadlock.  Its wait stays the existing\nisert_wait4logout().\n\nThe splat below is from a kernel with tracing printk()s and an msleep(200)\ninjected into isert_do_control_comp() to widen the window:\n\n  BUG: KASAN: slab-use-after-free in isert_put_cmd+0x53d/0x620\n  Read of size 8 at addr ffff8881054f1038 by task kworker/u17:1/182\n\n  CPU: 0 UID: 0 PID: 182 Comm: kworker/u17:1 Tainted: G    B               7.2.0-rc5-TWIDE-gb8babf08acc7 #1 PREEMPT(lazy)\n  Tainted: [B]=BAD_PAGE\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n  Workqueue: isert_comp_wq isert_do_control_comp\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x53/0x70\n   print_report+0xd0/0x630\n   ? __pfx__raw_spin_lock_irqsave+0x10/0x10\n   ? _raw_spin_unlock_irqrestore+0x3e/0x70\n   ? isert_put_cmd+0x53d/0x620\n   kasan_report+0xce/0x100\n   ? isert_put_cmd+0x53d/0x620\n   isert_put_cmd+0x53d/0x620\n   ? isert_completion_put+0x305/0x330\n   ? isert_do_control_comp+0x2ef/0x310\n   process_one_work+0x633/0x1030\n   ? assign_work+0x11d/0x370\n   worker_thread+0x45b/0xd10\n   ? __pfx_worker_thread+0x10/0x10\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x2c6/0x3b0\n   ? recalc_sigpending+0x15c/0x1e0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x36e/0x5a0\n   ? __pfx_ret_from_fork+0x10/0x10\n   ? __switch_to+0x572/0xdd0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\n  Allocated by task 48:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   __kasan_kmalloc+0x8f/0xa0\n   __kmalloc_cache_noprof+0x158/0x370\n   isert_cma_handler+0x1e3/0x2ae0\n   cma_cm_event_handler+0x3e/0x240\n   cma_ib_req_handler+0x17d9/0x4490\n   cm_process_work+0x41/0x330\n   cm_work_handler+0x5727/0xc160\n   process_one_work+0x633/0x1030\n   worker_thread+0x45b/0xd10\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30\n\n  Freed by task 184:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kfree+0x121/0x380\n   iscsit_close_connection+0x7cf/0x1e60\n   iscsit_take_action_for_connection_exit+0x1b6/0x360\n   iscsi_target_tx_thread+0x472/0x690\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
