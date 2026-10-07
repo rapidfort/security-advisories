@@ -92214,6 +92214,24 @@
                     }
                 ]
             },
+            "CVE-2026-90111": {
+                "cve_id": "CVE-2026-90111",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nip6mr: do not clone dst in ip6mr_cache_report()\n\nIPv6 input attaches a non-refcounted (NOREF) dst to skbs under RCU.\nWhen an ingress multicast packet misses MFC lookup,\nip6mr_cache_unresolved() places the skb onto the unresolved queue,\nescaping the receive-side RCU grace period.\n\nIf the underlying route is deleted and freed, and the MFC queue is later\nresolved with a wrong parent interface, ip6_mr_forward() invokes\nip6mr_cache_report(..., MRT6MSG_WRONGMIF), which executes\ndst_clone(skb_dst(pkt)) on the freed dst entry, triggering a slab\nuse-after-free.\n\nReport packets queued to mroute6_sk (a raw socket) and netlink\nnotifications do not require an attached dst entry.\n\nFix this by:\n1. Removing dst_clone() in ip6mr_cache_report() and ensuring report skbs\n   do not hold a dst.\n2. Dropping skb_dst before queuing unresolved skbs in\n   ip6mr_cache_unresolved(), matching the fact that multicast\n   forwarding resolves outgoing routes anew via ip6_route_output().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-90119": {
                 "cve_id": "CVE-2026-90119",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -98216,6 +98234,45 @@
                         "introduced": "6.17.1-300.fc43",
                         "identifier": "fc43",
                         "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98354": {
+                "cve_id": "CVE-2026-98354",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/mad: Fix receive buffer leak when PKey enforcement fails\n\nib_mad_complete_recv() initializes mad_recv_wc->rmpp_list and then runs\nib_mad_enforce_security() before linking recv_buf onto that list.  On\nfailure it calls ib_free_recv_mad(), which only walks rmpp_list and frees\nthe ib_mad_private of every buffer found there.  As the list is still\nempty at that point, nothing is freed at all.\n\nThe caller cannot clean up either: ib_mad_recv_done() sets recv to NULL\nright after ib_mad_complete_recv() returns, assuming the MAD layer took\nownership of the buffer.  Every MAD that fails the PKey check therefore\nleaks one ib_mad_private (about 300 bytes per IB port MAD, ~2K for OPA),\nand a remote node can trigger this repeatedly by sending MADs with a\nwrong PKey.\n\nLink recv_buf onto rmpp_list right after the list is initialized, so the\nerror path has something to free.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98356": {
+                "cve_id": "CVE-2026-98356",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/bnxt_re: check create_singlethread_workqueue() in DCB setup\n\nbnxt_re_init_dcb_wq() ignores a failed allocation. The async DCB\nhandler later calls queue_work() on the NULL pointer.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98357": {
+                "cve_id": "CVE-2026-98357",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: wait for deferred control PDU completions before releasing the connection\n\nisert_send_done() hands ISTATE_SEND_TASKMGTRSP, ISTATE_SEND_REJECT and\nISTATE_SEND_TEXTRSP completions off to isert_comp_wq and returns.  The work\nitem then runs isert_completion_put() -> isert_put_cmd(), which reads\nisert_conn->conn and takes conn->cmd_lock.\n\nNothing orders that work item against teardown.  isert_wait_conn() queues\nisert_release_work, which frees isert_conn, and iscsit_close_connection()\nfrees the iscsit_conn right after it returns, so the queued work can run\nagainst freed memory.\n\nCount the deferred control PDU completions per connection and let\nisert_wait_conn() wait for them before the release work is queued.\n\nISTATE_SEND_LOGOUTRSP is deliberately not counted: that branch runs\niscsit_logout_post_handler(), which ends up waiting for\nconn->conn_wait_comp, and that completion is only sent by\niscsit_close_connection() after it has called iscsit_wait_conn().\nWaiting for it here would deadlock.  Its wait stays the existing\nisert_wait4logout().\n\nThe splat below is from a kernel with tracing printk()s and an msleep(200)\ninjected into isert_do_control_comp() to widen the window:\n\n  BUG: KASAN: slab-use-after-free in isert_put_cmd+0x53d/0x620\n  Read of size 8 at addr ffff8881054f1038 by task kworker/u17:1/182\n\n  CPU: 0 UID: 0 PID: 182 Comm: kworker/u17:1 Tainted: G    B               7.2.0-rc5-TWIDE-gb8babf08acc7 #1 PREEMPT(lazy)\n  Tainted: [B]=BAD_PAGE\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n  Workqueue: isert_comp_wq isert_do_control_comp\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x53/0x70\n   print_report+0xd0/0x630\n   ? __pfx__raw_spin_lock_irqsave+0x10/0x10\n   ? _raw_spin_unlock_irqrestore+0x3e/0x70\n   ? isert_put_cmd+0x53d/0x620\n   kasan_report+0xce/0x100\n   ? isert_put_cmd+0x53d/0x620\n   isert_put_cmd+0x53d/0x620\n   ? isert_completion_put+0x305/0x330\n   ? isert_do_control_comp+0x2ef/0x310\n   process_one_work+0x633/0x1030\n   ? assign_work+0x11d/0x370\n   worker_thread+0x45b/0xd10\n   ? __pfx_worker_thread+0x10/0x10\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x2c6/0x3b0\n   ? recalc_sigpending+0x15c/0x1e0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x36e/0x5a0\n   ? __pfx_ret_from_fork+0x10/0x10\n   ? __switch_to+0x572/0xdd0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\n  Allocated by task 48:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   __kasan_kmalloc+0x8f/0xa0\n   __kmalloc_cache_noprof+0x158/0x370\n   isert_cma_handler+0x1e3/0x2ae0\n   cma_cm_event_handler+0x3e/0x240\n   cma_ib_req_handler+0x17d9/0x4490\n   cm_process_work+0x41/0x330\n   cm_work_handler+0x5727/0xc160\n   process_one_work+0x633/0x1030\n   worker_thread+0x45b/0xd10\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30\n\n  Freed by task 184:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kfree+0x121/0x380\n   iscsit_close_connection+0x7cf/0x1e60\n   iscsit_take_action_for_connection_exit+0x1b6/0x360\n   iscsi_target_tx_thread+0x472/0x690\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
                     }
                 ]
             },
@@ -159696,6 +159753,24 @@
                     }
                 ]
             },
+            "CVE-2026-90111": {
+                "cve_id": "CVE-2026-90111",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nip6mr: do not clone dst in ip6mr_cache_report()\n\nIPv6 input attaches a non-refcounted (NOREF) dst to skbs under RCU.\nWhen an ingress multicast packet misses MFC lookup,\nip6mr_cache_unresolved() places the skb onto the unresolved queue,\nescaping the receive-side RCU grace period.\n\nIf the underlying route is deleted and freed, and the MFC queue is later\nresolved with a wrong parent interface, ip6_mr_forward() invokes\nip6mr_cache_report(..., MRT6MSG_WRONGMIF), which executes\ndst_clone(skb_dst(pkt)) on the freed dst entry, triggering a slab\nuse-after-free.\n\nReport packets queued to mroute6_sk (a raw socket) and netlink\nnotifications do not require an attached dst entry.\n\nFix this by:\n1. Removing dst_clone() in ip6mr_cache_report() and ensuring report skbs\n   do not hold a dst.\n2. Dropping skb_dst before queuing unresolved skbs in\n   ip6mr_cache_unresolved(), matching the fact that multicast\n   forwarding resolves outgoing routes anew via ip6_route_output().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-90119": {
                 "cve_id": "CVE-2026-90119",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -165633,6 +165708,45 @@
                         "introduced": "6.17.1-300.fc43",
                         "identifier": "fc43",
                         "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98354": {
+                "cve_id": "CVE-2026-98354",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/mad: Fix receive buffer leak when PKey enforcement fails\n\nib_mad_complete_recv() initializes mad_recv_wc->rmpp_list and then runs\nib_mad_enforce_security() before linking recv_buf onto that list.  On\nfailure it calls ib_free_recv_mad(), which only walks rmpp_list and frees\nthe ib_mad_private of every buffer found there.  As the list is still\nempty at that point, nothing is freed at all.\n\nThe caller cannot clean up either: ib_mad_recv_done() sets recv to NULL\nright after ib_mad_complete_recv() returns, assuming the MAD layer took\nownership of the buffer.  Every MAD that fails the PKey check therefore\nleaks one ib_mad_private (about 300 bytes per IB port MAD, ~2K for OPA),\nand a remote node can trigger this repeatedly by sending MADs with a\nwrong PKey.\n\nLink recv_buf onto rmpp_list right after the list is initialized, so the\nerror path has something to free.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98356": {
+                "cve_id": "CVE-2026-98356",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/bnxt_re: check create_singlethread_workqueue() in DCB setup\n\nbnxt_re_init_dcb_wq() ignores a failed allocation. The async DCB\nhandler later calls queue_work() on the NULL pointer.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98357": {
+                "cve_id": "CVE-2026-98357",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: wait for deferred control PDU completions before releasing the connection\n\nisert_send_done() hands ISTATE_SEND_TASKMGTRSP, ISTATE_SEND_REJECT and\nISTATE_SEND_TEXTRSP completions off to isert_comp_wq and returns.  The work\nitem then runs isert_completion_put() -> isert_put_cmd(), which reads\nisert_conn->conn and takes conn->cmd_lock.\n\nNothing orders that work item against teardown.  isert_wait_conn() queues\nisert_release_work, which frees isert_conn, and iscsit_close_connection()\nfrees the iscsit_conn right after it returns, so the queued work can run\nagainst freed memory.\n\nCount the deferred control PDU completions per connection and let\nisert_wait_conn() wait for them before the release work is queued.\n\nISTATE_SEND_LOGOUTRSP is deliberately not counted: that branch runs\niscsit_logout_post_handler(), which ends up waiting for\nconn->conn_wait_comp, and that completion is only sent by\niscsit_close_connection() after it has called iscsit_wait_conn().\nWaiting for it here would deadlock.  Its wait stays the existing\nisert_wait4logout().\n\nThe splat below is from a kernel with tracing printk()s and an msleep(200)\ninjected into isert_do_control_comp() to widen the window:\n\n  BUG: KASAN: slab-use-after-free in isert_put_cmd+0x53d/0x620\n  Read of size 8 at addr ffff8881054f1038 by task kworker/u17:1/182\n\n  CPU: 0 UID: 0 PID: 182 Comm: kworker/u17:1 Tainted: G    B               7.2.0-rc5-TWIDE-gb8babf08acc7 #1 PREEMPT(lazy)\n  Tainted: [B]=BAD_PAGE\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n  Workqueue: isert_comp_wq isert_do_control_comp\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x53/0x70\n   print_report+0xd0/0x630\n   ? __pfx__raw_spin_lock_irqsave+0x10/0x10\n   ? _raw_spin_unlock_irqrestore+0x3e/0x70\n   ? isert_put_cmd+0x53d/0x620\n   kasan_report+0xce/0x100\n   ? isert_put_cmd+0x53d/0x620\n   isert_put_cmd+0x53d/0x620\n   ? isert_completion_put+0x305/0x330\n   ? isert_do_control_comp+0x2ef/0x310\n   process_one_work+0x633/0x1030\n   ? assign_work+0x11d/0x370\n   worker_thread+0x45b/0xd10\n   ? __pfx_worker_thread+0x10/0x10\n   ? __pfx_worker_thread+0x10/0x10\n   kthread+0x2c6/0x3b0\n   ? recalc_sigpending+0x15c/0x1e0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork+0x36e/0x5a0\n   ? __pfx_ret_from_fork+0x10/0x10\n   ? __switch_to+0x572/0xdd0\n   ? __pfx_kthread+0x10/0x10\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n\n  Allocated by task 48:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   __kasan_kmalloc+0x8f/0xa0\n   __kmalloc_cache_noprof+0x158/0x370\n   isert_cma_handler+0x1e3/0x2ae0\n   cma_cm_event_handler+0x3e/0x240\n   cma_ib_req_handler+0x17d9/0x4490\n   cm_process_work+0x41/0x330\n   cm_work_handler+0x5727/0xc160\n   process_one_work+0x633/0x1030\n   worker_thread+0x45b/0xd10\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30\n\n  Freed by task 184:\n   kasan_save_stack+0x33/0x60\n   kasan_save_track+0x14/0x30\n   kasan_save_free_info+0x3b/0x60\n   __kasan_slab_free+0x43/0x70\n   kfree+0x121/0x380\n   iscsit_close_connection+0x7cf/0x1e60\n   iscsit_take_action_for_connection_exit+0x1b6/0x360\n   iscsi_target_tx_thread+0x472/0x690\n   kthread+0x2c6/0x3b0\n   ret_from_fork+0x36e/0x5a0\n   ret_from_fork_asm+0x1a/0x30",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
                     }
                 ]
             },
