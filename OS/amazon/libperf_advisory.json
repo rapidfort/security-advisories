@@ -28958,7 +28958,7 @@
                 "cve_id": "CVE-2026-63990",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbonding: refuse to enslave CAN devices\n\nsyzbot reported a kernel paging request crash in\ncan_rx_unregister() inside net/can/af_can.c. The crash occurs\nbecause a virtual CAN device (vxcan) is being enslaved to a\nbonding master.\n\nDuring the enslavement process, the bonding driver mutates\nand modifies the network device states to fit an Ethernet-like\naggregation model. However, CAN devices operate on a completely\ndifferent Layer 2 architecture, relying on the CAN mid-layer\nprivate data structure (can_ml_priv) instead of standard\nEthernet structures. Since bonding does not initialize or\nmaintain these CAN structures, subsequent operations on the\nhalf-enslaved interface (such as closing associated sockets\nvia isotp_release) lead to a null-pointer dereference when\naccessing the CAN receiver lists.\n\nBonding CAN interfaces is architecturally invalid as CAN lacks\nMAC addresses, ARP capabilities, and standard Ethernet\nlink-layer mechanisms. While generic loopback devices are\nblocked globally in net/core/dev.c, virtual CAN devices\nbypass this check because they do not carry the IFF_LOOPBACK\nflag, despite acting as local software-loopbacks.\n\nFix this by explicitly blocking network devices of type\nARPHRD_CAN from being enslaved at the very beginning of\nbond_enslave(). This prevents illegal state mutations,\neliminates the resulting KASAN crashes, and avoids potential\nmemory leaks from incomplete socket cleanups.\n\nAs the CAN support has been added a long time after bonding\nthe Fixes-tag points to the introduction of ARPHRD_CAN that\nwould have needed a specific handling in bonding_main.c.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -43640,6 +43640,20 @@
                     }
                 ]
             },
+            "CVE-2026-80784": {
+                "cve_id": "CVE-2026-80784",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmptcp: pm: fix memory leak from alloc-during-teardown race\n\nmptcp_pm_destroy() empties msk->pm.anno_list and\nmsk->pm.userspace_pm_local_addr_list under msk->pm.lock during socket\nteardown, dropping the lock between the two.\n\nA concurrent userspace PM genl ANNOUNCE on the same msk holds a sock\nreference via mptcp_token_get_sock() and, in\nmptcp_pm_nl_announce_doit(), calls\nmptcp_userspace_pm_append_new_local_addr() and\nmptcp_pm_announced_alloc(). Both take msk->pm.lock briefly to add to\ntheir respective lists. Because the genl handler holds a sock reference,\nmptcp_pm_destroy() may run on the same msk via mptcp_disconnect(), which\ninvokes mptcp_destroy_common() without dropping the sock refcount,\nbefore the handler completes.\n\nIf the lock acquisitions interleave such that mptcp_pm_destroy() empties\na list first, the later alloc adds its entry to a list head that nothing\nelse iterates for this msk, and the entry leaks. kmemleak reports both\nmptcp_pm_add_addr objects (from mptcp_pm_announced_alloc()) and\nmptcp_pm_addr_entry objects (from\nmptcp_userspace_pm_append_new_local_addr()) under sustained concurrent\nANNOUNCE + close load against the userspace PM.\n\nAdd an MPTCP_PM_DESTROYING bit in msk->pm.status, set by\nmptcp_pm_destroy() under pm.lock before the lists are emptied and\nchecked under pm.lock by the alloc paths. Either the alloc takes pm.lock\nfirst, in which case its entry is on the list when mptcp_pm_destroy()\nfrees it; or mptcp_pm_destroy() takes pm.lock first, in which case the\nlater alloc observes the bit and refuses.\n\nFound by an MPTCP protocol-flow harness extending BRF (arXiv:2305.08782).",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-80788": {
                 "cve_id": "CVE-2026-80788",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -43738,6 +43752,20 @@
                     }
                 ]
             },
+            "CVE-2026-80843": {
+                "cve_id": "CVE-2026-80843",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: fix xfrm_state_construct() auth-trunc leak\n\nattach_auth_trunc() can allocate x->aalg while leaving\nx->props.aalgo at zero when the selected auth algorithm has no\nsadb_alg_id. One real case is cmac(aes).\n\nxfrm_state_construct() then treats !x->props.aalgo as \"no auth\nalgorithm attached yet\" and calls attach_auth(). That overwrites\nx->aalg and loses the first allocation. Any later failure or teardown\nonly frees the replacement pointer.\n\nCheck whether x->aalg is already attached instead of inferring that\nstate from x->props.aalgo.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-80848": {
                 "cve_id": "CVE-2026-80848",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -43757,6 +43785,48 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntls: device: fix out-of-bounds write in tls_append_frag()\n\nFound with syzkaller and a local syzbot instance running on top of a\nnetdevsim TLS offload emulation; tls_device.c is otherwise only reachable\non a machine with a NIC that implements the offload.\n\ntls_push_data() only checks whether the open record still has room for\nanother frag at the bottom of its loop, and the MSG_MORE early break\nskips that check.  The record survives to the next syscall with the frag\ncount it already had, and tls_append_frag() does not check either, so\nwith TLS_TX_ZEROCOPY_RO every splice(SPLICE_F_MORE) of a byte or two adds\na non-coalescing pipe page and num_frags walks off the end of\ntls_record_info.frags[MAX_SKB_FRAGS].  Once the record is pushed,\ntls_push_record() runs the same index over sg_tx_data[MAX_SKB_FRAGS] and\nthe sg_set_page() writes land on the destruct_work that follows it, which\nthe workqueue then calls.\n\nThe byte limit is fine because copy drops to 0 and the loop falls through\nto the same check; the frag count has no such feedback.\n\nPush the record rather than keep a full one open, which is what a plain\nTCP socket does - tcp_sendmsg_locked() uses tcp_mark_push() and\nnew_segment in both the copy and the MSG_SPLICE_PAGES paths, and tls_sw\nalready sets full_record when the sk_msg ring fills up, MSG_MORE or not.\n\n  BUG: KASAN: slab-out-of-bounds in tls_append_frag ( net/tls/tls_device.c:269)\n  Write of size 8 at addr ffff8881104d1530 by task tls_oob/450\n\n  CPU: 2 UID: 0 PID: 450 Comm: tls_oob Not tainted 7.2.0-rc7+ #329 PREEMPT\n  Call Trace:\n   <TASK>\n   dump_stack_lvl (lib/dump_stack.c:94 lib/dump_stack.c:120)\n   print_report (mm/kasan/report.c:378 mm/kasan/report.c:482)\n   kasan_report (mm/kasan/report.c:595)\n   tls_append_frag (net/tls/tls_device.c:269)\n   tls_push_data (net/tls/tls_device.c:518)\n   tls_device_sendmsg (net/tls/tls_device.c:583)\n   inet_sendmsg (net/ipv4/af_inet.c:865)\n   sock_sendmsg (net/socket.c:775 net/socket.c:790 net/socket.c:813)\n   splice_to_socket (fs/splice.c:884)\n   do_splice (fs/splice.c:936 fs/splice.c:1349)\n   __do_splice (fs/splice.c:1431)\n   __x64_sys_splice (fs/splice.c:1634 fs/splice.c:1616)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:63 arch/x86/entry/syscall_64.c:94)\n   entry_SYSCALL_64_after_hwframe (arch/x86/entry/entry_64.S:121)\n   </TASK>\n\nand, once the record is pushed:\n\n  UBSAN: array-index-out-of-bounds in net/tls/tls_device.c:300:24\n  index 18 is out of range for type 'skb_frag_t [17]'\n  UBSAN: array-index-out-of-bounds in net/tls/tls_device.c:301:41\n  index 18 is out of range for type 'scatterlist [17]'\n  UBSAN: array-index-out-of-bounds in net/tls/tls_device.c:302:39\n  index 18 is out of range for type 'scatterlist [17]'\n  UBSAN: array-index-out-of-bounds in net/tls/tls_device.c:307:38\n  index 26 is out of range for type 'scatterlist [17]'\n\n  kernel tried to execute NX-protected page - exploit attempt? (uid: 0)\n  BUG: unable to handle page fault for address: ffffea000411a680\n  #PF: supervisor instruction fetch in kernel mode\n  #PF: error_code(0x0011) - permissions violation\n  Oops: Oops: 0011 [#1] SMP KASAN PTI\n  Workqueue: ktls_device_destruct 0xffffea000411a680\n  RIP: 0010:0xffffea000411a680\n  Call Trace:\n   <TASK>\n   worker_thread (kernel/workqueue.c:3405 kernel/workqueue.c:3486)\n   kthread (kernel/kthread.c:436)\n   ret_from_fork (arch/x86/kernel/process.c:158)\n   ret_from_fork_asm (arch/x86/entry/entry_64.S:245)\n   </TASK>",
                 "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80855": {
+                "cve_id": "CVE-2026-80855",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: fix invalidate lock leak on open O_TRUNC DAX failure\n\nfuse_open() takes filemap_invalidate_lock() for a DAX truncate\n(dax_truncate = true) and releases it before the out_inode_unlock\nlabel.  But when fuse_dax_break_layouts() fails, the goto\nout_inode_unlock skips the unlock and leaks the rwsem, so any later\nfault or truncate on the file stalls on the stale lock.\n\nfuse_dax_break_layouts() can fail with -ERESTARTSYS when a signal\ninterrupts the wait for busy DAX pages to drain:\n\n  open(\"file\", O_RDWR | O_TRUNC)\n  \u2514\u2500 fuse_open()\n     \u251c\u2500 filemap_invalidate_lock()        # dax_truncate\n     \u2514\u2500 fuse_dax_break_layouts()\n        \u2514\u2500 dax_break_layout()\n           \u2514\u2500 wait_page_idle()           # TASK_INTERRUPTIBLE\n              \u2514\u2500 fuse_wait_dax_page()    # unlock, schedule, re-lock\n                 \u2514\u2500 signal \u2192 -ERESTARTSYS\n     goto out_inode_unlock               # <- lock leaked\n\nFix this by moving filemap_invalidate_unlock() below the label so\nthat all error paths release the lock, and rename the label to\nout_unlock as it now covers more than just the inode lock.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80856": {
+                "cve_id": "CVE-2026-80856",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: fix invalidate lock leak on setattr writeback failure\n\nfuse_do_setattr() takes filemap_invalidate_lock() for a DAX truncate\n(fault_blocked = true) and releases it at the out:/error: labels.  But\nwhen a writeback flush is also needed, a write_inode_now() failure\nreturns directly and leaks the lock, so any later fault or truncate on\nthe file stalls on the stale rwsem.\n\nFor example, truncate(2) on a setuid file reaches fuse_do_setattr()\nwith both ATTR_SIZE and ATTR_MODE set:\n\n  truncate(2)\n  \u2514\u2500 do_truncate()\n     \u251c\u2500 dentry_needs_remove_privs()         # S_ISUID\n     \u2514\u2500 notify_change()                     # KILL_SUID -> ATTR_MODE\n        \u2514\u2500 fuse_setattr()                   # no killpriv:\n           \u2502                                #   ia_valid |= ATTR_MODE\n           \u2514\u2500 fuse_do_setattr()\n              \u251c\u2500 filemap_invalidate_lock()  # IS_DAX && is_truncate\n              \u2514\u2500 write_inode_now()          # is_wb && ATTR_MODE\n                 \u2514\u2500 if (err)                # e.g. daemon -> -EIO\n                    return err              # <- lock leaked\n\nFix this by adding an unlock label that releases the lock before\nreturning the error, and use it for the fuse_dax_break_layouts()\nfailure path as well.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80877": {
+                "cve_id": "CVE-2026-80877",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nafs: Fix vllist leak\n\nFix a leak of the new vllist in afs_update_cell() in the event that it is an\nempty list (nr_servers == 0), in which case the old list isn't displaced\nunless the old list is also empty.",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
