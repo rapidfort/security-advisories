@@ -1120,6 +1120,19 @@
                     }
                 ]
             },
+            "CVE-2026-64115": {
+                "cve_id": "CVE-2026-64115",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvsock/vmci: fix UAF when peer resets connection during handshake\n\nvmci_transport_recv_connecting_server() returned err = 0 for a peer\nRST in its default switch arm:\n\n\terr = pkt->type == VMCI_TRANSPORT_PACKET_TYPE_RST ? 0 : -EINVAL;\n\nThat made vmci_transport_recv_listen() skip vsock_remove_pending(),\nleaving the pending socket on the listener's pending_links with\nsk_state = TCP_CLOSE while destroy: still dropped the explicit\nreference taken before schedule_delayed_work().\n\nOne second later vsock_pending_work() observed is_pending=true and\nperformed full cleanup: vsock_remove_pending() then the two trailing\nsock_put(sk) calls -- the first reached refcount 0 and __sk_freed\nthe socket, and the second wrote into the freed object:\n\n  BUG: KASAN: slab-use-after-free in refcount_warn_saturate\n  Write of size 4 at addr ffff88800b1cac80 by task kworker\n  Workqueue: events vsock_pending_work\n\nTreat peer RST like any other unexpected packet type (err = -EINVAL).\nAll destroy: arms now return err < 0, so vmci_transport_recv_listen()\nremoves pending from pending_links synchronously and\nvsock_pending_work() takes the is_pending=false / !rejected branch,\ndropping only its own work reference.  This also closes the\nmulti-packet race Sashiko reported on v2: pending is removed from\nthe list before any subsequent packet can find it.\n\nThe pre-existing sk_acceptq_removed() gap on the err < 0 path of\nvmci_transport_recv_listen() that Sashiko also noted is not\nintroduced or changed by this patch.\n\nTested on lts-6.12.79 with KASAN: 52/100 unpatched -> 0/100 patched.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-64496": {
                 "cve_id": "CVE-2026-64496",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -1281,6 +1294,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-tcp: fix host memory disclosure on R2T for a read command\n\nnvme_tcp_handle_r2t() does not check the direction of the request the\nR2T refers to. A malicious controller can send an R2T for a READ and\nthe host will answer it: nvme_tcp_setup_h2c_data_pdu() builds the\nH2CData header and nvme_tcp_try_send_data() sends the request's data\nbuffer. That buffer is the READ destination, so its contents go to the\ncontroller.\n\nThe command then completes normally and nothing is logged.\n\nAgainst a test controller that answers every READ with an R2T, a 4096\nbyte buffered read returned all 4096 bytes, split over two R2Ts. The\npages contained stale kernel data, including an array of struct page\npointers.\n\nReject an R2T for a request that is not a write.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-89530": {
+                "cve_id": "CVE-2026-89530",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Reject inline replies that overflow the pull-up buffer\n\nAn RPC-over-RDMA client can request a reply, such as an NFS READ\npayload, without providing a Write list or a Reply chunk to carry\nit. When such a reply needs more scatter/gather entries than the\ndevice's Send Queue supports, svc_rdma_pull_up_needed() selects\npull-up and svc_rdma_pull_up_reply_msg() linearizes the whole\nreply into sctxt->sc_xprt_buf. That buffer is only sc_max_req_size\nbytes, while the reply on this path is bounded only by the client's\nrequest, so svc_rdma_xb_linearize() copies past the end of the\nbuffer and corrupts adjacent slab memory. The oversized length is\nthen stored in sc_sges[0].length and posted, so the device also\nreads beyond the mapped region.\n\nThe SGE-exhaustion branch is the only pull-up path that can exceed\nthe buffer: the threshold branch pulls up only replies smaller\nthan RPCRDMA_PULLUP_THRESH, and replies that fit the device's SGE\nbudget are sent directly without linearization. Make\nsvc_rdma_pull_up_needed() report -E2BIG when the reply it would\npull up cannot fit sc_max_req_size, and fail the request with\nERR_CHUNK as RFC 8166 Section 4.5.3 directs rather than dropping\nthe connection.\n\nThe helper no longer answers a simple yes/no question: it now\nreports pull-up, no pull-up, or -E2BIG for a reply too large to\nlinearize. Rename svc_rdma_pull_up_needed() to\nsvc_rdma_check_pull_up() so its name no longer implies a boolean\npredicate.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -52487,7 +52513,7 @@
                 "cve_id": "CVE-2026-63999",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nethtool: rss: fix indir_table and hkey leak on get_rxfh failure\n\nrss_prepare_get() allocates the indirection table and hash key buffer\nvia rss_get_data_alloc(), then calls ops->get_rxfh() to populate them.\nIf get_rxfh() fails, the function returns an error without freeing\nthe allocation.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -52942,19 +52968,6 @@
                 "cve_id": "CVE-2026-64114",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: raw: reject IP_HDRINCL packets with ihl < 5\n\nraw_send_hdrinc() validates that the caller-supplied IPv4 header\nfits within the message length:\n\n    iphlen = iph->ihl * 4;\n    err = -EINVAL;\n    if (iphlen > length)\n        goto error_free;\n\n    if (iphlen >= sizeof(*iph)) {\n        /* fix up saddr, tot_len, id, csum, transport_header */\n    }\n\nIt does not, however, reject ihl < 5.  For such a packet the\n\"if (iphlen >= sizeof(*iph))\" branch is skipped, leaving the\ncrafted iphdr untouched, but the packet is still handed to\n__ip_local_out() and onward.  Downstream consumers that read\niph->ihl assume a sane value: net/ipv4/ah4.c:ah_output() in\nparticular subtracts sizeof(struct iphdr) from top_iph->ihl * 4\nand passes the (signed-int-negative, then cast to size_t)\nresult to memcpy(), producing an OOB access of length close to\nSIZE_MAX and a host kernel panic.\n\nAn IPv4 header with ihl < 5 is malformed by definition (RFC 791:\n\"Internet Header Length is the length of the internet header in\n32 bit words ... Note that the minimum value for a correct header\nis 5.\").  The kernel should not be willing to inject such a\npacket into its own output path.\n\nReject \"iphlen < sizeof(*iph)\" alongside the existing\n\"iphlen > length\" check.  This matches the principle that locally\nconstructed packets that re-enter the IP stack must pass the same\nbasic sanity tests that a foreign packet would be subjected to.\n\nOnce this lands, the \"if (iphlen >= sizeof(*iph))\" wrapper around\nthe fixup branch becomes redundant; left in place to keep the\npatch minimal and backport-friendly.  A follow-up can unwrap it.\n\nNote that commit 86f4c90a1c5c (\"ipv4, ipv6: ensure raw socket\nmessage is big enough to hold an IP header\") ensures the message\nbuffer is large enough to hold an iphdr, but does not constrain\nthe self-reported iph->ihl.\n\nReachability: the malformed packet source is any caller with\nCAP_NET_RAW, including an unprivileged process in a user+net\nnamespace on a kernel with CONFIG_USER_NS=y.  The reproduced AH\ncrash also requires a matching xfrm AH policy on the outgoing\nroute; a container granted CAP_NET_ADMIN can install that state\nand policy in its netns.  Loopback bypasses xfrm_output, so the\ntrigger uses a real netdev.\n\nReproduced on UML + KASAN: kernel-mode fault at addr 0x0 with\nmemcpy_orig at the crash site.  Same shape reproduces inside a\nrootless Docker container with --cap-add NET_ADMIN on a stock\ndistro kernel.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-64115": {
-                "cve_id": "CVE-2026-64115",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvsock/vmci: fix UAF when peer resets connection during handshake\n\nvmci_transport_recv_connecting_server() returned err = 0 for a peer\nRST in its default switch arm:\n\n\terr = pkt->type == VMCI_TRANSPORT_PACKET_TYPE_RST ? 0 : -EINVAL;\n\nThat made vmci_transport_recv_listen() skip vsock_remove_pending(),\nleaving the pending socket on the listener's pending_links with\nsk_state = TCP_CLOSE while destroy: still dropped the explicit\nreference taken before schedule_delayed_work().\n\nOne second later vsock_pending_work() observed is_pending=true and\nperformed full cleanup: vsock_remove_pending() then the two trailing\nsock_put(sk) calls -- the first reached refcount 0 and __sk_freed\nthe socket, and the second wrote into the freed object:\n\n  BUG: KASAN: slab-use-after-free in refcount_warn_saturate\n  Write of size 4 at addr ffff88800b1cac80 by task kworker\n  Workqueue: events vsock_pending_work\n\nTreat peer RST like any other unexpected packet type (err = -EINVAL).\nAll destroy: arms now return err < 0, so vmci_transport_recv_listen()\nremoves pending from pending_links synchronously and\nvsock_pending_work() takes the is_pending=false / !rejected branch,\ndropping only its own work reference.  This also closes the\nmulti-packet race Sashiko reported on v2: pending is removed from\nthe list before any subsequent packet can find it.\n\nThe pre-existing sk_acceptq_removed() gap on the err < 0 path of\nvmci_transport_recv_listen() that Sashiko also noted is not\nintroduced or changed by this patch.\n\nTested on lts-6.12.79 with KASAN: 52/100 unpatched -> 0/100 patched.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -67836,19 +67849,6 @@
                     }
                 ]
             },
-            "CVE-2026-89530": {
-                "cve_id": "CVE-2026-89530",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Reject inline replies that overflow the pull-up buffer\n\nAn RPC-over-RDMA client can request a reply, such as an NFS READ\npayload, without providing a Write list or a Reply chunk to carry\nit. When such a reply needs more scatter/gather entries than the\ndevice's Send Queue supports, svc_rdma_pull_up_needed() selects\npull-up and svc_rdma_pull_up_reply_msg() linearizes the whole\nreply into sctxt->sc_xprt_buf. That buffer is only sc_max_req_size\nbytes, while the reply on this path is bounded only by the client's\nrequest, so svc_rdma_xb_linearize() copies past the end of the\nbuffer and corrupts adjacent slab memory. The oversized length is\nthen stored in sc_sges[0].length and posted, so the device also\nreads beyond the mapped region.\n\nThe SGE-exhaustion branch is the only pull-up path that can exceed\nthe buffer: the threshold branch pulls up only replies smaller\nthan RPCRDMA_PULLUP_THRESH, and replies that fit the device's SGE\nbudget are sent directly without linearization. Make\nsvc_rdma_pull_up_needed() report -E2BIG when the reply it would\npull up cannot fit sc_max_req_size, and fail the request with\nERR_CHUNK as RFC 8166 Section 4.5.3 directs rather than dropping\nthe connection.\n\nThe helper no longer answers a simple yes/no question: it now\nreports pull-up, no pull-up, or -E2BIG for a reply too large to\nlinearize. Rename svc_rdma_pull_up_needed() to\nsvc_rdma_check_pull_up() so its name no longer implies a boolean\npredicate.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-89531": {
                 "cve_id": "CVE-2026-89531",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -74362,6 +74362,110 @@
                     }
                 ]
             },
+            "CVE-2026-98173": {
+                "cve_id": "CVE-2026-98173",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix use-after-free of iface in cifs_try_adding_channels()\n\ncifs_try_adding_channels() iterates ses->iface_list with\nlist_for_each_entry_safe_from(), which captures the next entry\n(niface) under iface_lock.  The loop body then drops iface_lock for\nthe whole duration of cifs_ses_add_channel().\n\nA concurrent interface refresh (SMB3_request_interfaces() ->\nparse_server_interfaces()) marks all ifaces inactive and removes and\nfrees any that are not re-advertised via list_del() + kref_put(),\nwhere release_iface() is a bare kfree().  Since niface typically has\nno channel holding a reference, the list reference is its last and it\ncan be freed inside the unlocked window.  On continue, the iterator\nadvance step then dereferences niface->iface_head.next, and the loop\nbody reads iface->rdma_capable/is_active, both on freed memory.\n\nFix this by never keeping an unreferenced list pointer across the\nunlocked window.  Each channel attempt now re-scans the list from the\nhead under iface_lock, takes a kref on the selected candidate, and\npasses only that referenced candidate to cifs_ses_add_channel().\nweight_fulfilled still tracks selection progress, so restarting the\nscan preserves the original weighted distribution and the\nweight_fulfilled-before-kref_put ordering on the failure path.\n\nAdd a per-pass attempts cap so a flapping interface refresh cannot\nkeep the inner loop spinning within a single tries increment.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98174": {
+                "cve_id": "CVE-2026-98174",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix rlist race and missing initialization\n\nTCP_Server_Info.rlist is allocated via kzalloc which zeros both ->next\nand ->prev to NULL instead of pointing to itself, making list_empty()\nalways return false and list_add() dereference a NULL ->prev pointer.\n\nAlso, cifs_signal_cifsd_for_reconnect() can be called concurrently\nfrom multiple cifsd threads, allowing the same server's rlist node to\nbe added twice into the local list, corrupting it.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98175": {
+                "cve_id": "CVE-2026-98175",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: cancel reconnect work in clean_demultiplex_info()\n\nclean_demultiplex_info() cancels server->echo delayed work but not\nserver->reconnect, which can cause a use-after-free when the\ndemultiplex thread exits while a reconnect work is still queued:\n\n  cifs_demultiplex_thread()\n    cifs_readv_from_socket()\n      cifs_reconnect()\n        __cifs_reconnect()\n          cifs_queue_server_reconn()\n            mod_delayed_work(cifsiod_wq, &server->reconnect, 0)\n    clean_demultiplex_info()\n      cancel_delayed_work_sync(&server->echo)   // echo canceled\n                                                 // reconnect NOT canceled\n      kfree_sensitive(server)                    // server freed\n\n  ...later, on cifsiod_wq:\n\n  smb2_reconnect_server()\n    server->srv_count  // UAF read of freed server\n\nFix this by canceling server->reconnect delayed work in\nclean_demultiplex_info() before the server is freed, the same way\ncifs_put_tcp_session() already does.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98176": {
+                "cve_id": "CVE-2026-98176",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Avoid integer underflow with ffs in EOP ring size calc\n\nThe low 6 bits of cp_hqd_eop_control store the base-2 logarithm\nof the EOP ring size. This was calculated as\n\nffs(q->eop_ring_buffer_size / sizeof(unsigned int)) - 1 - 1\n\nBut ffs can in theory return 1 or 0, so this could underflow\n(although in practice the ring buffer size cannot be less than 4096).\n\nChange this to\n\nffs(q->eop_ring_buffer_size / sizeof(unsigned int) / 4)\n\nusing properties of logarithms.\n\n(cherry picked from commit 4f18c56630383c14bfc6b2d65f88f2f895d2121a)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98177": {
+                "cve_id": "CVE-2026-98177",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Avoid integer underflow in EOP ring size calculation.\n\nThe low 6 bits of cp_hqd_eop_control store the base-2 logarithm\nof the EOP ring size. This was calculated as\n\norder_base_2(q->eop_ring_buffer_size / 4) - 1\n\nBut order_base_2 can in theory return 0, so this could underflow\n(although in practice the ring buffer size cannot be less than 4096).\n\nChange this to\n\norder_base_2(q->eop_ring_buffer_size / 8)\n\nusing properties of logarithms.\n\nAlso add to the above comment to make the mathematics more clear.\n\n(cherry picked from commit f0f43fcf8b2b3a924cad9444340921c96ed5f634)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98179": {
+                "cve_id": "CVE-2026-98179",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: fix rmmio iounmap skipped on device removal\n\namdgpu_pci_remove() calls drm_dev_unplug() before fini_sw(), so\ndrm_dev_enter() is already false there and the iounmap() guarded by it\nis skipped. This .remove path runs on both hot-unplug and plain rmmod,\nso the register BAR ioremap mapping leaks one instance per unload.\n\nUnmap rmmio unconditionally (guard only on non-NULL) and drop the now\nunused idx.\n\n(cherry picked from commit dd6f86a97260e5207d3329ad03aa89fdad61b1e6)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98181": {
+                "cve_id": "CVE-2026-98181",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/gud: fix out-of-bounds write in gud_plane_atomic_check()\n\nThe plane property loop uses req->properties[num_properties + i] as write\nindex while simultaneously incrementing `num_properties` inside the loop.\nAt iteration i, num_properties has also incremented by i, so the write\nis done at `initial_num_properties + 2*i`, skipping every other index and\nadvancing by 2 per iteration.\n\nWith just 2 connector and 32 plane properties the last write happens at\nindex 64, one slot past the end of the 64-slot (indices 0\u201363)\nallocation. A USB device can trigger OOB by advertising the maximum\nnumber of properties.\n\nFix by dropping the redundant `+ i`; num_properties is already the correct\nrunning index, as gud_connector_fill_properties() fills the preceding\nslots.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98182": {
+                "cve_id": "CVE-2026-98182",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: refuse to make a monitor active when it has no queue\n\nA monitor interface only gets a TXQ if it's created active, and one can't\nbe added later. Setting the flag on a down interface is still allowed, so\nthe driver is handed a monitor with no queue. ath9k dereferences it:\n\n  BUG: kernel NULL pointer dereference, address: 0000000000000066\n  RIP: 0010:ath_tx_node_init+0x49/0x170 [ath9k]\n   ath9k_add_interface+0x10c/0x140 [ath9k]\n   drv_add_interface+0x54/0x250 [mac80211]\n   ieee80211_do_open+0x32f/0x800 [mac80211]\n\nReached with CAP_NET_ADMIN by \"iw dev X set monitor active\" followed by\n\"ip link set X up\". RTNL is held, so netlink operations block behind it.\n\nRefuse the flag when there is no queue to give.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-98354": {
                 "cve_id": "CVE-2026-98354",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -74432,6 +74536,123 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: insert mcg into mcg_tree only after rxe_mcast_add() succeeds\n\nrxe_get_mcg() publishes a newly allocated multicast group in\nrxe->mcg_tree before programming the backing Ethernet multicast address\nwith rxe_mcast_add(), which runs outside mcg_lock. A local userspace\nRDMA client reaches this path with ATTACH_MCAST on a UD QP; if\nrxe_mcast_add() then returns an error (for example -ENODEV when the\nbacking netdev has been removed, or a propagated dev_mc_add() error),\nthe unwind frees the published group without removing it from the tree.\nA later lookup of the same MGID dereferences the freed struct rxe_mcg\nfrom __rxe_lookup_mcg().\n\nFix this by keeping the new mcg private until rxe_mcast_add() succeeds.\nSplit the tree publication into __rxe_publish_mcg(), call rxe_mcast_add()\nbefore taking the tree reference, and free the still-private mcg on\nfailure. Because the group is never visible in mcg_tree until the\nmulticast address is programmed, no concurrent caller can look it up or\nattach a QP to a group that is about to be torn down, so the error path\nneeds no conditional unwind. If another caller publishes the same MGID\nwhile the address is being programmed, the post-add re-check under\nmcg_lock finds the winner; this caller then drops its private object and\nbalances its own rxe_mcast_add() with rxe_mcast_del() before returning\nthe winner.\n\nReproduced by forcing the rxe_mcast_add() error return under KASAN:\nwithout the change the next attach to the same MGID reports a\nslab-use-after-free in __rxe_lookup_mcg(); with it the forced failure\nreturns cleanly. A no-injection attach/detach regression, including a\ntwo-QP shared join/leave and re-attach, stays KASAN- and leak-clean.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98362": {
+                "cve_id": "CVE-2026-98362",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nclk: scpi: bound-check DVFS index in scpi_dvfs_recalc_rate\n\ndvfs_get_idx() may return an out-of-range index if the SCP firmware is\nbuggy or returns a stale value. Only negative indexes were rejected, so a\nlarge index walked past info->opps and could treat garbage as a clock rate\n(KASAN OOB / wrong frequency to consumers). The missing upper bound dates\nback to the original SCPI clock driver.\n\nTreat indexes >= opp count as invalid and return 0, same as idx < 0.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98363": {
+                "cve_id": "CVE-2026-98363",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfirmware: arm_scpi: reject DVFS OPP count above MAX_DVFS_OPPS\n\nscpi_dvfs_get_info() already rejected a zero opp_count, but still trusted\nany larger value from the SCP firmware. The shared-memory reply only holds\nMAX_DVFS_OPPS entries in buf.opps[]; a bigger count over-reads that array\nand then sizes the allocated OPP table incorrectly (garbage OPPs / OOB).\nThe missing upper bound dates back to the original SCPI DVFS support.\n\nReject zero and out-of-range counts in one check and return -EINVAL.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98364": {
+                "cve_id": "CVE-2026-98364",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: hold net_device reference under RCU in bundle creation\n\nxfrm_bundle_create() and xfrm_create_dummy_bundle() read dst->dev into\na local pointer without taking a device reference, then pass it to\nxfrm_fill_dst(). A concurrent RTM_DELLINK replaces dst->dev via\ndst_dev_put() and frees the old net_device, causing a use-after-free\nwhen xfrm6_fill_dst() later dereferences the stale dev pointer.\n\n  BUG: KASAN: slab-use-after-free in xfrm6_fill_dst+0x82c/0x860\n  (net/ipv6/xfrm6_policy.c:86 netdev_hold())\n  Read of size 8 at addr ffff8880142fe588 by task exploit/153\n  Call Trace:\n   xfrm6_fill_dst+0x82c/0x860\n   xfrm_resolve_and_create_bundle+0x21d4/0x2bd0\n   xfrm_lookup_with_ifid+0x485/0x1640\n   ip6_dst_lookup_flow+0x19b/0x1e0\n   udpv6_sendmsg+0x1443/0x2dd0\n\nFix this by reading dst->dev via dst_dev_rcu() and keeping the RCU\nread-side critical section active until xfrm_fill_dst() has taken the\nrequired device references.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98365": {
+                "cve_id": "CVE-2026-98365",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: Fix integer overflow in mr_check_range() leading to OOB access\n\nmr_check_range() validates that [iova, iova+length) falls within the\nregistered MR range using wraparound-prone arithmetic:\n\n    if (iova < mr->ibmr.iova ||\n        iova + length > mr->ibmr.iova + mr->ibmr.length)\n\nA remote peer can craft an RDMA-Write/Read RETH so that iova + length\nwraps to 0 (e.g. iova=0xfffffffffffffff8, length=8), bypassing the\ncheck. rxe_mr_iova_to_index() then computes a huge index (int idx, only\nguarded by WARN_ON) and rxe_mr_copy_xarray() dereferences\nmr->page_info[huge], causing an out-of-bounds read/write and a kernel\noops that is triggerable by an unauthenticated remote peer.\n\nRewrite the check in overflow-safe form; the first two clauses guarantee\nthat the subsequent subtractions do not underflow:\n\n    if (iova < mr->ibmr.iova ||\n        length > mr->ibmr.length ||\n        iova - mr->ibmr.iova > mr->ibmr.length - length)\n\nWith the fix, mr_check_range() returns -EINVAL for the crafted iova and\nthe responder reports REMOTE_ACCESS_ERROR instead of triggering the OOB.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98366": {
+                "cve_id": "CVE-2026-98366",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: validate access flags before swapping the MR's PD\n\nrxe_rereg_user_mr() reassigns mr->ibmr.pd first and only then\nvalidates the IB_MR_REREG_ACCESS argument:\n\n\tif (flags & IB_MR_REREG_PD) {\n\t\trxe_put(old_pd);\n\t\trxe_get(pd);\n\t\tmr->ibmr.pd = ibpd;\n\t}\n\n\tif (flags & IB_MR_REREG_ACCESS) {\n\t\tif (access & ~RXE_ACCESS_SUPPORTED_MR)\n\t\t\treturn ERR_PTR(-EOPNOTSUPP);\n\t\tmr->access = access;\n\t}\n\nBoth flags pass the entry check because RXE_MR_REREG_SUPPORTED is\nIB_MR_REREG_PD | IB_MR_REREG_ACCESS, so a caller can reach the access\ncheck with mr->ibmr.pd already reassigned.\n\nmr->ibmr.pd is owned by the core, which adjusts pd->usecnt only on the\nsuccess path: ib_uverbs_rereg_mr() jumps to put_new_uobj on a driver error\nwithout undoing the reassignment, so mr->pd == new_pd while the usecnts\nstill charge the MR to orig_pd. ib_dereg_mr_user() then decrements\nnew_pd, whose count can reach zero while a memory window still references\nit; uverbs_free_pd() frees the PD on that count alone and rxe_mw_cleanup()\nwrites to freed memory:\n\n  BUG: KASAN: slab-use-after-free in __rxe_put+0x31/0xa0\n  Write of size 4 at addr ffff8881301dd690 by task rxe_poc/591\n   __rxe_put+0x31/0xa0\n   rxe_mw_cleanup+0x42/0x200\n   __rxe_cleanup+0x115/0x370\n   rxe_dealloc_mw+0x4c/0x80\n  Allocated by task 591:\n   ib_uverbs_alloc_pd+0x258/0x540\n  Freed by task 591:\n   ib_dealloc_pd_user+0x174/0x210\n   uverbs_free_pd+0x8d/0xc0\n   ib_uverbs_dealloc_pd+0x18e/0x1d0\n\nValidate the access flags before mutating any state so the callback either\napplies every requested change or none.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98367": {
+                "cve_id": "CVE-2026-98367",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/siw: Clear association under lock if siw_qp_modify fails in siw_accept\n\nWe need to clear cep before release state_lock as siw_qp_llp_close and\nsiw_qp_modify->siw_qp_llp_close did.\n\nOtherwise if siw_qp_modify() fails in siw_accept(), the QP's state_lock\nis released before the error path cleanup. A concurrent ibv_modify_qp()\ntransitioning the QP to ERROR can race in this window:\n\n  siw_accept()                       ibv_modify_qp(ERROR)\n  ----------------------             ----------------------\n  siw_qp_modify() fails\n  up_write(&qp->state_lock)\n                                     down_write(&qp->state_lock)\n                                     nextstate_from_idle():\n\t\t\t\t     if (qp->cep)\n                                       siw_cep_put(qp->cep) <- frees cep\n                                       qp->cep = NULL\n  goto error\n    cep->qp = NULL                   <- UAF\n\nClear qp->cep and drop the association reference taken by siw_cep_get(),\nall under the write lock held from the initial down_write(&qp->state_lock).\nThread B therefore sees qp->cep == NULL, skips its own put, and cannot free\nthe cep before siw_accept() is done with it.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98368": {
+                "cve_id": "CVE-2026-98368",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nesp: downgrade zerocopy managed frags before mutating skb frags\n\nOn the out-of-place output path (esp->inplace == false) ESP rewrites the\nskb frag array: esp_output_head() appends a trailer frag and\nesp_output_tail() replaces the frags with a destination page, both\nreferenced with get_page().\n\nWhen the skb carries zerocopy managed frags (SKBFL_MANAGED_FRAG_REFS) the\npayload frags are owned by the ubuf and must not be referenced or\nunreferenced individually, but ESP mutates the frag array without ever\ndowngrading the skb.  This breaks the managed-frag invariant two ways:\n\n  - esp_ssg_unref() walks the source scatterlist and drops a page\n    reference for every frag, including the ubuf-owned payload frags,\n    pushing their refcount below the GUP pin bias while the pages are\n    still pinned, i.e. a use-after-free of the zerocopy pages;\n\n  - esp_output_tail() installs its destination page as frag 0 with\n    get_page() but leaves SKBFL_MANAGED_FRAG_REFS set, so\n    skb_release_data() takes the skip_unref branch and never drops that\n    reference, leaking the x->xfrag page at packet rate.\n\nFix this the way every other frag-mutating site does (__ip_append_data(),\n__ip6_append_data(), tcp_sendmsg_locked()) and call\nskb_zcopy_downgrade_managed() before ESP touches the frag array: it takes\na real reference on each existing frag and clears SKBFL_MANAGED_FRAG_REFS,\nso the per-frag unref in esp_ssg_unref() and the frag release in\nskb_release_data() are both balanced and no mixed-ownership frag array is\nleft behind.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98369": {
+                "cve_id": "CVE-2026-98369",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: add missing rcu_read_lock(), skb_dst_force() and dev_hold() for xfrm_trans_reinject()\n\nsyzbot reported a suspicious RCU usage warning in ip6_pkt_drop():\n\n  WARNING: suspicious RCU usage in ip6_pkt_drop\n  include/net/addrconf.h:389 suspicious rcu_dereference_check() usage!\n\n  Call Trace:\n   __in6_dev_get_safely include/net/addrconf.h:389 [inline]\n   ip6_pkt_drop+0x596/0x610 net/ipv6/route.c:4620\n   ip6_pkt_discard+0x1c/0x30 net/ipv6/route.c:4651\n   xfrm_trans_reinject+0x324/0x630 net/xfrm/xfrm_input.c:806\n   process_one_work kernel/workqueue.c:3322 [inline]\n   process_scheduled_works+0xa8e/0x14e0 kernel/workqueue.c:3405\n   worker_thread+0xa47/0xfb0 kernel/workqueue.c:3486\n\nWhen commit 4f4920669d21 (\"xfrm: Reinject transport-mode packets through\nworkqueue\") converted xfrm_trans_reinject from a tasklet to a workqueue,\nthe reinjection loop ceased running in softirq context. Workqueue workers\nrun in process context where local_bh_disable() does not enter an RCU\nread-side critical section under CONFIG_PREEMPT_RCU.\n\nBecause finish callbacks (such as ip6_rcv_finish) expect to run under an\nRCU read lock (performing route lookups, l3mdev lookups, and accessing\nRCU-protected data structures), invoking them in workqueue context without\nrcu_read_lock() triggers RCU lockdep warnings.\n\nFurthermore, packets queued to the workqueue via xfrm_trans_queue_net()\nmay carry non-refcounted (noref) dst entries (e.g. from ip_route_input_noref).\nAdditionally, on netdevice unregistration, dst_dev_put() replaces dst->dev\nwith blackhole_netdev, so dst entries do not keep skb->dev alive while\nqueued in the workqueue.\n\nFix these issues by:\n1. Calling skb_dst_force(skb) in xfrm_trans_queue_net() while still in the\n   caller's RCU section to ensure dst is reference-counted before queuing.\n2. Holding a reference on skb->dev via dev_hold()/dev_put() across workqueue\n   deferral so skb->dev remains valid during finish() callback processing.\n3. Acquiring rcu_read_lock() around the finish callback invocation loop in\n   xfrm_trans_reinject().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98370": {
+                "cve_id": "CVE-2026-98370",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: fix compat ALLOCSPI request use-after-free\n\nxfrm_state_netlink() builds the ALLOCSPI response with\ndump_one_state(), which already calls alloc_compat() with the response\nskb and header.\n\nxfrm_alloc_userspi() then calls alloc_compat() again, but passes the\noriginal request skb and its header. For a compat request, the\ntranslator therefore interprets the 228-byte compat xfrm_userspi_info\nas the 232-byte native layout and reads four bytes past the declared\npayload. It also publishes the translated child through the request's\nfrag_list.\n\nA multicast clone of the request shares skb_shared_info and can observe\nthat child. xfrm_user_rcv_msg() frees it after the request handler\nreturns, racing a compat receiver which may still be copying from it and\nresulting in a use-after-free.\n\nRemove the redundant conversion. The response keeps its correct compat\ntranslation from dump_one_state(), and no child is attached to the\ninbound request.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -104004,19 +104225,6 @@
                     }
                 ]
             },
-            "CVE-2026-64115": {
-                "cve_id": "CVE-2026-64115",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvsock/vmci: fix UAF when peer resets connection during handshake\n\nvmci_transport_recv_connecting_server() returned err = 0 for a peer\nRST in its default switch arm:\n\n\terr = pkt->type == VMCI_TRANSPORT_PACKET_TYPE_RST ? 0 : -EINVAL;\n\nThat made vmci_transport_recv_listen() skip vsock_remove_pending(),\nleaving the pending socket on the listener's pending_links with\nsk_state = TCP_CLOSE while destroy: still dropped the explicit\nreference taken before schedule_delayed_work().\n\nOne second later vsock_pending_work() observed is_pending=true and\nperformed full cleanup: vsock_remove_pending() then the two trailing\nsock_put(sk) calls -- the first reached refcount 0 and __sk_freed\nthe socket, and the second wrote into the freed object:\n\n  BUG: KASAN: slab-use-after-free in refcount_warn_saturate\n  Write of size 4 at addr ffff88800b1cac80 by task kworker\n  Workqueue: events vsock_pending_work\n\nTreat peer RST like any other unexpected packet type (err = -EINVAL).\nAll destroy: arms now return err < 0, so vmci_transport_recv_listen()\nremoves pending from pending_links synchronously and\nvsock_pending_work() takes the is_pending=false / !rejected branch,\ndropping only its own work reference.  This also closes the\nmulti-packet race Sashiko reported on v2: pending is removed from\nthe list before any subsequent packet can find it.\n\nThe pre-existing sk_acceptq_removed() gap on the err < 0 path of\nvmci_transport_recv_listen() that Sashiko also noted is not\nintroduced or changed by this patch.\n\nTested on lts-6.12.79 with KASAN: 52/100 unpatched -> 0/100 patched.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-64118": {
                 "cve_id": "CVE-2026-64118",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -112363,19 +112571,6 @@
                     }
                 ]
             },
-            "CVE-2026-89530": {
-                "cve_id": "CVE-2026-89530",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsvcrdma: Reject inline replies that overflow the pull-up buffer\n\nAn RPC-over-RDMA client can request a reply, such as an NFS READ\npayload, without providing a Write list or a Reply chunk to carry\nit. When such a reply needs more scatter/gather entries than the\ndevice's Send Queue supports, svc_rdma_pull_up_needed() selects\npull-up and svc_rdma_pull_up_reply_msg() linearizes the whole\nreply into sctxt->sc_xprt_buf. That buffer is only sc_max_req_size\nbytes, while the reply on this path is bounded only by the client's\nrequest, so svc_rdma_xb_linearize() copies past the end of the\nbuffer and corrupts adjacent slab memory. The oversized length is\nthen stored in sc_sges[0].length and posted, so the device also\nreads beyond the mapped region.\n\nThe SGE-exhaustion branch is the only pull-up path that can exceed\nthe buffer: the threshold branch pulls up only replies smaller\nthan RPCRDMA_PULLUP_THRESH, and replies that fit the device's SGE\nbudget are sent directly without linearization. Make\nsvc_rdma_pull_up_needed() report -E2BIG when the reply it would\npull up cannot fit sc_max_req_size, and fail the request with\nERR_CHUNK as RFC 8166 Section 4.5.3 directs rather than dropping\nthe connection.\n\nThe helper no longer answers a simple yes/no question: it now\nreports pull-up, no pull-up, or -E2BIG for a reply too large to\nlinearize. Rename svc_rdma_pull_up_needed() to\nsvc_rdma_check_pull_up() so its name no longer implies a boolean\npredicate.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-89531": {
                 "cve_id": "CVE-2026-89531",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -116315,6 +116510,84 @@
                     }
                 ]
             },
+            "CVE-2026-98173": {
+                "cve_id": "CVE-2026-98173",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix use-after-free of iface in cifs_try_adding_channels()\n\ncifs_try_adding_channels() iterates ses->iface_list with\nlist_for_each_entry_safe_from(), which captures the next entry\n(niface) under iface_lock.  The loop body then drops iface_lock for\nthe whole duration of cifs_ses_add_channel().\n\nA concurrent interface refresh (SMB3_request_interfaces() ->\nparse_server_interfaces()) marks all ifaces inactive and removes and\nfrees any that are not re-advertised via list_del() + kref_put(),\nwhere release_iface() is a bare kfree().  Since niface typically has\nno channel holding a reference, the list reference is its last and it\ncan be freed inside the unlocked window.  On continue, the iterator\nadvance step then dereferences niface->iface_head.next, and the loop\nbody reads iface->rdma_capable/is_active, both on freed memory.\n\nFix this by never keeping an unreferenced list pointer across the\nunlocked window.  Each channel attempt now re-scans the list from the\nhead under iface_lock, takes a kref on the selected candidate, and\npasses only that referenced candidate to cifs_ses_add_channel().\nweight_fulfilled still tracks selection progress, so restarting the\nscan preserves the original weighted distribution and the\nweight_fulfilled-before-kref_put ordering on the failure path.\n\nAdd a per-pass attempts cap so a flapping interface refresh cannot\nkeep the inner loop spinning within a single tries increment.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98174": {
+                "cve_id": "CVE-2026-98174",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix rlist race and missing initialization\n\nTCP_Server_Info.rlist is allocated via kzalloc which zeros both ->next\nand ->prev to NULL instead of pointing to itself, making list_empty()\nalways return false and list_add() dereference a NULL ->prev pointer.\n\nAlso, cifs_signal_cifsd_for_reconnect() can be called concurrently\nfrom multiple cifsd threads, allowing the same server's rlist node to\nbe added twice into the local list, corrupting it.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98175": {
+                "cve_id": "CVE-2026-98175",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: cancel reconnect work in clean_demultiplex_info()\n\nclean_demultiplex_info() cancels server->echo delayed work but not\nserver->reconnect, which can cause a use-after-free when the\ndemultiplex thread exits while a reconnect work is still queued:\n\n  cifs_demultiplex_thread()\n    cifs_readv_from_socket()\n      cifs_reconnect()\n        __cifs_reconnect()\n          cifs_queue_server_reconn()\n            mod_delayed_work(cifsiod_wq, &server->reconnect, 0)\n    clean_demultiplex_info()\n      cancel_delayed_work_sync(&server->echo)   // echo canceled\n                                                 // reconnect NOT canceled\n      kfree_sensitive(server)                    // server freed\n\n  ...later, on cifsiod_wq:\n\n  smb2_reconnect_server()\n    server->srv_count  // UAF read of freed server\n\nFix this by canceling server->reconnect delayed work in\nclean_demultiplex_info() before the server is freed, the same way\ncifs_put_tcp_session() already does.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98177": {
+                "cve_id": "CVE-2026-98177",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Avoid integer underflow in EOP ring size calculation.\n\nThe low 6 bits of cp_hqd_eop_control store the base-2 logarithm\nof the EOP ring size. This was calculated as\n\norder_base_2(q->eop_ring_buffer_size / 4) - 1\n\nBut order_base_2 can in theory return 0, so this could underflow\n(although in practice the ring buffer size cannot be less than 4096).\n\nChange this to\n\norder_base_2(q->eop_ring_buffer_size / 8)\n\nusing properties of logarithms.\n\nAlso add to the above comment to make the mathematics more clear.\n\n(cherry picked from commit f0f43fcf8b2b3a924cad9444340921c96ed5f634)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98179": {
+                "cve_id": "CVE-2026-98179",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: fix rmmio iounmap skipped on device removal\n\namdgpu_pci_remove() calls drm_dev_unplug() before fini_sw(), so\ndrm_dev_enter() is already false there and the iounmap() guarded by it\nis skipped. This .remove path runs on both hot-unplug and plain rmmod,\nso the register BAR ioremap mapping leaks one instance per unload.\n\nUnmap rmmio unconditionally (guard only on non-NULL) and drop the now\nunused idx.\n\n(cherry picked from commit dd6f86a97260e5207d3329ad03aa89fdad61b1e6)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98182": {
+                "cve_id": "CVE-2026-98182",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: refuse to make a monitor active when it has no queue\n\nA monitor interface only gets a TXQ if it's created active, and one can't\nbe added later. Setting the flag on a down interface is still allowed, so\nthe driver is handed a monitor with no queue. ath9k dereferences it:\n\n  BUG: kernel NULL pointer dereference, address: 0000000000000066\n  RIP: 0010:ath_tx_node_init+0x49/0x170 [ath9k]\n   ath9k_add_interface+0x10c/0x140 [ath9k]\n   drv_add_interface+0x54/0x250 [mac80211]\n   ieee80211_do_open+0x32f/0x800 [mac80211]\n\nReached with CAP_NET_ADMIN by \"iw dev X set monitor active\" followed by\n\"ip link set X up\". RTNL is held, so netlink operations block behind it.\n\nRefuse the flag when there is no queue to give.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-98354": {
                 "cve_id": "CVE-2026-98354",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -116371,6 +116644,71 @@
                 "cve_id": "CVE-2026-98360",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: insert mcg into mcg_tree only after rxe_mcast_add() succeeds\n\nrxe_get_mcg() publishes a newly allocated multicast group in\nrxe->mcg_tree before programming the backing Ethernet multicast address\nwith rxe_mcast_add(), which runs outside mcg_lock. A local userspace\nRDMA client reaches this path with ATTACH_MCAST on a UD QP; if\nrxe_mcast_add() then returns an error (for example -ENODEV when the\nbacking netdev has been removed, or a propagated dev_mc_add() error),\nthe unwind frees the published group without removing it from the tree.\nA later lookup of the same MGID dereferences the freed struct rxe_mcg\nfrom __rxe_lookup_mcg().\n\nFix this by keeping the new mcg private until rxe_mcast_add() succeeds.\nSplit the tree publication into __rxe_publish_mcg(), call rxe_mcast_add()\nbefore taking the tree reference, and free the still-private mcg on\nfailure. Because the group is never visible in mcg_tree until the\nmulticast address is programmed, no concurrent caller can look it up or\nattach a QP to a group that is about to be torn down, so the error path\nneeds no conditional unwind. If another caller publishes the same MGID\nwhile the address is being programmed, the post-add re-check under\nmcg_lock finds the winner; this caller then drops its private object and\nbalances its own rxe_mcast_add() with rxe_mcast_del() before returning\nthe winner.\n\nReproduced by forcing the rxe_mcast_add() error return under KASAN:\nwithout the change the next attach to the same MGID reports a\nslab-use-after-free in __rxe_lookup_mcg(); with it the forced failure\nreturns cleanly. A no-injection attach/detach regression, including a\ntwo-QP shared join/leave and re-attach, stays KASAN- and leak-clean.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98362": {
+                "cve_id": "CVE-2026-98362",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nclk: scpi: bound-check DVFS index in scpi_dvfs_recalc_rate\n\ndvfs_get_idx() may return an out-of-range index if the SCP firmware is\nbuggy or returns a stale value. Only negative indexes were rejected, so a\nlarge index walked past info->opps and could treat garbage as a clock rate\n(KASAN OOB / wrong frequency to consumers). The missing upper bound dates\nback to the original SCPI clock driver.\n\nTreat indexes >= opp count as invalid and return 0, same as idx < 0.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98363": {
+                "cve_id": "CVE-2026-98363",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfirmware: arm_scpi: reject DVFS OPP count above MAX_DVFS_OPPS\n\nscpi_dvfs_get_info() already rejected a zero opp_count, but still trusted\nany larger value from the SCP firmware. The shared-memory reply only holds\nMAX_DVFS_OPPS entries in buf.opps[]; a bigger count over-reads that array\nand then sizes the allocated OPP table incorrectly (garbage OPPs / OOB).\nThe missing upper bound dates back to the original SCPI DVFS support.\n\nReject zero and out-of-range counts in one check and return -EINVAL.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98364": {
+                "cve_id": "CVE-2026-98364",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: hold net_device reference under RCU in bundle creation\n\nxfrm_bundle_create() and xfrm_create_dummy_bundle() read dst->dev into\na local pointer without taking a device reference, then pass it to\nxfrm_fill_dst(). A concurrent RTM_DELLINK replaces dst->dev via\ndst_dev_put() and frees the old net_device, causing a use-after-free\nwhen xfrm6_fill_dst() later dereferences the stale dev pointer.\n\n  BUG: KASAN: slab-use-after-free in xfrm6_fill_dst+0x82c/0x860\n  (net/ipv6/xfrm6_policy.c:86 netdev_hold())\n  Read of size 8 at addr ffff8880142fe588 by task exploit/153\n  Call Trace:\n   xfrm6_fill_dst+0x82c/0x860\n   xfrm_resolve_and_create_bundle+0x21d4/0x2bd0\n   xfrm_lookup_with_ifid+0x485/0x1640\n   ip6_dst_lookup_flow+0x19b/0x1e0\n   udpv6_sendmsg+0x1443/0x2dd0\n\nFix this by reading dst->dev via dst_dev_rcu() and keeping the RCU\nread-side critical section active until xfrm_fill_dst() has taken the\nrequired device references.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98365": {
+                "cve_id": "CVE-2026-98365",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: Fix integer overflow in mr_check_range() leading to OOB access\n\nmr_check_range() validates that [iova, iova+length) falls within the\nregistered MR range using wraparound-prone arithmetic:\n\n    if (iova < mr->ibmr.iova ||\n        iova + length > mr->ibmr.iova + mr->ibmr.length)\n\nA remote peer can craft an RDMA-Write/Read RETH so that iova + length\nwraps to 0 (e.g. iova=0xfffffffffffffff8, length=8), bypassing the\ncheck. rxe_mr_iova_to_index() then computes a huge index (int idx, only\nguarded by WARN_ON) and rxe_mr_copy_xarray() dereferences\nmr->page_info[huge], causing an out-of-bounds read/write and a kernel\noops that is triggerable by an unauthenticated remote peer.\n\nRewrite the check in overflow-safe form; the first two clauses guarantee\nthat the subsequent subtractions do not underflow:\n\n    if (iova < mr->ibmr.iova ||\n        length > mr->ibmr.length ||\n        iova - mr->ibmr.iova > mr->ibmr.length - length)\n\nWith the fix, mr_check_range() returns -EINVAL for the crafted iova and\nthe responder reports REMOTE_ACCESS_ERROR instead of triggering the OOB.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98367": {
+                "cve_id": "CVE-2026-98367",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/siw: Clear association under lock if siw_qp_modify fails in siw_accept\n\nWe need to clear cep before release state_lock as siw_qp_llp_close and\nsiw_qp_modify->siw_qp_llp_close did.\n\nOtherwise if siw_qp_modify() fails in siw_accept(), the QP's state_lock\nis released before the error path cleanup. A concurrent ibv_modify_qp()\ntransitioning the QP to ERROR can race in this window:\n\n  siw_accept()                       ibv_modify_qp(ERROR)\n  ----------------------             ----------------------\n  siw_qp_modify() fails\n  up_write(&qp->state_lock)\n                                     down_write(&qp->state_lock)\n                                     nextstate_from_idle():\n\t\t\t\t     if (qp->cep)\n                                       siw_cep_put(qp->cep) <- frees cep\n                                       qp->cep = NULL\n  goto error\n    cep->qp = NULL                   <- UAF\n\nClear qp->cep and drop the association reference taken by siw_cep_get(),\nall under the write lock held from the initial down_write(&qp->state_lock).\nThread B therefore sees qp->cep == NULL, skips its own put, and cannot free\nthe cep before siw_accept() is done with it.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
