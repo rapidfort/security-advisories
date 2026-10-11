@@ -743,8 +743,8 @@
             },
             "CVE-2026-25946": {
                 "cve_id": "CVE-2026-25946",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Server-Side Request Forgery (SSRF) via OpenID Discovery - Gitea v1.25.4",
+                "description": "### Summary An unauthenticated Server-Side Request Forgery (SSRF) vulnerability in Gitea's OpenID authentication allows any remote attacker to make arbitrary HTTP requests to internal network services. This enables internal port scanning, service fingerprinting, and access to localhost-only resources without authentication, effectively bypassing network security controls. ### Details **Vulnerable Code:** routers/web/auth/openid.go - SignInOpenID() function **Affected Endpoint:** POST /user/login/openid **Parameter:** openid_url The OpenID authentication handler accepts user-controlled URLs and performs HTTP requests without validation: ``` // routers/web/auth/openid.go func SignInOpenID(ctx *context.Context) { openidURL := ctx.FormString('openid_url') // Vulnerable: No URL validation before HTTP request redirectURL := setting.AppURL + 'user/openid/callback' authenticateURL, err := openid.RedirectURL(openidURL, redirectURL, '') // ... } ``` ### PoC - Target: Any Gitea instance with OpenID enabled (default) - Test Instance: http://143.244.141.81:3000 - Navigate to OpenID login page: http://143.244.141.81:3000/user/login/openid - Enter internal service URL in 'OpenID URI' field: ``` http://127.0.0.1:22/ (SSH) http://127.0.0.1:3306/ (MySQL) ``` <img width='2250' height='1350' alt='image' src='https://github.com/user-attachments/assets/00c144f0-aadf-49c5-9877-f48a5c1af435' /> - Click 'Sign In' - Check server logs for confirmation ``` journalctl -u gitea -f --no-hostname | grep -E --color 'openid|http|dial|error|127\\.0\\.0\\.1' ``` <img width='2832' height='754' alt='image' src='https://github.com/user-attachments/assets/d83736ce-c519-4ad2-bd51-ce091ed9d20f' /> ### Impact - All Gitea instances with OpenID enabled (default configuration) - Any unauthenticated remote attacker - Organizations with internal services bound to localhost or private networks",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -1735,8 +1735,8 @@
             },
             "CVE-2026-59774": {
                 "cve_id": "CVE-2026-59774",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated Arbitrary File Read can lead to RCE",
+                "description": "### Summary An unauthenticated remote attacker can submit Org-mode markup containing a #+INCLUDE directive to POST /{owner}/{repo}/markup for any suitable public repository to read arbitrary server files. By extracting INTERNAL_TOKEN from app.ini, they can inject a Git hook through the internal logger and achieve command execution as the Gitea OS user during an anonymous clone. ### Details Gitea registers `POST /{username}/{reponame}/markup` with optional sign-in, repository assignment, and a repository-unit reader check. An anonymous user passes that check for a public repository with a normal readable code unit. The handler passes the supplied `Mode`, `Text`, and `FilePath` into Gitea's generic markup renderer. Selecting `Mode: file` and a `.org` filename chooses the Org-mode renderer. Gitea 1.27.0 initializes `go-org` using `org.New()` and does not replace its default `ReadFile` callback. In `go-org` 1.9.1, that callback is `ioutil.ReadFile`; `#+INCLUDE` accepts absolute paths and passes them directly to that callback. #### Preconditions - At least one repository is publicly readable and exposes a unit accepted by the repository markup route. A normal public repository with its code unit enabled satisfies this condition. - Standard Gitea storage permissions allow the service user to update Gitea's managed global Git configuration. ### Impact - Read arbitrary files accessible to the Gitea service user without an account. - Submit the file-read payload directly through a public repository's web markup route without committing a file or obtaining repository write access. - Expose Gitea configuration, internal bearer tokens, OAuth/JWT material, and deployment metadata ### Affected - The vulnerable version seem v1.22.1 ~ v1.27.0 ### Credit Found by @xbow-security. Triaged by Guido Leo <guido.leo@xbow.com>. Independently reported by https://github.com/NightRang3r",
                 "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
@@ -1777,8 +1777,8 @@
             },
             "CVE-2026-60008": {
                 "cve_id": "CVE-2026-60008",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Jupyter notebook renderer emits attacker-controlled CSS classes into unsanitized, unsandboxed output",
+                "description": "`modules/markup/jupyter/jupyter.go` sets `SanitizerDisabled: true` but leaves `DisplayInIframe` and `ContentSandbox` at their zero values. It is the only renderer in the tree that turns the sanitizer off while still rendering into the main document. Within that unsanitized output it interpolates `notebook.metadata.language_info.name` \u2014 a value read directly from the file \u2014 into a literal `class` attribute without routing it through `RenderInternal.FormatWithSafeAttrs`. HTML-escaping prevents closing the attribute, but whitespace is untouched, so the notebook can choose its own list of CSS classes on a page where nothing filters them. Combined with Fomantic's `.ui.dimmer` and Gitea's `!important` Tailwind layer, a repository file can replace the entire viewport of a repository page and intercept clicks on it. Script execution was not reached. The reason to fix this is not the overlay: it is that the class attribute is the one place on this path where a security control was skipped, and there is no sanitizer, no iframe sandbox and no CSP behind it. ## Why this is a boundary failure rather than a cosmetic bug Gitea has a deliberate mechanism to stop rendered content from choosing CSS classes. `RenderInternal.ProtectSafeAttrs` rewrites `class='X'` into `data-attr-class='<per-render-nonce>:X'`; the sanitizer allows `data-attr-class`; and `finalProcessor.Close` converts it back only when the nonce matches. Content cannot forge the nonce, so only the renderer's own trusted code can emit a class. `orgmode.go` uses this correctly: ```go _ = ctx.RenderInternal.FormatWithSafeAttrs(sb, `<pre><code class='chroma language-%s'>`, ...) ``` The intent is also written down inside the affected file itself, in the `text/html` MIME handler: ```go // To future developers: don't allow custom CSS classes or attributes, // because '.link-action' or 'data-fetch-xxx' can send POST requests and lead to XSS. ``` That rule is enforced for MIME output and missed for the language field. ## Details **1. The sanitizer is disabled and the output is not confined.** ```go func (renderer) GetExternalRendererOptions() markup.ExternalRendererOptions { return markup.ExternalRendererOptions{ SanitizerDisabled: true, } } ``` `DisplayInIframe` and `ContentSandbox` are left unset. In `modules/markup/render.go` that removes `SanitizeReader` from the pipeline, and the bytes land inside `<div class='file-view markup jupyter-render'>` on the ordinary repository page. By contrast the `openapi-swagger`, `viewer-3d` and `asciicast` renderers also disable the sanitizer, but set `DisplayInIframe: true` and `ContentSandbox: setting.MarkupRenderDefaultSandbox`, so their output is confined to an iframe with no `allow-same-origin`. **2. Untrusted input reaches a literal `class` attribute.** The `language` value comes from `notebook.metadata.language_info.name`, falling back to `metadata.kernelspec.language`, and is interpolated into a `class='chroma language-\u2026'` attribute. `htmlutil.WriteFormat` applies `template.HTMLEscapeString`, which handles `< > & ' '` and leaves whitespace alone. No input yields a raw `'`, so no new attribute can be created \u2014 but spaces pass through, which is enough to append arbitrary additional CSS classes. **3. `/render/` serves the same content with no CSP.** The `/render/` route adds a `Content-Security-Policy: sandbox \u2026` header only when the renderer sets `ContentSandbox`, a field the Jupyter renderer never sets. The result is a top-level, same-origin, navigable `text/html` document built from repository content, with the sanitizer off and no restrictions, reachable anonymously on public repositories. Repository authorization on the route itself is sound (private repositories return 404 to unauthorized users). **4. The notebook selects which frontend renderer processes it.** Because the class is built as `language-%s` from the file, a notebook can declare `'language_info': {'name': 'mermaid'}` (or `math`) and hand its cell source to mermaid.js / KaTeX. Those frontend paths assign markup via `innerHTML` in the parent document before moving it into a non-sandboxed iframe. Today mermaid's `securityLevel: 'strict'` and KaTeX's `trust: false` hold, so script execution was not achieved \u2014 but this is the same unsanitized, no-CSP surface, reached from a file type where nothing signals that a diagram will be drawn. ## Impact Anyone with write access to a repository can make its pages display arbitrary full-screen content on the Gitea origin, with the real hostname and certificate, and make the underlying page unusable. Pushed to a shared repository, it affects every colleague who opens that repository, with no link sent and no unusual action taken \u2014 making fake session-expiry notices, credential-rotation instructions or outage banners credible because the instance itself serves them. Two bounds are worth stating explicitly: - **It does not cross a permission boundary.** The attacker needs write access to the repository holding the notebook; read-only access is not enough. Existing repository permissions are respected. - **The overlay is text.** The cell body passes through chroma, so there is no input, button or link. A credential prompt must end in 'go to this other host', which the victim types by hand. ## Remediation Upgrade to a fixed release. Until then, avoid rendering or serving untrusted `.ipynb` files (for example by disabling the Jupyter renderer on instances that accept notebooks from untrusted contributors). ## Reporter Toprak Yagcioglu. Found and reproduced against a local throwaway `gitea/gitea:1.27.1` container; nothing was tested against any third-party or production instance. Happy to supply a reproduction and to verify a candidate patch.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -1790,8 +1790,8 @@
             },
             "CVE-2026-60010": {
                 "cve_id": "CVE-2026-60010",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Repo-side team-link endpoint still bypasses RepoAdminChangeTeamAccess",
+                "description": "### Summary `PUT /api/v1/repos/{owner}/{repo}/teams/{team}` allows a non-owner repository admin to attach organization teams to a repository even when the organization has disabled that behaviour with `RepoAdminChangeTeamAccess=false`. An earlier advisory fixed the corresponding team-side endpoint; the repository-side endpoint retained the weaker check. ### Details The repository-side handler's exception relies on a repository permission check (`IsOwner()`), which for an organization repository is satisfied by a user promoted to owner-level access through an attached admin team. The fixed team-side endpoint instead checks actual organization ownership when `RepoAdminChangeTeamAccess` is disabled. The matching web collaboration-settings handler had the same weak check. ### Impact A user with delegated admin rights on one organization repository can grant other organization teams read or write access to that repository without approval from an actual organization owner, exposing private source and history and, for a write-capable team, granting push access. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39046, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -1803,8 +1803,8 @@
             },
             "CVE-2026-60018": {
                 "cve_id": "CVE-2026-60018",
-                "title": "Authenticated DoS in OneDev migration via unbounded version response body",
-                "description": "### Summary The OneDev migration downloader reads the entire `/~api/version/server` response body into memory before validating the version string, and the migration HTTP client has no timeout. A malicious OneDev-compatible server can return a very large or never-ending response. ### Details Reachable from the web, API and background-task migration paths. Reachable by any authenticated user who can start a repository migration. ### Impact Authenticated availability. An attacker who can start migrations against a server they control can force Gitea to read arbitrarily large response bodies, hold migration requests and workers open until timeout or cancellation, retain that data in memory, and exhaust the migration worker pool. On constrained deployments this creates memory pressure and a possible out-of-memory condition. ### Affected versions Gitea `>= 1.16.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39024, #39033). ### Workarounds Restrict repository-migration permission to trusted users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -1868,8 +1868,8 @@
             },
             "CVE-2026-66849": {
                 "cve_id": "CVE-2026-66849",
-                "title": "Package registry: restricted users can read packages of limited-visibility users (authorization bypass)",
-                "description": "### Summary The package-registry access check grants read access to a package owned by a Limited-visibility user to any non-ghost logged-in user, without excluding restricted accounts. A restricted account can therefore enumerate and download the entire package registry (for example Docker, npm, PyPI) of any Limited-visibility user. ### Details The user-owner branch of `determineAccessMode` omits the restricted-user check that the organization-owner branch and the repository permission model apply. ### Impact Authorization boundary / confidentiality. A restricted account can read package content of Limited-visibility users that it should not be able to see. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39043, #39058). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -1881,8 +1881,8 @@
             },
             "CVE-2026-66853": {
                 "cve_id": "CVE-2026-66853",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted users can enumerate limited-visibility organizations via the user org-list API (authorization bypass)",
+                "description": "### Summary A restricted account can enumerate Limited-visibility organizations and their name, description and avatar by listing the public organization memberships of a known user through `GET /api/v1/users/{username}/orgs`. ### Details The helper that decides which organization visibilities to include for the viewer returns 'Limited' for any signed-in, non-admin, non-self viewer without excluding restricted accounts, so the response admits both public and limited organizations. The single-organization endpoint `GET /api/v1/orgs/{org}` correctly returns `404` to a restricted viewer for a limited organization; the list path uses a different, unrestricted helper. ### Impact Authorization boundary / confidentiality. A restricted account, which by policy may reach only public content, can discover Limited-visibility organizations and their metadata by walking the public memberships of known users. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39047, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -1907,8 +1907,8 @@
             },
             "CVE-2026-66877": {
                 "cve_id": "CVE-2026-66877",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "RCE on self-hosted runners | fork-PR approval gate (`NeedApproval`) bypass via job-level concurrency cancellation",
+                "description": "### Summary Workflow runs from first-time fork contributors are held for maintainer approval only by inserting the run's jobs in a blocked state. The component that transitions blocked jobs to waiting does not re-check whether the run still needs approval. A separate, legitimate run in the same repository that shares a job-level `concurrency` group with the pending run can cause the pending run to be re-evaluated, which unblocks and dispatches its remaining jobs to runners without approval. Any user who can open a pull request can reach this. ### Details The approval decision itself is correct, but it is enforced purely as job status. The job emitter, the concurrency-preparation path and the runner task-pickup path do not check approval; only the concurrency-wake path did. Cancelling one job of the pending run through the shared job-level concurrency group triggers a re-emit over that run's still-blocked sibling jobs, which are then moved to waiting and picked up by runners. ### Impact Arbitrary, unreviewed workflow code execution on the self-hosted runners of any repository that accepts fork pull requests, defeating the first-time-contributor approval boundary. Fork pull request secrets remain withheld and the run token remains read-only; the impact is access to the runner host (internal network reachability, runner-local caches, workspaces and credentials, and persistence into later trusted builds). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39005, #39018). ### Workarounds Instances that do not run fork pull request workflows on self-hosted runners are not exposed to the code-execution impact. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -2006,8 +2006,8 @@
             },
             "CVE-2026-70402": {
                 "cve_id": "CVE-2026-70402",
-                "title": "Permissive Git hook directory and script modes may allow local code execution as the Gitea service account",
-                "description": "### Summary Gitea creates server-side Git hook directories and scripts with mode `0777`, relying on the process umask to reduce it. Under a permissive umask (for example `0000` or `0002`) the resulting files or directories are group- or world-writable. On a deployment where another local principal can reach the repository storage, that principal can modify an existing hook or add an executable file to a writable hook directory; a later Git operation then runs it as the Gitea service account. ### Details The hook-creation function is reached through ordinary operations (creating or forking a repository, completing a migration, converting a mirror, synchronizing hooks, creating a wiki). A standard systemd deployment with umask `0022` produces mode `0755` and is not directly affected. This does not by itself grant root unless Gitea runs as root. ### Impact Local code execution as the Gitea service account on affected deployments, with the consequences that account allows (modifying repositories, reading accessible files, persistence through hooks). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39008, #39016). ### Workarounds Run Gitea with a restrictive umask (`0022` or tighter) and ensure repository storage is not writable by untrusted local users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -2019,8 +2019,8 @@
             },
             "CVE-2026-70406": {
                 "cve_id": "CVE-2026-70406",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Public-only tokens can read private head repositories via compare and pull request creation (incomplete fix of CVE-2026-58443)",
+                "description": "### Summary The fix for CVE-2026-58443 added a 'token can access repository' check to `UpdatePullRequest` only. The shared helper `parseCompareInfo`, used by the compare-diff endpoint and by pull request creation, lacked the same check. A `public-only, read:repository` token can read commit history and diff content of a private head repository by routing the request through a public base repository. ### Details The route-level public-only middleware validates only the base repository named in the route. The head repository resolved inside `parseCompareInfo` is checked for user permission but not against the token's scope. Two entry points reach it: 1. `GET /api/v1/repos/{owner}/{repo}/compare/{basehead}` with `head` given as `owner/repo:branch`. The head repository does not need to be a fork of the base. 2. `POST /api/v1/repos/{owner}/{repo}/pulls` with the same `head` syntax. Gitea then pushes the private head branch to `refs/pull/{index}/head` of the public base repository, where the public diff and patch endpoints serve it. The related disclosure of private head repository metadata and commit SHA through `ToAPIPullRequest` in the pull request read endpoints is handled separately in https://github.com/go-gitea/gitea/pull/39167. ### Impact Confidentiality bypass of the `public-only` token boundary. A leaked public-only token can read private repository commits and diffs it was explicitly restricted from. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 by https://github.com/go-gitea/gitea/pull/39006 and https://github.com/go-gitea/gitea/pull/39013. ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -2058,8 +2058,8 @@
             },
             "CVE-2026-71301": {
                 "cve_id": "CVE-2026-71301",
-                "title": "Wiki-only members can read private pull request titles through markup preview",
-                "description": "### Summary In a private repository, a member with only Wiki access can use `POST /{owner}/{repo}/markup` to resolve a same-repository pull request reference and receive the pull request title and state icon, despite having no Issues or Pull Requests access. ### Details The markup route accepts any one of Code, Issues, Pull Requests, Releases or Wiki access. The renderer's unit check for referenced issues and pull requests is applied only in the cross-repository branch, so a same-repository reference reaches title and icon rendering without a unit check. No bodies, comments or attachments are returned. ### Impact Confidentiality. A Wiki-only member can read pull request titles and displayed state from a private repository. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39045, #39054). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -2097,8 +2097,8 @@
             },
             "CVE-2026-73135": {
                 "cve_id": "CVE-2026-73135",
-                "title": "Repository listing exposes repositories owned by hidden users due to inconsistent visibility predicate",
-                "description": "### Summary Gitea implements repository visibility with several SQL predicates that are meant to be equivalent. One of them, used by the accessible-repository condition, treats repositories owned by hidden users differently from the others. As a result, some repository-listing endpoints return repositories owned by hidden users even though those repositories are unreachable through their direct routes, which still return `404`. ### Details The authenticated repository-search API is the broadest affected surface; the forks listing is also affected for anonymous users, and watched repositories for users already subscribed. ### Impact Any authenticated user can enumerate repositories owned by hidden users through repository search; anonymous users can do so through the forks listing. Metadata disclosure only. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39009, #39012). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -2110,8 +2110,8 @@
             },
             "CVE-2026-73273": {
                 "cve_id": "CVE-2026-73273",
-                "title": "Package size quota bypass and unbounded memory read in the Maven checksum upload path",
-                "description": "### Summary When a Maven artifact is uploaded with a checksum extension (`.md5`, `.sha1`, `.sha256`, `.sha512`), the handler reads the entire request body into memory and compares it to the stored digest, then returns \u2014 before the code path that enforces the package size quota. The checksum branch therefore has neither a size quota nor any bound on how much is read into memory, although a valid checksum value is at most 128 bytes. ### Details The body is read with `io.ReadAll` and copied again for the comparison; both allocations are sized by the client. The configured `LIMIT_SIZE_MAVEN` is not applied to this path. Reachable by any authenticated user with Maven package write access. ### Impact Package size-quota bypass and client-controlled memory allocation for a single request (uncontrolled resource consumption). A practical outage was not demonstrated; the issue should be read as an unbounded allocation and a quota bypass. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39028, #39031). ### Workarounds Limit request body size at the reverse proxy. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -2136,8 +2136,8 @@
             },
             "CVE-2026-73504": {
                 "cve_id": "CVE-2026-73504",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated artifact-to-repository oracle in raw Actions downloads",
+                "description": "### Summary The raw Actions artifact download endpoint looks up the artifact row before validating the signed URL. Without authentication, an invalid signature produces one response when the supplied global artifact ID belongs to the named repository (and is upload-confirmed or expired) and a different response when it does not. Because artifact IDs are global auto-incrementing integers, this lets an unauthenticated caller test whether a guessed artifact ID belongs to an already-named private repository. ### Details The signature check still protects artifact bytes; only the ordering of the row lookup and the signature check creates the distinguishable responses. The endpoint does not reveal whether the repository exists, since inaccessible and nonexistent repositories return the same status. ### Impact Unauthenticated confirmation of the association between an artifact ID and a known private repository. Artifact contents are not exposed. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39049, #39053). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -2214,8 +2214,8 @@
             },
             "CVE-2026-78231": {
                 "cve_id": "CVE-2026-78231",
-                "title": "Unauthenticated Blind SSRF via OpenID Sign-In Verification",
-                "description": "### Summary When OpenID sign-in is enabled, Gitea accepts an unauthenticated GET request to `/user/login/openid` and passes attacker-controlled OpenID assertion parameters into the OpenID 2.0 verification flow. During verification, the upstream `github.com/yohcop/openid-go` library sends a server-side `POST` request to the attacker-controlled `openid.op_endpoint` URL using `http.DefaultClient`. This gives an unauthenticated remote attacker a blind SSRF primitive from the Gitea server. The attacker controls the destination URL and the form-encoded POST body. In deployments where the Gitea server can reach loopback, private-network, link-local, or otherwise internal HTTP services, this can be used to interact with services that are not directly reachable by the attacker. ### Details The vulnerable route is the OpenID sign-in endpoint: ```go m.Combo('/login/openid'). Get(auth.SignInOpenID). Post(web.Bind(forms.SignInOpenIDForm{}), auth.SignInOpenIDPost) ``` The route is gated by `openIDSignInEnabled`, but it does not require an authenticated user. When `[openid] ENABLE_OPENID_SIGNIN = true`, an anonymous client can reach the GET handler. ### Impact An attacker can cause the Gitea server to send an outbound HTTP POST request to an attacker-controlled URL by sending one unauthenticated GET request to `/user/login/openid`, provided OpenID sign-in is enabled. The attacker controls the target URL through `openid.op_endpoint` and controls much of the form-encoded body through the supplied OpenID query parameters. The impact depends on the deployment environment and network reachability. In common self-hosted deployments, Gitea may be able to reach services that are not exposed to the internet, including loopback services, internal admin panels, CI/CD endpoints, internal webhooks, private-network APIs, or link-local metadata endpoints. Because the response is not returned to the attacker, the primitive is blind, but it can still trigger state-changing actions on internal services that accept POST requests, and it can be used as an internal network interaction primitive. This also creates an availability risk if outbound requests can be made to slow or non-responsive targets, because the OpenID path uses the default HTTP client behavior without an apparent request timeout in this path. I would honestly argue that a higher environmental score may be appropriate where the Gitea server can reach sensitive unauthenticated internal services that accept form-encoded POST requests.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -2227,8 +2227,8 @@
             },
             "CVE-2026-78433": {
                 "cve_id": "CVE-2026-78433",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Attachments created before the January 2026 cutoff skip the cross repository check entirely, and permission is then evaluated against the repository named in the URL rather than the repository owning the attachment, so a private repository's attachment is served through any public repository's path",
+                "description": "### Summary The web attachment handler contains a guard that rejects a request for an attachment made through a repository other than the one that owns it. That guard is applied only to attachments created after 16 January 2026; older attachments skip it even when their owning-repository id is correctly populated. When the guard is skipped, the handler evaluates permission against the repository named in the request URL instead of the repository that owns the attachment. An attachment belonging to a private repository can therefore be retrieved by requesting it through any public repository's attachment path. The route allows anonymous access, so no authentication is required. ### Details In `routers/web/repo/attachment.go` the cross-repository check is gated only on the attachment's creation timestamp, unlike its two sibling call sites which also require the owning-repository id to be unset. A migration backfills that id on upgrade, so the timestamp-only exemption protects no legitimate rows and instead allows permission to be checked against the wrong repository. Downstream draft-release and token-scope checks inherit the same wrong subject. Attachment UUIDs are random and not enumerable, so exploitation requires knowledge of a specific attachment UUID (for example from a removed collaborator, a public-to-private conversion, notification mail, webhook payloads, or proxy/CDN logs). ### Impact Disclosure of private-repository attachment contents \u2014 issue and pull request attachments and release assets \u2014 to an unauthenticated caller who knows the attachment UUID. Incorrect authorization / cross-repository access control bypass. Affects any instance that held attachments created before 16 January 2026. ### Affected versions Gitea `>= 1.26.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39048, #39077). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -2534,9 +2534,9 @@
             },
             "GHSA-3m6q-h5gj-7mrw": {
                 "cve_id": "GHSA-3m6q-h5gj-7mrw",
-                "title": "Gitea has insecure default SSH settings",
-                "description": "## Summary\n\nThe built-in SSH server currently advertises a number of key exchange, MAC, and host key algorithms that are considered weak or broken. The defaults should be tightened so a fresh installation passes a baseline SSH security audit out of the box.\n\n## Details\n\nRunning `ssh-audit` against a default deployment flags the following as `fail`:\n\n- **Key exchange**\n  - `ecdh-sha2-nistp256`\n  - `ecdh-sha2-nistp384`\n  - `ecdh-sha2-nistp521`\n- **MAC**\n  - `hmac-sha1`\n- **Host key**\n  - `ssh-rsa`\n\n## Reproduction\n\n```sh\ndocker run -it --rm positronsecurity/ssh-audit -p 2222 gitea.local\n```\n\n## Impact\n\nDefault deployments expose algorithms that are known-weak or deprecated upstream. The current workaround requires manually setting several `GITEA__server__SSH_SERVER_*` variables, which most users will never do.\n\n### Workaround\n\n```ini\n[server]\nSSH_SERVER_KEY_EXCHANGES = curve25519-sha256, diffie-hellman-group14-sha256\nSSH_SERVER_CIPHERS       = chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com\nSSH_SERVER_MACS          = hmac-sha2-256-etm@openssh.com, hmac-sha2-256\n```\n\nThere is no exposed option to restrict host key algorithms, so `ssh-rsa` remains advertised.\n\n## Acceptance criteria\n\n- [ ] Default `SSH_SERVER_KEY_EXCHANGES`, `SSH_SERVER_CIPHERS`, and `SSH_SERVER_MACS` updated to the secure list above.\n- [ ] New `SSH_SERVER_HOST_KEY_ALGORITHMS` option added, with a default that excludes `ssh-rsa`.\n- [ ] Documentation updated to reflect the new defaults.\n- [ ] `ssh-audit` against a fresh install reports no `[fail]` entries.",
-                "severity": "MEDIUM",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -2547,8 +2547,8 @@
             },
             "GHSA-m984-2424-x6vw": {
                 "cve_id": "GHSA-m984-2424-x6vw",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Generic attachment downloads bypass draft-release visibility checks",
+                "description": "### Summary In Gitea 1.26.1, anonymous users can download draft release assets through `/attachments/{uuid}` even when the draft release itself is hidden. The generic attachment route does not re-apply the draft-release visibility check before serving the file. ### Details The verified report ties this to `routers/web/repo/attachment.go:141-173`, which serves linked attachments without reloading the parent release or enforcing the draft flag again. `routers/api/v1/repo/release_attachment.go:23-40,134-150` shows the normal release path does enforce `canAccessReleaseDraft(ctx)`, while `services/repository/repository.go:199-204` collapses release attachments down to `unit.TypeReleases` and loses the `IsDraft` context. `routers/web/web.go:872,1471` routes UUID-based attachment downloads to the generic handler. In the verified test, anonymous access to the draft release API returned `404`, but anonymous access to `/attachments/{uuid}` returned `200` and served the draft asset content. ### PoC 1. Start an isolated Gitea 1.26.1 instance and set `BASE=http://127.0.0.1:3000`. Create a test user `owner`. 2. As `owner`, create a public initialized repository: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'name':'draft-asset-demo','private':false,'auto_init':true}' '$BASE/api/v1/user/repos'` 3. As `owner`, create a draft release and copy the returned numeric release ID: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'tag_name':'draft-1','name':'draft-1','draft':true}' '$BASE/api/v1/repos/owner/draft-asset-demo/releases'` 4. Create a harmless asset with recognizable content: `printf 'draft-only-binary' > /tmp/draft-asset.txt` 5. Upload it to the draft release and copy the returned `uuid` or `browser_download_url`: `curl -u owner:ownerpass123 -X POST -H 'Content-Type: application/octet-stream' --data-binary @/tmp/draft-asset.txt '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID/assets?name=draft-asset.txt'` 6. As an anonymous user with no cookies, verify the draft release itself is hidden: `curl -i '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID'` 7. Confirm this returns `404`. 8. As the same anonymous user, request the generic attachment route: `curl -i '$BASE/attachments/$UUID'` 9. Observe `200 OK` and the file body `draft-only-binary`. 10. Optionally compare with the normal release download route `/owner/draft-asset-demo/releases/download/draft-1/draft-asset.txt`, which should remain hidden while `/attachments/$UUID` succeeds. ### Impact This leaks unpublished release assets. Anyone who learns the attachment UUID can retrieve draft binaries or other release files before the maintainer chooses to publish them.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -3311,8 +3311,8 @@
             },
             "CVE-2026-25946": {
                 "cve_id": "CVE-2026-25946",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Server-Side Request Forgery (SSRF) via OpenID Discovery - Gitea v1.25.4",
+                "description": "### Summary An unauthenticated Server-Side Request Forgery (SSRF) vulnerability in Gitea's OpenID authentication allows any remote attacker to make arbitrary HTTP requests to internal network services. This enables internal port scanning, service fingerprinting, and access to localhost-only resources without authentication, effectively bypassing network security controls. ### Details **Vulnerable Code:** routers/web/auth/openid.go - SignInOpenID() function **Affected Endpoint:** POST /user/login/openid **Parameter:** openid_url The OpenID authentication handler accepts user-controlled URLs and performs HTTP requests without validation: ``` // routers/web/auth/openid.go func SignInOpenID(ctx *context.Context) { openidURL := ctx.FormString('openid_url') // Vulnerable: No URL validation before HTTP request redirectURL := setting.AppURL + 'user/openid/callback' authenticateURL, err := openid.RedirectURL(openidURL, redirectURL, '') // ... } ``` ### PoC - Target: Any Gitea instance with OpenID enabled (default) - Test Instance: http://143.244.141.81:3000 - Navigate to OpenID login page: http://143.244.141.81:3000/user/login/openid - Enter internal service URL in 'OpenID URI' field: ``` http://127.0.0.1:22/ (SSH) http://127.0.0.1:3306/ (MySQL) ``` <img width='2250' height='1350' alt='image' src='https://github.com/user-attachments/assets/00c144f0-aadf-49c5-9877-f48a5c1af435' /> - Click 'Sign In' - Check server logs for confirmation ``` journalctl -u gitea -f --no-hostname | grep -E --color 'openid|http|dial|error|127\\.0\\.0\\.1' ``` <img width='2832' height='754' alt='image' src='https://github.com/user-attachments/assets/d83736ce-c519-4ad2-bd51-ce091ed9d20f' /> ### Impact - All Gitea instances with OpenID enabled (default configuration) - Any unauthenticated remote attacker - Organizations with internal services bound to localhost or private networks",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4287,8 +4287,8 @@
             },
             "CVE-2026-59774": {
                 "cve_id": "CVE-2026-59774",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated Arbitrary File Read can lead to RCE",
+                "description": "### Summary An unauthenticated remote attacker can submit Org-mode markup containing a #+INCLUDE directive to POST /{owner}/{repo}/markup for any suitable public repository to read arbitrary server files. By extracting INTERNAL_TOKEN from app.ini, they can inject a Git hook through the internal logger and achieve command execution as the Gitea OS user during an anonymous clone. ### Details Gitea registers `POST /{username}/{reponame}/markup` with optional sign-in, repository assignment, and a repository-unit reader check. An anonymous user passes that check for a public repository with a normal readable code unit. The handler passes the supplied `Mode`, `Text`, and `FilePath` into Gitea's generic markup renderer. Selecting `Mode: file` and a `.org` filename chooses the Org-mode renderer. Gitea 1.27.0 initializes `go-org` using `org.New()` and does not replace its default `ReadFile` callback. In `go-org` 1.9.1, that callback is `ioutil.ReadFile`; `#+INCLUDE` accepts absolute paths and passes them directly to that callback. #### Preconditions - At least one repository is publicly readable and exposes a unit accepted by the repository markup route. A normal public repository with its code unit enabled satisfies this condition. - Standard Gitea storage permissions allow the service user to update Gitea's managed global Git configuration. ### Impact - Read arbitrary files accessible to the Gitea service user without an account. - Submit the file-read payload directly through a public repository's web markup route without committing a file or obtaining repository write access. - Expose Gitea configuration, internal bearer tokens, OAuth/JWT material, and deployment metadata ### Affected - The vulnerable version seem v1.22.1 ~ v1.27.0 ### Credit Found by @xbow-security. Triaged by Guido Leo <guido.leo@xbow.com>. Independently reported by https://github.com/NightRang3r",
                 "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
@@ -4313,8 +4313,8 @@
             },
             "CVE-2026-60008": {
                 "cve_id": "CVE-2026-60008",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Jupyter notebook renderer emits attacker-controlled CSS classes into unsanitized, unsandboxed output",
+                "description": "`modules/markup/jupyter/jupyter.go` sets `SanitizerDisabled: true` but leaves `DisplayInIframe` and `ContentSandbox` at their zero values. It is the only renderer in the tree that turns the sanitizer off while still rendering into the main document. Within that unsanitized output it interpolates `notebook.metadata.language_info.name` \u2014 a value read directly from the file \u2014 into a literal `class` attribute without routing it through `RenderInternal.FormatWithSafeAttrs`. HTML-escaping prevents closing the attribute, but whitespace is untouched, so the notebook can choose its own list of CSS classes on a page where nothing filters them. Combined with Fomantic's `.ui.dimmer` and Gitea's `!important` Tailwind layer, a repository file can replace the entire viewport of a repository page and intercept clicks on it. Script execution was not reached. The reason to fix this is not the overlay: it is that the class attribute is the one place on this path where a security control was skipped, and there is no sanitizer, no iframe sandbox and no CSP behind it. ## Why this is a boundary failure rather than a cosmetic bug Gitea has a deliberate mechanism to stop rendered content from choosing CSS classes. `RenderInternal.ProtectSafeAttrs` rewrites `class='X'` into `data-attr-class='<per-render-nonce>:X'`; the sanitizer allows `data-attr-class`; and `finalProcessor.Close` converts it back only when the nonce matches. Content cannot forge the nonce, so only the renderer's own trusted code can emit a class. `orgmode.go` uses this correctly: ```go _ = ctx.RenderInternal.FormatWithSafeAttrs(sb, `<pre><code class='chroma language-%s'>`, ...) ``` The intent is also written down inside the affected file itself, in the `text/html` MIME handler: ```go // To future developers: don't allow custom CSS classes or attributes, // because '.link-action' or 'data-fetch-xxx' can send POST requests and lead to XSS. ``` That rule is enforced for MIME output and missed for the language field. ## Details **1. The sanitizer is disabled and the output is not confined.** ```go func (renderer) GetExternalRendererOptions() markup.ExternalRendererOptions { return markup.ExternalRendererOptions{ SanitizerDisabled: true, } } ``` `DisplayInIframe` and `ContentSandbox` are left unset. In `modules/markup/render.go` that removes `SanitizeReader` from the pipeline, and the bytes land inside `<div class='file-view markup jupyter-render'>` on the ordinary repository page. By contrast the `openapi-swagger`, `viewer-3d` and `asciicast` renderers also disable the sanitizer, but set `DisplayInIframe: true` and `ContentSandbox: setting.MarkupRenderDefaultSandbox`, so their output is confined to an iframe with no `allow-same-origin`. **2. Untrusted input reaches a literal `class` attribute.** The `language` value comes from `notebook.metadata.language_info.name`, falling back to `metadata.kernelspec.language`, and is interpolated into a `class='chroma language-\u2026'` attribute. `htmlutil.WriteFormat` applies `template.HTMLEscapeString`, which handles `< > & ' '` and leaves whitespace alone. No input yields a raw `'`, so no new attribute can be created \u2014 but spaces pass through, which is enough to append arbitrary additional CSS classes. **3. `/render/` serves the same content with no CSP.** The `/render/` route adds a `Content-Security-Policy: sandbox \u2026` header only when the renderer sets `ContentSandbox`, a field the Jupyter renderer never sets. The result is a top-level, same-origin, navigable `text/html` document built from repository content, with the sanitizer off and no restrictions, reachable anonymously on public repositories. Repository authorization on the route itself is sound (private repositories return 404 to unauthorized users). **4. The notebook selects which frontend renderer processes it.** Because the class is built as `language-%s` from the file, a notebook can declare `'language_info': {'name': 'mermaid'}` (or `math`) and hand its cell source to mermaid.js / KaTeX. Those frontend paths assign markup via `innerHTML` in the parent document before moving it into a non-sandboxed iframe. Today mermaid's `securityLevel: 'strict'` and KaTeX's `trust: false` hold, so script execution was not achieved \u2014 but this is the same unsanitized, no-CSP surface, reached from a file type where nothing signals that a diagram will be drawn. ## Impact Anyone with write access to a repository can make its pages display arbitrary full-screen content on the Gitea origin, with the real hostname and certificate, and make the underlying page unusable. Pushed to a shared repository, it affects every colleague who opens that repository, with no link sent and no unusual action taken \u2014 making fake session-expiry notices, credential-rotation instructions or outage banners credible because the instance itself serves them. Two bounds are worth stating explicitly: - **It does not cross a permission boundary.** The attacker needs write access to the repository holding the notebook; read-only access is not enough. Existing repository permissions are respected. - **The overlay is text.** The cell body passes through chroma, so there is no input, button or link. A credential prompt must end in 'go to this other host', which the victim types by hand. ## Remediation Upgrade to a fixed release. Until then, avoid rendering or serving untrusted `.ipynb` files (for example by disabling the Jupyter renderer on instances that accept notebooks from untrusted contributors). ## Reporter Toprak Yagcioglu. Found and reproduced against a local throwaway `gitea/gitea:1.27.1` container; nothing was tested against any third-party or production instance. Happy to supply a reproduction and to verify a candidate patch.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4326,8 +4326,8 @@
             },
             "CVE-2026-60010": {
                 "cve_id": "CVE-2026-60010",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Repo-side team-link endpoint still bypasses RepoAdminChangeTeamAccess",
+                "description": "### Summary `PUT /api/v1/repos/{owner}/{repo}/teams/{team}` allows a non-owner repository admin to attach organization teams to a repository even when the organization has disabled that behaviour with `RepoAdminChangeTeamAccess=false`. An earlier advisory fixed the corresponding team-side endpoint; the repository-side endpoint retained the weaker check. ### Details The repository-side handler's exception relies on a repository permission check (`IsOwner()`), which for an organization repository is satisfied by a user promoted to owner-level access through an attached admin team. The fixed team-side endpoint instead checks actual organization ownership when `RepoAdminChangeTeamAccess` is disabled. The matching web collaboration-settings handler had the same weak check. ### Impact A user with delegated admin rights on one organization repository can grant other organization teams read or write access to that repository without approval from an actual organization owner, exposing private source and history and, for a write-capable team, granting push access. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39046, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -4339,8 +4339,8 @@
             },
             "CVE-2026-60018": {
                 "cve_id": "CVE-2026-60018",
-                "title": "Authenticated DoS in OneDev migration via unbounded version response body",
-                "description": "### Summary The OneDev migration downloader reads the entire `/~api/version/server` response body into memory before validating the version string, and the migration HTTP client has no timeout. A malicious OneDev-compatible server can return a very large or never-ending response. ### Details Reachable from the web, API and background-task migration paths. Reachable by any authenticated user who can start a repository migration. ### Impact Authenticated availability. An attacker who can start migrations against a server they control can force Gitea to read arbitrarily large response bodies, hold migration requests and workers open until timeout or cancellation, retain that data in memory, and exhaust the migration worker pool. On constrained deployments this creates memory pressure and a possible out-of-memory condition. ### Affected versions Gitea `>= 1.16.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39024, #39033). ### Workarounds Restrict repository-migration permission to trusted users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4404,8 +4404,8 @@
             },
             "CVE-2026-66849": {
                 "cve_id": "CVE-2026-66849",
-                "title": "Package registry: restricted users can read packages of limited-visibility users (authorization bypass)",
-                "description": "### Summary The package-registry access check grants read access to a package owned by a Limited-visibility user to any non-ghost logged-in user, without excluding restricted accounts. A restricted account can therefore enumerate and download the entire package registry (for example Docker, npm, PyPI) of any Limited-visibility user. ### Details The user-owner branch of `determineAccessMode` omits the restricted-user check that the organization-owner branch and the repository permission model apply. ### Impact Authorization boundary / confidentiality. A restricted account can read package content of Limited-visibility users that it should not be able to see. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39043, #39058). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4417,8 +4417,8 @@
             },
             "CVE-2026-66853": {
                 "cve_id": "CVE-2026-66853",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted users can enumerate limited-visibility organizations via the user org-list API (authorization bypass)",
+                "description": "### Summary A restricted account can enumerate Limited-visibility organizations and their name, description and avatar by listing the public organization memberships of a known user through `GET /api/v1/users/{username}/orgs`. ### Details The helper that decides which organization visibilities to include for the viewer returns 'Limited' for any signed-in, non-admin, non-self viewer without excluding restricted accounts, so the response admits both public and limited organizations. The single-organization endpoint `GET /api/v1/orgs/{org}` correctly returns `404` to a restricted viewer for a limited organization; the list path uses a different, unrestricted helper. ### Impact Authorization boundary / confidentiality. A restricted account, which by policy may reach only public content, can discover Limited-visibility organizations and their metadata by walking the public memberships of known users. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39047, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -4443,8 +4443,8 @@
             },
             "CVE-2026-66877": {
                 "cve_id": "CVE-2026-66877",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "RCE on self-hosted runners | fork-PR approval gate (`NeedApproval`) bypass via job-level concurrency cancellation",
+                "description": "### Summary Workflow runs from first-time fork contributors are held for maintainer approval only by inserting the run's jobs in a blocked state. The component that transitions blocked jobs to waiting does not re-check whether the run still needs approval. A separate, legitimate run in the same repository that shares a job-level `concurrency` group with the pending run can cause the pending run to be re-evaluated, which unblocks and dispatches its remaining jobs to runners without approval. Any user who can open a pull request can reach this. ### Details The approval decision itself is correct, but it is enforced purely as job status. The job emitter, the concurrency-preparation path and the runner task-pickup path do not check approval; only the concurrency-wake path did. Cancelling one job of the pending run through the shared job-level concurrency group triggers a re-emit over that run's still-blocked sibling jobs, which are then moved to waiting and picked up by runners. ### Impact Arbitrary, unreviewed workflow code execution on the self-hosted runners of any repository that accepts fork pull requests, defeating the first-time-contributor approval boundary. Fork pull request secrets remain withheld and the run token remains read-only; the impact is access to the runner host (internal network reachability, runner-local caches, workspaces and credentials, and persistence into later trusted builds). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39005, #39018). ### Workarounds Instances that do not run fork pull request workflows on self-hosted runners are not exposed to the code-execution impact. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -4542,8 +4542,8 @@
             },
             "CVE-2026-70402": {
                 "cve_id": "CVE-2026-70402",
-                "title": "Permissive Git hook directory and script modes may allow local code execution as the Gitea service account",
-                "description": "### Summary Gitea creates server-side Git hook directories and scripts with mode `0777`, relying on the process umask to reduce it. Under a permissive umask (for example `0000` or `0002`) the resulting files or directories are group- or world-writable. On a deployment where another local principal can reach the repository storage, that principal can modify an existing hook or add an executable file to a writable hook directory; a later Git operation then runs it as the Gitea service account. ### Details The hook-creation function is reached through ordinary operations (creating or forking a repository, completing a migration, converting a mirror, synchronizing hooks, creating a wiki). A standard systemd deployment with umask `0022` produces mode `0755` and is not directly affected. This does not by itself grant root unless Gitea runs as root. ### Impact Local code execution as the Gitea service account on affected deployments, with the consequences that account allows (modifying repositories, reading accessible files, persistence through hooks). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39008, #39016). ### Workarounds Run Gitea with a restrictive umask (`0022` or tighter) and ensure repository storage is not writable by untrusted local users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4555,8 +4555,8 @@
             },
             "CVE-2026-70406": {
                 "cve_id": "CVE-2026-70406",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Public-only tokens can read private head repositories via compare and pull request creation (incomplete fix of CVE-2026-58443)",
+                "description": "### Summary The fix for CVE-2026-58443 added a 'token can access repository' check to `UpdatePullRequest` only. The shared helper `parseCompareInfo`, used by the compare-diff endpoint and by pull request creation, lacked the same check. A `public-only, read:repository` token can read commit history and diff content of a private head repository by routing the request through a public base repository. ### Details The route-level public-only middleware validates only the base repository named in the route. The head repository resolved inside `parseCompareInfo` is checked for user permission but not against the token's scope. Two entry points reach it: 1. `GET /api/v1/repos/{owner}/{repo}/compare/{basehead}` with `head` given as `owner/repo:branch`. The head repository does not need to be a fork of the base. 2. `POST /api/v1/repos/{owner}/{repo}/pulls` with the same `head` syntax. Gitea then pushes the private head branch to `refs/pull/{index}/head` of the public base repository, where the public diff and patch endpoints serve it. The related disclosure of private head repository metadata and commit SHA through `ToAPIPullRequest` in the pull request read endpoints is handled separately in https://github.com/go-gitea/gitea/pull/39167. ### Impact Confidentiality bypass of the `public-only` token boundary. A leaked public-only token can read private repository commits and diffs it was explicitly restricted from. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 by https://github.com/go-gitea/gitea/pull/39006 and https://github.com/go-gitea/gitea/pull/39013. ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -4594,8 +4594,8 @@
             },
             "CVE-2026-71301": {
                 "cve_id": "CVE-2026-71301",
-                "title": "Wiki-only members can read private pull request titles through markup preview",
-                "description": "### Summary In a private repository, a member with only Wiki access can use `POST /{owner}/{repo}/markup` to resolve a same-repository pull request reference and receive the pull request title and state icon, despite having no Issues or Pull Requests access. ### Details The markup route accepts any one of Code, Issues, Pull Requests, Releases or Wiki access. The renderer's unit check for referenced issues and pull requests is applied only in the cross-repository branch, so a same-repository reference reaches title and icon rendering without a unit check. No bodies, comments or attachments are returned. ### Impact Confidentiality. A Wiki-only member can read pull request titles and displayed state from a private repository. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39045, #39054). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -4633,8 +4633,8 @@
             },
             "CVE-2026-73135": {
                 "cve_id": "CVE-2026-73135",
-                "title": "Repository listing exposes repositories owned by hidden users due to inconsistent visibility predicate",
-                "description": "### Summary Gitea implements repository visibility with several SQL predicates that are meant to be equivalent. One of them, used by the accessible-repository condition, treats repositories owned by hidden users differently from the others. As a result, some repository-listing endpoints return repositories owned by hidden users even though those repositories are unreachable through their direct routes, which still return `404`. ### Details The authenticated repository-search API is the broadest affected surface; the forks listing is also affected for anonymous users, and watched repositories for users already subscribed. ### Impact Any authenticated user can enumerate repositories owned by hidden users through repository search; anonymous users can do so through the forks listing. Metadata disclosure only. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39009, #39012). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4646,8 +4646,8 @@
             },
             "CVE-2026-73273": {
                 "cve_id": "CVE-2026-73273",
-                "title": "Package size quota bypass and unbounded memory read in the Maven checksum upload path",
-                "description": "### Summary When a Maven artifact is uploaded with a checksum extension (`.md5`, `.sha1`, `.sha256`, `.sha512`), the handler reads the entire request body into memory and compares it to the stored digest, then returns \u2014 before the code path that enforces the package size quota. The checksum branch therefore has neither a size quota nor any bound on how much is read into memory, although a valid checksum value is at most 128 bytes. ### Details The body is read with `io.ReadAll` and copied again for the comparison; both allocations are sized by the client. The configured `LIMIT_SIZE_MAVEN` is not applied to this path. Reachable by any authenticated user with Maven package write access. ### Impact Package size-quota bypass and client-controlled memory allocation for a single request (uncontrolled resource consumption). A practical outage was not demonstrated; the issue should be read as an unbounded allocation and a quota bypass. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39028, #39031). ### Workarounds Limit request body size at the reverse proxy. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4672,8 +4672,8 @@
             },
             "CVE-2026-73504": {
                 "cve_id": "CVE-2026-73504",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated artifact-to-repository oracle in raw Actions downloads",
+                "description": "### Summary The raw Actions artifact download endpoint looks up the artifact row before validating the signed URL. Without authentication, an invalid signature produces one response when the supplied global artifact ID belongs to the named repository (and is upload-confirmed or expired) and a different response when it does not. Because artifact IDs are global auto-incrementing integers, this lets an unauthenticated caller test whether a guessed artifact ID belongs to an already-named private repository. ### Details The signature check still protects artifact bytes; only the ordering of the row lookup and the signature check creates the distinguishable responses. The endpoint does not reveal whether the repository exists, since inaccessible and nonexistent repositories return the same status. ### Impact Unauthenticated confirmation of the association between an artifact ID and a known private repository. Artifact contents are not exposed. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39049, #39053). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -4750,8 +4750,8 @@
             },
             "CVE-2026-78231": {
                 "cve_id": "CVE-2026-78231",
-                "title": "Unauthenticated Blind SSRF via OpenID Sign-In Verification",
-                "description": "### Summary When OpenID sign-in is enabled, Gitea accepts an unauthenticated GET request to `/user/login/openid` and passes attacker-controlled OpenID assertion parameters into the OpenID 2.0 verification flow. During verification, the upstream `github.com/yohcop/openid-go` library sends a server-side `POST` request to the attacker-controlled `openid.op_endpoint` URL using `http.DefaultClient`. This gives an unauthenticated remote attacker a blind SSRF primitive from the Gitea server. The attacker controls the destination URL and the form-encoded POST body. In deployments where the Gitea server can reach loopback, private-network, link-local, or otherwise internal HTTP services, this can be used to interact with services that are not directly reachable by the attacker. ### Details The vulnerable route is the OpenID sign-in endpoint: ```go m.Combo('/login/openid'). Get(auth.SignInOpenID). Post(web.Bind(forms.SignInOpenIDForm{}), auth.SignInOpenIDPost) ``` The route is gated by `openIDSignInEnabled`, but it does not require an authenticated user. When `[openid] ENABLE_OPENID_SIGNIN = true`, an anonymous client can reach the GET handler. ### Impact An attacker can cause the Gitea server to send an outbound HTTP POST request to an attacker-controlled URL by sending one unauthenticated GET request to `/user/login/openid`, provided OpenID sign-in is enabled. The attacker controls the target URL through `openid.op_endpoint` and controls much of the form-encoded body through the supplied OpenID query parameters. The impact depends on the deployment environment and network reachability. In common self-hosted deployments, Gitea may be able to reach services that are not exposed to the internet, including loopback services, internal admin panels, CI/CD endpoints, internal webhooks, private-network APIs, or link-local metadata endpoints. Because the response is not returned to the attacker, the primitive is blind, but it can still trigger state-changing actions on internal services that accept POST requests, and it can be used as an internal network interaction primitive. This also creates an availability risk if outbound requests can be made to slow or non-responsive targets, because the OpenID path uses the default HTTP client behavior without an apparent request timeout in this path. I would honestly argue that a higher environmental score may be appropriate where the Gitea server can reach sensitive unauthenticated internal services that accept form-encoded POST requests.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -4763,8 +4763,8 @@
             },
             "CVE-2026-78433": {
                 "cve_id": "CVE-2026-78433",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Attachments created before the January 2026 cutoff skip the cross repository check entirely, and permission is then evaluated against the repository named in the URL rather than the repository owning the attachment, so a private repository's attachment is served through any public repository's path",
+                "description": "### Summary The web attachment handler contains a guard that rejects a request for an attachment made through a repository other than the one that owns it. That guard is applied only to attachments created after 16 January 2026; older attachments skip it even when their owning-repository id is correctly populated. When the guard is skipped, the handler evaluates permission against the repository named in the request URL instead of the repository that owns the attachment. An attachment belonging to a private repository can therefore be retrieved by requesting it through any public repository's attachment path. The route allows anonymous access, so no authentication is required. ### Details In `routers/web/repo/attachment.go` the cross-repository check is gated only on the attachment's creation timestamp, unlike its two sibling call sites which also require the owning-repository id to be unset. A migration backfills that id on upgrade, so the timestamp-only exemption protects no legitimate rows and instead allows permission to be checked against the wrong repository. Downstream draft-release and token-scope checks inherit the same wrong subject. Attachment UUIDs are random and not enumerable, so exploitation requires knowledge of a specific attachment UUID (for example from a removed collaborator, a public-to-private conversion, notification mail, webhook payloads, or proxy/CDN logs). ### Impact Disclosure of private-repository attachment contents \u2014 issue and pull request attachments and release assets \u2014 to an unauthenticated caller who knows the attachment UUID. Incorrect authorization / cross-repository access control bypass. Affects any instance that held attachments created before 16 January 2026. ### Affected versions Gitea `>= 1.26.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39048, #39077). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -5070,9 +5070,9 @@
             },
             "GHSA-3m6q-h5gj-7mrw": {
                 "cve_id": "GHSA-3m6q-h5gj-7mrw",
-                "title": "Gitea has insecure default SSH settings",
-                "description": "## Summary\n\nThe built-in SSH server currently advertises a number of key exchange, MAC, and host key algorithms that are considered weak or broken. The defaults should be tightened so a fresh installation passes a baseline SSH security audit out of the box.\n\n## Details\n\nRunning `ssh-audit` against a default deployment flags the following as `fail`:\n\n- **Key exchange**\n  - `ecdh-sha2-nistp256`\n  - `ecdh-sha2-nistp384`\n  - `ecdh-sha2-nistp521`\n- **MAC**\n  - `hmac-sha1`\n- **Host key**\n  - `ssh-rsa`\n\n## Reproduction\n\n```sh\ndocker run -it --rm positronsecurity/ssh-audit -p 2222 gitea.local\n```\n\n## Impact\n\nDefault deployments expose algorithms that are known-weak or deprecated upstream. The current workaround requires manually setting several `GITEA__server__SSH_SERVER_*` variables, which most users will never do.\n\n### Workaround\n\n```ini\n[server]\nSSH_SERVER_KEY_EXCHANGES = curve25519-sha256, diffie-hellman-group14-sha256\nSSH_SERVER_CIPHERS       = chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com\nSSH_SERVER_MACS          = hmac-sha2-256-etm@openssh.com, hmac-sha2-256\n```\n\nThere is no exposed option to restrict host key algorithms, so `ssh-rsa` remains advertised.\n\n## Acceptance criteria\n\n- [ ] Default `SSH_SERVER_KEY_EXCHANGES`, `SSH_SERVER_CIPHERS`, and `SSH_SERVER_MACS` updated to the secure list above.\n- [ ] New `SSH_SERVER_HOST_KEY_ALGORITHMS` option added, with a default that excludes `ssh-rsa`.\n- [ ] Documentation updated to reflect the new defaults.\n- [ ] `ssh-audit` against a fresh install reports no `[fail]` entries.",
-                "severity": "MEDIUM",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -5083,8 +5083,8 @@
             },
             "GHSA-m984-2424-x6vw": {
                 "cve_id": "GHSA-m984-2424-x6vw",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Generic attachment downloads bypass draft-release visibility checks",
+                "description": "### Summary In Gitea 1.26.1, anonymous users can download draft release assets through `/attachments/{uuid}` even when the draft release itself is hidden. The generic attachment route does not re-apply the draft-release visibility check before serving the file. ### Details The verified report ties this to `routers/web/repo/attachment.go:141-173`, which serves linked attachments without reloading the parent release or enforcing the draft flag again. `routers/api/v1/repo/release_attachment.go:23-40,134-150` shows the normal release path does enforce `canAccessReleaseDraft(ctx)`, while `services/repository/repository.go:199-204` collapses release attachments down to `unit.TypeReleases` and loses the `IsDraft` context. `routers/web/web.go:872,1471` routes UUID-based attachment downloads to the generic handler. In the verified test, anonymous access to the draft release API returned `404`, but anonymous access to `/attachments/{uuid}` returned `200` and served the draft asset content. ### PoC 1. Start an isolated Gitea 1.26.1 instance and set `BASE=http://127.0.0.1:3000`. Create a test user `owner`. 2. As `owner`, create a public initialized repository: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'name':'draft-asset-demo','private':false,'auto_init':true}' '$BASE/api/v1/user/repos'` 3. As `owner`, create a draft release and copy the returned numeric release ID: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'tag_name':'draft-1','name':'draft-1','draft':true}' '$BASE/api/v1/repos/owner/draft-asset-demo/releases'` 4. Create a harmless asset with recognizable content: `printf 'draft-only-binary' > /tmp/draft-asset.txt` 5. Upload it to the draft release and copy the returned `uuid` or `browser_download_url`: `curl -u owner:ownerpass123 -X POST -H 'Content-Type: application/octet-stream' --data-binary @/tmp/draft-asset.txt '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID/assets?name=draft-asset.txt'` 6. As an anonymous user with no cookies, verify the draft release itself is hidden: `curl -i '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID'` 7. Confirm this returns `404`. 8. As the same anonymous user, request the generic attachment route: `curl -i '$BASE/attachments/$UUID'` 9. Observe `200 OK` and the file body `draft-only-binary`. 10. Optionally compare with the normal release download route `/owner/draft-asset-demo/releases/download/draft-1/draft-asset.txt`, which should remain hidden while `/attachments/$UUID` succeeds. ### Impact This leaks unpublished release assets. Anyone who learns the attachment UUID can retrieve draft binaries or other release files before the maintainer chooses to publish them.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -5808,8 +5808,8 @@
             },
             "CVE-2026-25946": {
                 "cve_id": "CVE-2026-25946",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Server-Side Request Forgery (SSRF) via OpenID Discovery - Gitea v1.25.4",
+                "description": "### Summary An unauthenticated Server-Side Request Forgery (SSRF) vulnerability in Gitea's OpenID authentication allows any remote attacker to make arbitrary HTTP requests to internal network services. This enables internal port scanning, service fingerprinting, and access to localhost-only resources without authentication, effectively bypassing network security controls. ### Details **Vulnerable Code:** routers/web/auth/openid.go - SignInOpenID() function **Affected Endpoint:** POST /user/login/openid **Parameter:** openid_url The OpenID authentication handler accepts user-controlled URLs and performs HTTP requests without validation: ``` // routers/web/auth/openid.go func SignInOpenID(ctx *context.Context) { openidURL := ctx.FormString('openid_url') // Vulnerable: No URL validation before HTTP request redirectURL := setting.AppURL + 'user/openid/callback' authenticateURL, err := openid.RedirectURL(openidURL, redirectURL, '') // ... } ``` ### PoC - Target: Any Gitea instance with OpenID enabled (default) - Test Instance: http://143.244.141.81:3000 - Navigate to OpenID login page: http://143.244.141.81:3000/user/login/openid - Enter internal service URL in 'OpenID URI' field: ``` http://127.0.0.1:22/ (SSH) http://127.0.0.1:3306/ (MySQL) ``` <img width='2250' height='1350' alt='image' src='https://github.com/user-attachments/assets/00c144f0-aadf-49c5-9877-f48a5c1af435' /> - Click 'Sign In' - Check server logs for confirmation ``` journalctl -u gitea -f --no-hostname | grep -E --color 'openid|http|dial|error|127\\.0\\.0\\.1' ``` <img width='2832' height='754' alt='image' src='https://github.com/user-attachments/assets/d83736ce-c519-4ad2-bd51-ce091ed9d20f' /> ### Impact - All Gitea instances with OpenID enabled (default configuration) - Any unauthenticated remote attacker - Organizations with internal services bound to localhost or private networks",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -6769,8 +6769,8 @@
             },
             "CVE-2026-59774": {
                 "cve_id": "CVE-2026-59774",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated Arbitrary File Read can lead to RCE",
+                "description": "### Summary An unauthenticated remote attacker can submit Org-mode markup containing a #+INCLUDE directive to POST /{owner}/{repo}/markup for any suitable public repository to read arbitrary server files. By extracting INTERNAL_TOKEN from app.ini, they can inject a Git hook through the internal logger and achieve command execution as the Gitea OS user during an anonymous clone. ### Details Gitea registers `POST /{username}/{reponame}/markup` with optional sign-in, repository assignment, and a repository-unit reader check. An anonymous user passes that check for a public repository with a normal readable code unit. The handler passes the supplied `Mode`, `Text`, and `FilePath` into Gitea's generic markup renderer. Selecting `Mode: file` and a `.org` filename chooses the Org-mode renderer. Gitea 1.27.0 initializes `go-org` using `org.New()` and does not replace its default `ReadFile` callback. In `go-org` 1.9.1, that callback is `ioutil.ReadFile`; `#+INCLUDE` accepts absolute paths and passes them directly to that callback. #### Preconditions - At least one repository is publicly readable and exposes a unit accepted by the repository markup route. A normal public repository with its code unit enabled satisfies this condition. - Standard Gitea storage permissions allow the service user to update Gitea's managed global Git configuration. ### Impact - Read arbitrary files accessible to the Gitea service user without an account. - Submit the file-read payload directly through a public repository's web markup route without committing a file or obtaining repository write access. - Expose Gitea configuration, internal bearer tokens, OAuth/JWT material, and deployment metadata ### Affected - The vulnerable version seem v1.22.1 ~ v1.27.0 ### Credit Found by @xbow-security. Triaged by Guido Leo <guido.leo@xbow.com>. Independently reported by https://github.com/NightRang3r",
                 "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
@@ -6795,8 +6795,8 @@
             },
             "CVE-2026-60008": {
                 "cve_id": "CVE-2026-60008",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Jupyter notebook renderer emits attacker-controlled CSS classes into unsanitized, unsandboxed output",
+                "description": "`modules/markup/jupyter/jupyter.go` sets `SanitizerDisabled: true` but leaves `DisplayInIframe` and `ContentSandbox` at their zero values. It is the only renderer in the tree that turns the sanitizer off while still rendering into the main document. Within that unsanitized output it interpolates `notebook.metadata.language_info.name` \u2014 a value read directly from the file \u2014 into a literal `class` attribute without routing it through `RenderInternal.FormatWithSafeAttrs`. HTML-escaping prevents closing the attribute, but whitespace is untouched, so the notebook can choose its own list of CSS classes on a page where nothing filters them. Combined with Fomantic's `.ui.dimmer` and Gitea's `!important` Tailwind layer, a repository file can replace the entire viewport of a repository page and intercept clicks on it. Script execution was not reached. The reason to fix this is not the overlay: it is that the class attribute is the one place on this path where a security control was skipped, and there is no sanitizer, no iframe sandbox and no CSP behind it. ## Why this is a boundary failure rather than a cosmetic bug Gitea has a deliberate mechanism to stop rendered content from choosing CSS classes. `RenderInternal.ProtectSafeAttrs` rewrites `class='X'` into `data-attr-class='<per-render-nonce>:X'`; the sanitizer allows `data-attr-class`; and `finalProcessor.Close` converts it back only when the nonce matches. Content cannot forge the nonce, so only the renderer's own trusted code can emit a class. `orgmode.go` uses this correctly: ```go _ = ctx.RenderInternal.FormatWithSafeAttrs(sb, `<pre><code class='chroma language-%s'>`, ...) ``` The intent is also written down inside the affected file itself, in the `text/html` MIME handler: ```go // To future developers: don't allow custom CSS classes or attributes, // because '.link-action' or 'data-fetch-xxx' can send POST requests and lead to XSS. ``` That rule is enforced for MIME output and missed for the language field. ## Details **1. The sanitizer is disabled and the output is not confined.** ```go func (renderer) GetExternalRendererOptions() markup.ExternalRendererOptions { return markup.ExternalRendererOptions{ SanitizerDisabled: true, } } ``` `DisplayInIframe` and `ContentSandbox` are left unset. In `modules/markup/render.go` that removes `SanitizeReader` from the pipeline, and the bytes land inside `<div class='file-view markup jupyter-render'>` on the ordinary repository page. By contrast the `openapi-swagger`, `viewer-3d` and `asciicast` renderers also disable the sanitizer, but set `DisplayInIframe: true` and `ContentSandbox: setting.MarkupRenderDefaultSandbox`, so their output is confined to an iframe with no `allow-same-origin`. **2. Untrusted input reaches a literal `class` attribute.** The `language` value comes from `notebook.metadata.language_info.name`, falling back to `metadata.kernelspec.language`, and is interpolated into a `class='chroma language-\u2026'` attribute. `htmlutil.WriteFormat` applies `template.HTMLEscapeString`, which handles `< > & ' '` and leaves whitespace alone. No input yields a raw `'`, so no new attribute can be created \u2014 but spaces pass through, which is enough to append arbitrary additional CSS classes. **3. `/render/` serves the same content with no CSP.** The `/render/` route adds a `Content-Security-Policy: sandbox \u2026` header only when the renderer sets `ContentSandbox`, a field the Jupyter renderer never sets. The result is a top-level, same-origin, navigable `text/html` document built from repository content, with the sanitizer off and no restrictions, reachable anonymously on public repositories. Repository authorization on the route itself is sound (private repositories return 404 to unauthorized users). **4. The notebook selects which frontend renderer processes it.** Because the class is built as `language-%s` from the file, a notebook can declare `'language_info': {'name': 'mermaid'}` (or `math`) and hand its cell source to mermaid.js / KaTeX. Those frontend paths assign markup via `innerHTML` in the parent document before moving it into a non-sandboxed iframe. Today mermaid's `securityLevel: 'strict'` and KaTeX's `trust: false` hold, so script execution was not achieved \u2014 but this is the same unsanitized, no-CSP surface, reached from a file type where nothing signals that a diagram will be drawn. ## Impact Anyone with write access to a repository can make its pages display arbitrary full-screen content on the Gitea origin, with the real hostname and certificate, and make the underlying page unusable. Pushed to a shared repository, it affects every colleague who opens that repository, with no link sent and no unusual action taken \u2014 making fake session-expiry notices, credential-rotation instructions or outage banners credible because the instance itself serves them. Two bounds are worth stating explicitly: - **It does not cross a permission boundary.** The attacker needs write access to the repository holding the notebook; read-only access is not enough. Existing repository permissions are respected. - **The overlay is text.** The cell body passes through chroma, so there is no input, button or link. A credential prompt must end in 'go to this other host', which the victim types by hand. ## Remediation Upgrade to a fixed release. Until then, avoid rendering or serving untrusted `.ipynb` files (for example by disabling the Jupyter renderer on instances that accept notebooks from untrusted contributors). ## Reporter Toprak Yagcioglu. Found and reproduced against a local throwaway `gitea/gitea:1.27.1` container; nothing was tested against any third-party or production instance. Happy to supply a reproduction and to verify a candidate patch.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -6808,8 +6808,8 @@
             },
             "CVE-2026-60010": {
                 "cve_id": "CVE-2026-60010",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Repo-side team-link endpoint still bypasses RepoAdminChangeTeamAccess",
+                "description": "### Summary `PUT /api/v1/repos/{owner}/{repo}/teams/{team}` allows a non-owner repository admin to attach organization teams to a repository even when the organization has disabled that behaviour with `RepoAdminChangeTeamAccess=false`. An earlier advisory fixed the corresponding team-side endpoint; the repository-side endpoint retained the weaker check. ### Details The repository-side handler's exception relies on a repository permission check (`IsOwner()`), which for an organization repository is satisfied by a user promoted to owner-level access through an attached admin team. The fixed team-side endpoint instead checks actual organization ownership when `RepoAdminChangeTeamAccess` is disabled. The matching web collaboration-settings handler had the same weak check. ### Impact A user with delegated admin rights on one organization repository can grant other organization teams read or write access to that repository without approval from an actual organization owner, exposing private source and history and, for a write-capable team, granting push access. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39046, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -6821,8 +6821,8 @@
             },
             "CVE-2026-60018": {
                 "cve_id": "CVE-2026-60018",
-                "title": "Authenticated DoS in OneDev migration via unbounded version response body",
-                "description": "### Summary The OneDev migration downloader reads the entire `/~api/version/server` response body into memory before validating the version string, and the migration HTTP client has no timeout. A malicious OneDev-compatible server can return a very large or never-ending response. ### Details Reachable from the web, API and background-task migration paths. Reachable by any authenticated user who can start a repository migration. ### Impact Authenticated availability. An attacker who can start migrations against a server they control can force Gitea to read arbitrarily large response bodies, hold migration requests and workers open until timeout or cancellation, retain that data in memory, and exhaust the migration worker pool. On constrained deployments this creates memory pressure and a possible out-of-memory condition. ### Affected versions Gitea `>= 1.16.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39024, #39033). ### Workarounds Restrict repository-migration permission to trusted users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -6886,8 +6886,8 @@
             },
             "CVE-2026-66849": {
                 "cve_id": "CVE-2026-66849",
-                "title": "Package registry: restricted users can read packages of limited-visibility users (authorization bypass)",
-                "description": "### Summary The package-registry access check grants read access to a package owned by a Limited-visibility user to any non-ghost logged-in user, without excluding restricted accounts. A restricted account can therefore enumerate and download the entire package registry (for example Docker, npm, PyPI) of any Limited-visibility user. ### Details The user-owner branch of `determineAccessMode` omits the restricted-user check that the organization-owner branch and the repository permission model apply. ### Impact Authorization boundary / confidentiality. A restricted account can read package content of Limited-visibility users that it should not be able to see. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39043, #39058). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -6899,8 +6899,8 @@
             },
             "CVE-2026-66853": {
                 "cve_id": "CVE-2026-66853",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted users can enumerate limited-visibility organizations via the user org-list API (authorization bypass)",
+                "description": "### Summary A restricted account can enumerate Limited-visibility organizations and their name, description and avatar by listing the public organization memberships of a known user through `GET /api/v1/users/{username}/orgs`. ### Details The helper that decides which organization visibilities to include for the viewer returns 'Limited' for any signed-in, non-admin, non-self viewer without excluding restricted accounts, so the response admits both public and limited organizations. The single-organization endpoint `GET /api/v1/orgs/{org}` correctly returns `404` to a restricted viewer for a limited organization; the list path uses a different, unrestricted helper. ### Impact Authorization boundary / confidentiality. A restricted account, which by policy may reach only public content, can discover Limited-visibility organizations and their metadata by walking the public memberships of known users. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39047, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -6925,8 +6925,8 @@
             },
             "CVE-2026-66877": {
                 "cve_id": "CVE-2026-66877",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "RCE on self-hosted runners | fork-PR approval gate (`NeedApproval`) bypass via job-level concurrency cancellation",
+                "description": "### Summary Workflow runs from first-time fork contributors are held for maintainer approval only by inserting the run's jobs in a blocked state. The component that transitions blocked jobs to waiting does not re-check whether the run still needs approval. A separate, legitimate run in the same repository that shares a job-level `concurrency` group with the pending run can cause the pending run to be re-evaluated, which unblocks and dispatches its remaining jobs to runners without approval. Any user who can open a pull request can reach this. ### Details The approval decision itself is correct, but it is enforced purely as job status. The job emitter, the concurrency-preparation path and the runner task-pickup path do not check approval; only the concurrency-wake path did. Cancelling one job of the pending run through the shared job-level concurrency group triggers a re-emit over that run's still-blocked sibling jobs, which are then moved to waiting and picked up by runners. ### Impact Arbitrary, unreviewed workflow code execution on the self-hosted runners of any repository that accepts fork pull requests, defeating the first-time-contributor approval boundary. Fork pull request secrets remain withheld and the run token remains read-only; the impact is access to the runner host (internal network reachability, runner-local caches, workspaces and credentials, and persistence into later trusted builds). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39005, #39018). ### Workarounds Instances that do not run fork pull request workflows on self-hosted runners are not exposed to the code-execution impact. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -7021,8 +7021,8 @@
             },
             "CVE-2026-70402": {
                 "cve_id": "CVE-2026-70402",
-                "title": "Permissive Git hook directory and script modes may allow local code execution as the Gitea service account",
-                "description": "### Summary Gitea creates server-side Git hook directories and scripts with mode `0777`, relying on the process umask to reduce it. Under a permissive umask (for example `0000` or `0002`) the resulting files or directories are group- or world-writable. On a deployment where another local principal can reach the repository storage, that principal can modify an existing hook or add an executable file to a writable hook directory; a later Git operation then runs it as the Gitea service account. ### Details The hook-creation function is reached through ordinary operations (creating or forking a repository, completing a migration, converting a mirror, synchronizing hooks, creating a wiki). A standard systemd deployment with umask `0022` produces mode `0755` and is not directly affected. This does not by itself grant root unless Gitea runs as root. ### Impact Local code execution as the Gitea service account on affected deployments, with the consequences that account allows (modifying repositories, reading accessible files, persistence through hooks). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39008, #39016). ### Workarounds Run Gitea with a restrictive umask (`0022` or tighter) and ensure repository storage is not writable by untrusted local users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -7034,8 +7034,8 @@
             },
             "CVE-2026-70406": {
                 "cve_id": "CVE-2026-70406",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Public-only tokens can read private head repositories via compare and pull request creation (incomplete fix of CVE-2026-58443)",
+                "description": "### Summary The fix for CVE-2026-58443 added a 'token can access repository' check to `UpdatePullRequest` only. The shared helper `parseCompareInfo`, used by the compare-diff endpoint and by pull request creation, lacked the same check. A `public-only, read:repository` token can read commit history and diff content of a private head repository by routing the request through a public base repository. ### Details The route-level public-only middleware validates only the base repository named in the route. The head repository resolved inside `parseCompareInfo` is checked for user permission but not against the token's scope. Two entry points reach it: 1. `GET /api/v1/repos/{owner}/{repo}/compare/{basehead}` with `head` given as `owner/repo:branch`. The head repository does not need to be a fork of the base. 2. `POST /api/v1/repos/{owner}/{repo}/pulls` with the same `head` syntax. Gitea then pushes the private head branch to `refs/pull/{index}/head` of the public base repository, where the public diff and patch endpoints serve it. The related disclosure of private head repository metadata and commit SHA through `ToAPIPullRequest` in the pull request read endpoints is handled separately in https://github.com/go-gitea/gitea/pull/39167. ### Impact Confidentiality bypass of the `public-only` token boundary. A leaked public-only token can read private repository commits and diffs it was explicitly restricted from. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 by https://github.com/go-gitea/gitea/pull/39006 and https://github.com/go-gitea/gitea/pull/39013. ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -7073,8 +7073,8 @@
             },
             "CVE-2026-71301": {
                 "cve_id": "CVE-2026-71301",
-                "title": "Wiki-only members can read private pull request titles through markup preview",
-                "description": "### Summary In a private repository, a member with only Wiki access can use `POST /{owner}/{repo}/markup` to resolve a same-repository pull request reference and receive the pull request title and state icon, despite having no Issues or Pull Requests access. ### Details The markup route accepts any one of Code, Issues, Pull Requests, Releases or Wiki access. The renderer's unit check for referenced issues and pull requests is applied only in the cross-repository branch, so a same-repository reference reaches title and icon rendering without a unit check. No bodies, comments or attachments are returned. ### Impact Confidentiality. A Wiki-only member can read pull request titles and displayed state from a private repository. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39045, #39054). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -7112,8 +7112,8 @@
             },
             "CVE-2026-73135": {
                 "cve_id": "CVE-2026-73135",
-                "title": "Repository listing exposes repositories owned by hidden users due to inconsistent visibility predicate",
-                "description": "### Summary Gitea implements repository visibility with several SQL predicates that are meant to be equivalent. One of them, used by the accessible-repository condition, treats repositories owned by hidden users differently from the others. As a result, some repository-listing endpoints return repositories owned by hidden users even though those repositories are unreachable through their direct routes, which still return `404`. ### Details The authenticated repository-search API is the broadest affected surface; the forks listing is also affected for anonymous users, and watched repositories for users already subscribed. ### Impact Any authenticated user can enumerate repositories owned by hidden users through repository search; anonymous users can do so through the forks listing. Metadata disclosure only. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39009, #39012). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -7125,8 +7125,8 @@
             },
             "CVE-2026-73273": {
                 "cve_id": "CVE-2026-73273",
-                "title": "Package size quota bypass and unbounded memory read in the Maven checksum upload path",
-                "description": "### Summary When a Maven artifact is uploaded with a checksum extension (`.md5`, `.sha1`, `.sha256`, `.sha512`), the handler reads the entire request body into memory and compares it to the stored digest, then returns \u2014 before the code path that enforces the package size quota. The checksum branch therefore has neither a size quota nor any bound on how much is read into memory, although a valid checksum value is at most 128 bytes. ### Details The body is read with `io.ReadAll` and copied again for the comparison; both allocations are sized by the client. The configured `LIMIT_SIZE_MAVEN` is not applied to this path. Reachable by any authenticated user with Maven package write access. ### Impact Package size-quota bypass and client-controlled memory allocation for a single request (uncontrolled resource consumption). A practical outage was not demonstrated; the issue should be read as an unbounded allocation and a quota bypass. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39028, #39031). ### Workarounds Limit request body size at the reverse proxy. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -7151,8 +7151,8 @@
             },
             "CVE-2026-73504": {
                 "cve_id": "CVE-2026-73504",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated artifact-to-repository oracle in raw Actions downloads",
+                "description": "### Summary The raw Actions artifact download endpoint looks up the artifact row before validating the signed URL. Without authentication, an invalid signature produces one response when the supplied global artifact ID belongs to the named repository (and is upload-confirmed or expired) and a different response when it does not. Because artifact IDs are global auto-incrementing integers, this lets an unauthenticated caller test whether a guessed artifact ID belongs to an already-named private repository. ### Details The signature check still protects artifact bytes; only the ordering of the row lookup and the signature check creates the distinguishable responses. The endpoint does not reveal whether the repository exists, since inaccessible and nonexistent repositories return the same status. ### Impact Unauthenticated confirmation of the association between an artifact ID and a known private repository. Artifact contents are not exposed. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39049, #39053). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -7229,8 +7229,8 @@
             },
             "CVE-2026-78231": {
                 "cve_id": "CVE-2026-78231",
-                "title": "Unauthenticated Blind SSRF via OpenID Sign-In Verification",
-                "description": "### Summary When OpenID sign-in is enabled, Gitea accepts an unauthenticated GET request to `/user/login/openid` and passes attacker-controlled OpenID assertion parameters into the OpenID 2.0 verification flow. During verification, the upstream `github.com/yohcop/openid-go` library sends a server-side `POST` request to the attacker-controlled `openid.op_endpoint` URL using `http.DefaultClient`. This gives an unauthenticated remote attacker a blind SSRF primitive from the Gitea server. The attacker controls the destination URL and the form-encoded POST body. In deployments where the Gitea server can reach loopback, private-network, link-local, or otherwise internal HTTP services, this can be used to interact with services that are not directly reachable by the attacker. ### Details The vulnerable route is the OpenID sign-in endpoint: ```go m.Combo('/login/openid'). Get(auth.SignInOpenID). Post(web.Bind(forms.SignInOpenIDForm{}), auth.SignInOpenIDPost) ``` The route is gated by `openIDSignInEnabled`, but it does not require an authenticated user. When `[openid] ENABLE_OPENID_SIGNIN = true`, an anonymous client can reach the GET handler. ### Impact An attacker can cause the Gitea server to send an outbound HTTP POST request to an attacker-controlled URL by sending one unauthenticated GET request to `/user/login/openid`, provided OpenID sign-in is enabled. The attacker controls the target URL through `openid.op_endpoint` and controls much of the form-encoded body through the supplied OpenID query parameters. The impact depends on the deployment environment and network reachability. In common self-hosted deployments, Gitea may be able to reach services that are not exposed to the internet, including loopback services, internal admin panels, CI/CD endpoints, internal webhooks, private-network APIs, or link-local metadata endpoints. Because the response is not returned to the attacker, the primitive is blind, but it can still trigger state-changing actions on internal services that accept POST requests, and it can be used as an internal network interaction primitive. This also creates an availability risk if outbound requests can be made to slow or non-responsive targets, because the OpenID path uses the default HTTP client behavior without an apparent request timeout in this path. I would honestly argue that a higher environmental score may be appropriate where the Gitea server can reach sensitive unauthenticated internal services that accept form-encoded POST requests.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -7242,8 +7242,8 @@
             },
             "CVE-2026-78433": {
                 "cve_id": "CVE-2026-78433",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Attachments created before the January 2026 cutoff skip the cross repository check entirely, and permission is then evaluated against the repository named in the URL rather than the repository owning the attachment, so a private repository's attachment is served through any public repository's path",
+                "description": "### Summary The web attachment handler contains a guard that rejects a request for an attachment made through a repository other than the one that owns it. That guard is applied only to attachments created after 16 January 2026; older attachments skip it even when their owning-repository id is correctly populated. When the guard is skipped, the handler evaluates permission against the repository named in the request URL instead of the repository that owns the attachment. An attachment belonging to a private repository can therefore be retrieved by requesting it through any public repository's attachment path. The route allows anonymous access, so no authentication is required. ### Details In `routers/web/repo/attachment.go` the cross-repository check is gated only on the attachment's creation timestamp, unlike its two sibling call sites which also require the owning-repository id to be unset. A migration backfills that id on upgrade, so the timestamp-only exemption protects no legitimate rows and instead allows permission to be checked against the wrong repository. Downstream draft-release and token-scope checks inherit the same wrong subject. Attachment UUIDs are random and not enumerable, so exploitation requires knowledge of a specific attachment UUID (for example from a removed collaborator, a public-to-private conversion, notification mail, webhook payloads, or proxy/CDN logs). ### Impact Disclosure of private-repository attachment contents \u2014 issue and pull request attachments and release assets \u2014 to an unauthenticated caller who knows the attachment UUID. Incorrect authorization / cross-repository access control bypass. Affects any instance that held attachments created before 16 January 2026. ### Affected versions Gitea `>= 1.26.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39048, #39077). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -7507,9 +7507,9 @@
             },
             "GHSA-3m6q-h5gj-7mrw": {
                 "cve_id": "GHSA-3m6q-h5gj-7mrw",
-                "title": "Gitea has insecure default SSH settings",
-                "description": "## Summary\n\nThe built-in SSH server currently advertises a number of key exchange, MAC, and host key algorithms that are considered weak or broken. The defaults should be tightened so a fresh installation passes a baseline SSH security audit out of the box.\n\n## Details\n\nRunning `ssh-audit` against a default deployment flags the following as `fail`:\n\n- **Key exchange**\n  - `ecdh-sha2-nistp256`\n  - `ecdh-sha2-nistp384`\n  - `ecdh-sha2-nistp521`\n- **MAC**\n  - `hmac-sha1`\n- **Host key**\n  - `ssh-rsa`\n\n## Reproduction\n\n```sh\ndocker run -it --rm positronsecurity/ssh-audit -p 2222 gitea.local\n```\n\n## Impact\n\nDefault deployments expose algorithms that are known-weak or deprecated upstream. The current workaround requires manually setting several `GITEA__server__SSH_SERVER_*` variables, which most users will never do.\n\n### Workaround\n\n```ini\n[server]\nSSH_SERVER_KEY_EXCHANGES = curve25519-sha256, diffie-hellman-group14-sha256\nSSH_SERVER_CIPHERS       = chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com\nSSH_SERVER_MACS          = hmac-sha2-256-etm@openssh.com, hmac-sha2-256\n```\n\nThere is no exposed option to restrict host key algorithms, so `ssh-rsa` remains advertised.\n\n## Acceptance criteria\n\n- [ ] Default `SSH_SERVER_KEY_EXCHANGES`, `SSH_SERVER_CIPHERS`, and `SSH_SERVER_MACS` updated to the secure list above.\n- [ ] New `SSH_SERVER_HOST_KEY_ALGORITHMS` option added, with a default that excludes `ssh-rsa`.\n- [ ] Documentation updated to reflect the new defaults.\n- [ ] `ssh-audit` against a fresh install reports no `[fail]` entries.",
-                "severity": "MEDIUM",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -7520,8 +7520,8 @@
             },
             "GHSA-m984-2424-x6vw": {
                 "cve_id": "GHSA-m984-2424-x6vw",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Generic attachment downloads bypass draft-release visibility checks",
+                "description": "### Summary In Gitea 1.26.1, anonymous users can download draft release assets through `/attachments/{uuid}` even when the draft release itself is hidden. The generic attachment route does not re-apply the draft-release visibility check before serving the file. ### Details The verified report ties this to `routers/web/repo/attachment.go:141-173`, which serves linked attachments without reloading the parent release or enforcing the draft flag again. `routers/api/v1/repo/release_attachment.go:23-40,134-150` shows the normal release path does enforce `canAccessReleaseDraft(ctx)`, while `services/repository/repository.go:199-204` collapses release attachments down to `unit.TypeReleases` and loses the `IsDraft` context. `routers/web/web.go:872,1471` routes UUID-based attachment downloads to the generic handler. In the verified test, anonymous access to the draft release API returned `404`, but anonymous access to `/attachments/{uuid}` returned `200` and served the draft asset content. ### PoC 1. Start an isolated Gitea 1.26.1 instance and set `BASE=http://127.0.0.1:3000`. Create a test user `owner`. 2. As `owner`, create a public initialized repository: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'name':'draft-asset-demo','private':false,'auto_init':true}' '$BASE/api/v1/user/repos'` 3. As `owner`, create a draft release and copy the returned numeric release ID: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'tag_name':'draft-1','name':'draft-1','draft':true}' '$BASE/api/v1/repos/owner/draft-asset-demo/releases'` 4. Create a harmless asset with recognizable content: `printf 'draft-only-binary' > /tmp/draft-asset.txt` 5. Upload it to the draft release and copy the returned `uuid` or `browser_download_url`: `curl -u owner:ownerpass123 -X POST -H 'Content-Type: application/octet-stream' --data-binary @/tmp/draft-asset.txt '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID/assets?name=draft-asset.txt'` 6. As an anonymous user with no cookies, verify the draft release itself is hidden: `curl -i '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID'` 7. Confirm this returns `404`. 8. As the same anonymous user, request the generic attachment route: `curl -i '$BASE/attachments/$UUID'` 9. Observe `200 OK` and the file body `draft-only-binary`. 10. Optionally compare with the normal release download route `/owner/draft-asset-demo/releases/download/draft-1/draft-asset.txt`, which should remain hidden while `/attachments/$UUID` succeeds. ### Impact This leaks unpublished release assets. Anyone who learns the attachment UUID can retrieve draft binaries or other release files before the maintainer chooses to publish them.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -8207,8 +8207,8 @@
             },
             "CVE-2026-25946": {
                 "cve_id": "CVE-2026-25946",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Server-Side Request Forgery (SSRF) via OpenID Discovery - Gitea v1.25.4",
+                "description": "### Summary An unauthenticated Server-Side Request Forgery (SSRF) vulnerability in Gitea's OpenID authentication allows any remote attacker to make arbitrary HTTP requests to internal network services. This enables internal port scanning, service fingerprinting, and access to localhost-only resources without authentication, effectively bypassing network security controls. ### Details **Vulnerable Code:** routers/web/auth/openid.go - SignInOpenID() function **Affected Endpoint:** POST /user/login/openid **Parameter:** openid_url The OpenID authentication handler accepts user-controlled URLs and performs HTTP requests without validation: ``` // routers/web/auth/openid.go func SignInOpenID(ctx *context.Context) { openidURL := ctx.FormString('openid_url') // Vulnerable: No URL validation before HTTP request redirectURL := setting.AppURL + 'user/openid/callback' authenticateURL, err := openid.RedirectURL(openidURL, redirectURL, '') // ... } ``` ### PoC - Target: Any Gitea instance with OpenID enabled (default) - Test Instance: http://143.244.141.81:3000 - Navigate to OpenID login page: http://143.244.141.81:3000/user/login/openid - Enter internal service URL in 'OpenID URI' field: ``` http://127.0.0.1:22/ (SSH) http://127.0.0.1:3306/ (MySQL) ``` <img width='2250' height='1350' alt='image' src='https://github.com/user-attachments/assets/00c144f0-aadf-49c5-9877-f48a5c1af435' /> - Click 'Sign In' - Check server logs for confirmation ``` journalctl -u gitea -f --no-hostname | grep -E --color 'openid|http|dial|error|127\\.0\\.0\\.1' ``` <img width='2832' height='754' alt='image' src='https://github.com/user-attachments/assets/d83736ce-c519-4ad2-bd51-ce091ed9d20f' /> ### Impact - All Gitea instances with OpenID enabled (default configuration) - Any unauthenticated remote attacker - Organizations with internal services bound to localhost or private networks",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9161,8 +9161,8 @@
             },
             "CVE-2026-59774": {
                 "cve_id": "CVE-2026-59774",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated Arbitrary File Read can lead to RCE",
+                "description": "### Summary An unauthenticated remote attacker can submit Org-mode markup containing a #+INCLUDE directive to POST /{owner}/{repo}/markup for any suitable public repository to read arbitrary server files. By extracting INTERNAL_TOKEN from app.ini, they can inject a Git hook through the internal logger and achieve command execution as the Gitea OS user during an anonymous clone. ### Details Gitea registers `POST /{username}/{reponame}/markup` with optional sign-in, repository assignment, and a repository-unit reader check. An anonymous user passes that check for a public repository with a normal readable code unit. The handler passes the supplied `Mode`, `Text`, and `FilePath` into Gitea's generic markup renderer. Selecting `Mode: file` and a `.org` filename chooses the Org-mode renderer. Gitea 1.27.0 initializes `go-org` using `org.New()` and does not replace its default `ReadFile` callback. In `go-org` 1.9.1, that callback is `ioutil.ReadFile`; `#+INCLUDE` accepts absolute paths and passes them directly to that callback. #### Preconditions - At least one repository is publicly readable and exposes a unit accepted by the repository markup route. A normal public repository with its code unit enabled satisfies this condition. - Standard Gitea storage permissions allow the service user to update Gitea's managed global Git configuration. ### Impact - Read arbitrary files accessible to the Gitea service user without an account. - Submit the file-read payload directly through a public repository's web markup route without committing a file or obtaining repository write access. - Expose Gitea configuration, internal bearer tokens, OAuth/JWT material, and deployment metadata ### Affected - The vulnerable version seem v1.22.1 ~ v1.27.0 ### Credit Found by @xbow-security. Triaged by Guido Leo <guido.leo@xbow.com>. Independently reported by https://github.com/NightRang3r",
                 "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
@@ -9187,8 +9187,8 @@
             },
             "CVE-2026-60008": {
                 "cve_id": "CVE-2026-60008",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Jupyter notebook renderer emits attacker-controlled CSS classes into unsanitized, unsandboxed output",
+                "description": "`modules/markup/jupyter/jupyter.go` sets `SanitizerDisabled: true` but leaves `DisplayInIframe` and `ContentSandbox` at their zero values. It is the only renderer in the tree that turns the sanitizer off while still rendering into the main document. Within that unsanitized output it interpolates `notebook.metadata.language_info.name` \u2014 a value read directly from the file \u2014 into a literal `class` attribute without routing it through `RenderInternal.FormatWithSafeAttrs`. HTML-escaping prevents closing the attribute, but whitespace is untouched, so the notebook can choose its own list of CSS classes on a page where nothing filters them. Combined with Fomantic's `.ui.dimmer` and Gitea's `!important` Tailwind layer, a repository file can replace the entire viewport of a repository page and intercept clicks on it. Script execution was not reached. The reason to fix this is not the overlay: it is that the class attribute is the one place on this path where a security control was skipped, and there is no sanitizer, no iframe sandbox and no CSP behind it. ## Why this is a boundary failure rather than a cosmetic bug Gitea has a deliberate mechanism to stop rendered content from choosing CSS classes. `RenderInternal.ProtectSafeAttrs` rewrites `class='X'` into `data-attr-class='<per-render-nonce>:X'`; the sanitizer allows `data-attr-class`; and `finalProcessor.Close` converts it back only when the nonce matches. Content cannot forge the nonce, so only the renderer's own trusted code can emit a class. `orgmode.go` uses this correctly: ```go _ = ctx.RenderInternal.FormatWithSafeAttrs(sb, `<pre><code class='chroma language-%s'>`, ...) ``` The intent is also written down inside the affected file itself, in the `text/html` MIME handler: ```go // To future developers: don't allow custom CSS classes or attributes, // because '.link-action' or 'data-fetch-xxx' can send POST requests and lead to XSS. ``` That rule is enforced for MIME output and missed for the language field. ## Details **1. The sanitizer is disabled and the output is not confined.** ```go func (renderer) GetExternalRendererOptions() markup.ExternalRendererOptions { return markup.ExternalRendererOptions{ SanitizerDisabled: true, } } ``` `DisplayInIframe` and `ContentSandbox` are left unset. In `modules/markup/render.go` that removes `SanitizeReader` from the pipeline, and the bytes land inside `<div class='file-view markup jupyter-render'>` on the ordinary repository page. By contrast the `openapi-swagger`, `viewer-3d` and `asciicast` renderers also disable the sanitizer, but set `DisplayInIframe: true` and `ContentSandbox: setting.MarkupRenderDefaultSandbox`, so their output is confined to an iframe with no `allow-same-origin`. **2. Untrusted input reaches a literal `class` attribute.** The `language` value comes from `notebook.metadata.language_info.name`, falling back to `metadata.kernelspec.language`, and is interpolated into a `class='chroma language-\u2026'` attribute. `htmlutil.WriteFormat` applies `template.HTMLEscapeString`, which handles `< > & ' '` and leaves whitespace alone. No input yields a raw `'`, so no new attribute can be created \u2014 but spaces pass through, which is enough to append arbitrary additional CSS classes. **3. `/render/` serves the same content with no CSP.** The `/render/` route adds a `Content-Security-Policy: sandbox \u2026` header only when the renderer sets `ContentSandbox`, a field the Jupyter renderer never sets. The result is a top-level, same-origin, navigable `text/html` document built from repository content, with the sanitizer off and no restrictions, reachable anonymously on public repositories. Repository authorization on the route itself is sound (private repositories return 404 to unauthorized users). **4. The notebook selects which frontend renderer processes it.** Because the class is built as `language-%s` from the file, a notebook can declare `'language_info': {'name': 'mermaid'}` (or `math`) and hand its cell source to mermaid.js / KaTeX. Those frontend paths assign markup via `innerHTML` in the parent document before moving it into a non-sandboxed iframe. Today mermaid's `securityLevel: 'strict'` and KaTeX's `trust: false` hold, so script execution was not achieved \u2014 but this is the same unsanitized, no-CSP surface, reached from a file type where nothing signals that a diagram will be drawn. ## Impact Anyone with write access to a repository can make its pages display arbitrary full-screen content on the Gitea origin, with the real hostname and certificate, and make the underlying page unusable. Pushed to a shared repository, it affects every colleague who opens that repository, with no link sent and no unusual action taken \u2014 making fake session-expiry notices, credential-rotation instructions or outage banners credible because the instance itself serves them. Two bounds are worth stating explicitly: - **It does not cross a permission boundary.** The attacker needs write access to the repository holding the notebook; read-only access is not enough. Existing repository permissions are respected. - **The overlay is text.** The cell body passes through chroma, so there is no input, button or link. A credential prompt must end in 'go to this other host', which the victim types by hand. ## Remediation Upgrade to a fixed release. Until then, avoid rendering or serving untrusted `.ipynb` files (for example by disabling the Jupyter renderer on instances that accept notebooks from untrusted contributors). ## Reporter Toprak Yagcioglu. Found and reproduced against a local throwaway `gitea/gitea:1.27.1` container; nothing was tested against any third-party or production instance. Happy to supply a reproduction and to verify a candidate patch.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9200,8 +9200,8 @@
             },
             "CVE-2026-60010": {
                 "cve_id": "CVE-2026-60010",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Repo-side team-link endpoint still bypasses RepoAdminChangeTeamAccess",
+                "description": "### Summary `PUT /api/v1/repos/{owner}/{repo}/teams/{team}` allows a non-owner repository admin to attach organization teams to a repository even when the organization has disabled that behaviour with `RepoAdminChangeTeamAccess=false`. An earlier advisory fixed the corresponding team-side endpoint; the repository-side endpoint retained the weaker check. ### Details The repository-side handler's exception relies on a repository permission check (`IsOwner()`), which for an organization repository is satisfied by a user promoted to owner-level access through an attached admin team. The fixed team-side endpoint instead checks actual organization ownership when `RepoAdminChangeTeamAccess` is disabled. The matching web collaboration-settings handler had the same weak check. ### Impact A user with delegated admin rights on one organization repository can grant other organization teams read or write access to that repository without approval from an actual organization owner, exposing private source and history and, for a write-capable team, granting push access. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39046, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -9213,8 +9213,8 @@
             },
             "CVE-2026-60018": {
                 "cve_id": "CVE-2026-60018",
-                "title": "Authenticated DoS in OneDev migration via unbounded version response body",
-                "description": "### Summary The OneDev migration downloader reads the entire `/~api/version/server` response body into memory before validating the version string, and the migration HTTP client has no timeout. A malicious OneDev-compatible server can return a very large or never-ending response. ### Details Reachable from the web, API and background-task migration paths. Reachable by any authenticated user who can start a repository migration. ### Impact Authenticated availability. An attacker who can start migrations against a server they control can force Gitea to read arbitrarily large response bodies, hold migration requests and workers open until timeout or cancellation, retain that data in memory, and exhaust the migration worker pool. On constrained deployments this creates memory pressure and a possible out-of-memory condition. ### Affected versions Gitea `>= 1.16.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39024, #39033). ### Workarounds Restrict repository-migration permission to trusted users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9278,8 +9278,8 @@
             },
             "CVE-2026-66849": {
                 "cve_id": "CVE-2026-66849",
-                "title": "Package registry: restricted users can read packages of limited-visibility users (authorization bypass)",
-                "description": "### Summary The package-registry access check grants read access to a package owned by a Limited-visibility user to any non-ghost logged-in user, without excluding restricted accounts. A restricted account can therefore enumerate and download the entire package registry (for example Docker, npm, PyPI) of any Limited-visibility user. ### Details The user-owner branch of `determineAccessMode` omits the restricted-user check that the organization-owner branch and the repository permission model apply. ### Impact Authorization boundary / confidentiality. A restricted account can read package content of Limited-visibility users that it should not be able to see. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39043, #39058). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9291,8 +9291,8 @@
             },
             "CVE-2026-66853": {
                 "cve_id": "CVE-2026-66853",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted users can enumerate limited-visibility organizations via the user org-list API (authorization bypass)",
+                "description": "### Summary A restricted account can enumerate Limited-visibility organizations and their name, description and avatar by listing the public organization memberships of a known user through `GET /api/v1/users/{username}/orgs`. ### Details The helper that decides which organization visibilities to include for the viewer returns 'Limited' for any signed-in, non-admin, non-self viewer without excluding restricted accounts, so the response admits both public and limited organizations. The single-organization endpoint `GET /api/v1/orgs/{org}` correctly returns `404` to a restricted viewer for a limited organization; the list path uses a different, unrestricted helper. ### Impact Authorization boundary / confidentiality. A restricted account, which by policy may reach only public content, can discover Limited-visibility organizations and their metadata by walking the public memberships of known users. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39047, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -9317,8 +9317,8 @@
             },
             "CVE-2026-66877": {
                 "cve_id": "CVE-2026-66877",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "RCE on self-hosted runners | fork-PR approval gate (`NeedApproval`) bypass via job-level concurrency cancellation",
+                "description": "### Summary Workflow runs from first-time fork contributors are held for maintainer approval only by inserting the run's jobs in a blocked state. The component that transitions blocked jobs to waiting does not re-check whether the run still needs approval. A separate, legitimate run in the same repository that shares a job-level `concurrency` group with the pending run can cause the pending run to be re-evaluated, which unblocks and dispatches its remaining jobs to runners without approval. Any user who can open a pull request can reach this. ### Details The approval decision itself is correct, but it is enforced purely as job status. The job emitter, the concurrency-preparation path and the runner task-pickup path do not check approval; only the concurrency-wake path did. Cancelling one job of the pending run through the shared job-level concurrency group triggers a re-emit over that run's still-blocked sibling jobs, which are then moved to waiting and picked up by runners. ### Impact Arbitrary, unreviewed workflow code execution on the self-hosted runners of any repository that accepts fork pull requests, defeating the first-time-contributor approval boundary. Fork pull request secrets remain withheld and the run token remains read-only; the impact is access to the runner host (internal network reachability, runner-local caches, workspaces and credentials, and persistence into later trusted builds). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39005, #39018). ### Workarounds Instances that do not run fork pull request workflows on self-hosted runners are not exposed to the code-execution impact. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -9410,8 +9410,8 @@
             },
             "CVE-2026-70402": {
                 "cve_id": "CVE-2026-70402",
-                "title": "Permissive Git hook directory and script modes may allow local code execution as the Gitea service account",
-                "description": "### Summary Gitea creates server-side Git hook directories and scripts with mode `0777`, relying on the process umask to reduce it. Under a permissive umask (for example `0000` or `0002`) the resulting files or directories are group- or world-writable. On a deployment where another local principal can reach the repository storage, that principal can modify an existing hook or add an executable file to a writable hook directory; a later Git operation then runs it as the Gitea service account. ### Details The hook-creation function is reached through ordinary operations (creating or forking a repository, completing a migration, converting a mirror, synchronizing hooks, creating a wiki). A standard systemd deployment with umask `0022` produces mode `0755` and is not directly affected. This does not by itself grant root unless Gitea runs as root. ### Impact Local code execution as the Gitea service account on affected deployments, with the consequences that account allows (modifying repositories, reading accessible files, persistence through hooks). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39008, #39016). ### Workarounds Run Gitea with a restrictive umask (`0022` or tighter) and ensure repository storage is not writable by untrusted local users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9423,8 +9423,8 @@
             },
             "CVE-2026-70406": {
                 "cve_id": "CVE-2026-70406",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Public-only tokens can read private head repositories via compare and pull request creation (incomplete fix of CVE-2026-58443)",
+                "description": "### Summary The fix for CVE-2026-58443 added a 'token can access repository' check to `UpdatePullRequest` only. The shared helper `parseCompareInfo`, used by the compare-diff endpoint and by pull request creation, lacked the same check. A `public-only, read:repository` token can read commit history and diff content of a private head repository by routing the request through a public base repository. ### Details The route-level public-only middleware validates only the base repository named in the route. The head repository resolved inside `parseCompareInfo` is checked for user permission but not against the token's scope. Two entry points reach it: 1. `GET /api/v1/repos/{owner}/{repo}/compare/{basehead}` with `head` given as `owner/repo:branch`. The head repository does not need to be a fork of the base. 2. `POST /api/v1/repos/{owner}/{repo}/pulls` with the same `head` syntax. Gitea then pushes the private head branch to `refs/pull/{index}/head` of the public base repository, where the public diff and patch endpoints serve it. The related disclosure of private head repository metadata and commit SHA through `ToAPIPullRequest` in the pull request read endpoints is handled separately in https://github.com/go-gitea/gitea/pull/39167. ### Impact Confidentiality bypass of the `public-only` token boundary. A leaked public-only token can read private repository commits and diffs it was explicitly restricted from. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 by https://github.com/go-gitea/gitea/pull/39006 and https://github.com/go-gitea/gitea/pull/39013. ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -9462,8 +9462,8 @@
             },
             "CVE-2026-71301": {
                 "cve_id": "CVE-2026-71301",
-                "title": "Wiki-only members can read private pull request titles through markup preview",
-                "description": "### Summary In a private repository, a member with only Wiki access can use `POST /{owner}/{repo}/markup` to resolve a same-repository pull request reference and receive the pull request title and state icon, despite having no Issues or Pull Requests access. ### Details The markup route accepts any one of Code, Issues, Pull Requests, Releases or Wiki access. The renderer's unit check for referenced issues and pull requests is applied only in the cross-repository branch, so a same-repository reference reaches title and icon rendering without a unit check. No bodies, comments or attachments are returned. ### Impact Confidentiality. A Wiki-only member can read pull request titles and displayed state from a private repository. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39045, #39054). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -9501,8 +9501,8 @@
             },
             "CVE-2026-73135": {
                 "cve_id": "CVE-2026-73135",
-                "title": "Repository listing exposes repositories owned by hidden users due to inconsistent visibility predicate",
-                "description": "### Summary Gitea implements repository visibility with several SQL predicates that are meant to be equivalent. One of them, used by the accessible-repository condition, treats repositories owned by hidden users differently from the others. As a result, some repository-listing endpoints return repositories owned by hidden users even though those repositories are unreachable through their direct routes, which still return `404`. ### Details The authenticated repository-search API is the broadest affected surface; the forks listing is also affected for anonymous users, and watched repositories for users already subscribed. ### Impact Any authenticated user can enumerate repositories owned by hidden users through repository search; anonymous users can do so through the forks listing. Metadata disclosure only. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39009, #39012). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9514,8 +9514,8 @@
             },
             "CVE-2026-73273": {
                 "cve_id": "CVE-2026-73273",
-                "title": "Package size quota bypass and unbounded memory read in the Maven checksum upload path",
-                "description": "### Summary When a Maven artifact is uploaded with a checksum extension (`.md5`, `.sha1`, `.sha256`, `.sha512`), the handler reads the entire request body into memory and compares it to the stored digest, then returns \u2014 before the code path that enforces the package size quota. The checksum branch therefore has neither a size quota nor any bound on how much is read into memory, although a valid checksum value is at most 128 bytes. ### Details The body is read with `io.ReadAll` and copied again for the comparison; both allocations are sized by the client. The configured `LIMIT_SIZE_MAVEN` is not applied to this path. Reachable by any authenticated user with Maven package write access. ### Impact Package size-quota bypass and client-controlled memory allocation for a single request (uncontrolled resource consumption). A practical outage was not demonstrated; the issue should be read as an unbounded allocation and a quota bypass. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39028, #39031). ### Workarounds Limit request body size at the reverse proxy. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9540,8 +9540,8 @@
             },
             "CVE-2026-73504": {
                 "cve_id": "CVE-2026-73504",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated artifact-to-repository oracle in raw Actions downloads",
+                "description": "### Summary The raw Actions artifact download endpoint looks up the artifact row before validating the signed URL. Without authentication, an invalid signature produces one response when the supplied global artifact ID belongs to the named repository (and is upload-confirmed or expired) and a different response when it does not. Because artifact IDs are global auto-incrementing integers, this lets an unauthenticated caller test whether a guessed artifact ID belongs to an already-named private repository. ### Details The signature check still protects artifact bytes; only the ordering of the row lookup and the signature check creates the distinguishable responses. The endpoint does not reveal whether the repository exists, since inaccessible and nonexistent repositories return the same status. ### Impact Unauthenticated confirmation of the association between an artifact ID and a known private repository. Artifact contents are not exposed. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39049, #39053). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -9618,8 +9618,8 @@
             },
             "CVE-2026-78231": {
                 "cve_id": "CVE-2026-78231",
-                "title": "Unauthenticated Blind SSRF via OpenID Sign-In Verification",
-                "description": "### Summary When OpenID sign-in is enabled, Gitea accepts an unauthenticated GET request to `/user/login/openid` and passes attacker-controlled OpenID assertion parameters into the OpenID 2.0 verification flow. During verification, the upstream `github.com/yohcop/openid-go` library sends a server-side `POST` request to the attacker-controlled `openid.op_endpoint` URL using `http.DefaultClient`. This gives an unauthenticated remote attacker a blind SSRF primitive from the Gitea server. The attacker controls the destination URL and the form-encoded POST body. In deployments where the Gitea server can reach loopback, private-network, link-local, or otherwise internal HTTP services, this can be used to interact with services that are not directly reachable by the attacker. ### Details The vulnerable route is the OpenID sign-in endpoint: ```go m.Combo('/login/openid'). Get(auth.SignInOpenID). Post(web.Bind(forms.SignInOpenIDForm{}), auth.SignInOpenIDPost) ``` The route is gated by `openIDSignInEnabled`, but it does not require an authenticated user. When `[openid] ENABLE_OPENID_SIGNIN = true`, an anonymous client can reach the GET handler. ### Impact An attacker can cause the Gitea server to send an outbound HTTP POST request to an attacker-controlled URL by sending one unauthenticated GET request to `/user/login/openid`, provided OpenID sign-in is enabled. The attacker controls the target URL through `openid.op_endpoint` and controls much of the form-encoded body through the supplied OpenID query parameters. The impact depends on the deployment environment and network reachability. In common self-hosted deployments, Gitea may be able to reach services that are not exposed to the internet, including loopback services, internal admin panels, CI/CD endpoints, internal webhooks, private-network APIs, or link-local metadata endpoints. Because the response is not returned to the attacker, the primitive is blind, but it can still trigger state-changing actions on internal services that accept POST requests, and it can be used as an internal network interaction primitive. This also creates an availability risk if outbound requests can be made to slow or non-responsive targets, because the OpenID path uses the default HTTP client behavior without an apparent request timeout in this path. I would honestly argue that a higher environmental score may be appropriate where the Gitea server can reach sensitive unauthenticated internal services that accept form-encoded POST requests.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9631,8 +9631,8 @@
             },
             "CVE-2026-78433": {
                 "cve_id": "CVE-2026-78433",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Attachments created before the January 2026 cutoff skip the cross repository check entirely, and permission is then evaluated against the repository named in the URL rather than the repository owning the attachment, so a private repository's attachment is served through any public repository's path",
+                "description": "### Summary The web attachment handler contains a guard that rejects a request for an attachment made through a repository other than the one that owns it. That guard is applied only to attachments created after 16 January 2026; older attachments skip it even when their owning-repository id is correctly populated. When the guard is skipped, the handler evaluates permission against the repository named in the request URL instead of the repository that owns the attachment. An attachment belonging to a private repository can therefore be retrieved by requesting it through any public repository's attachment path. The route allows anonymous access, so no authentication is required. ### Details In `routers/web/repo/attachment.go` the cross-repository check is gated only on the attachment's creation timestamp, unlike its two sibling call sites which also require the owning-repository id to be unset. A migration backfills that id on upgrade, so the timestamp-only exemption protects no legitimate rows and instead allows permission to be checked against the wrong repository. Downstream draft-release and token-scope checks inherit the same wrong subject. Attachment UUIDs are random and not enumerable, so exploitation requires knowledge of a specific attachment UUID (for example from a removed collaborator, a public-to-private conversion, notification mail, webhook payloads, or proxy/CDN logs). ### Impact Disclosure of private-repository attachment contents \u2014 issue and pull request attachments and release assets \u2014 to an unauthenticated caller who knows the attachment UUID. Incorrect authorization / cross-repository access control bypass. Affects any instance that held attachments created before 16 January 2026. ### Affected versions Gitea `>= 1.26.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39048, #39077). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -9854,9 +9854,9 @@
             },
             "GHSA-3m6q-h5gj-7mrw": {
                 "cve_id": "GHSA-3m6q-h5gj-7mrw",
-                "title": "Gitea has insecure default SSH settings",
-                "description": "## Summary\n\nThe built-in SSH server currently advertises a number of key exchange, MAC, and host key algorithms that are considered weak or broken. The defaults should be tightened so a fresh installation passes a baseline SSH security audit out of the box.\n\n## Details\n\nRunning `ssh-audit` against a default deployment flags the following as `fail`:\n\n- **Key exchange**\n  - `ecdh-sha2-nistp256`\n  - `ecdh-sha2-nistp384`\n  - `ecdh-sha2-nistp521`\n- **MAC**\n  - `hmac-sha1`\n- **Host key**\n  - `ssh-rsa`\n\n## Reproduction\n\n```sh\ndocker run -it --rm positronsecurity/ssh-audit -p 2222 gitea.local\n```\n\n## Impact\n\nDefault deployments expose algorithms that are known-weak or deprecated upstream. The current workaround requires manually setting several `GITEA__server__SSH_SERVER_*` variables, which most users will never do.\n\n### Workaround\n\n```ini\n[server]\nSSH_SERVER_KEY_EXCHANGES = curve25519-sha256, diffie-hellman-group14-sha256\nSSH_SERVER_CIPHERS       = chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com\nSSH_SERVER_MACS          = hmac-sha2-256-etm@openssh.com, hmac-sha2-256\n```\n\nThere is no exposed option to restrict host key algorithms, so `ssh-rsa` remains advertised.\n\n## Acceptance criteria\n\n- [ ] Default `SSH_SERVER_KEY_EXCHANGES`, `SSH_SERVER_CIPHERS`, and `SSH_SERVER_MACS` updated to the secure list above.\n- [ ] New `SSH_SERVER_HOST_KEY_ALGORITHMS` option added, with a default that excludes `ssh-rsa`.\n- [ ] Documentation updated to reflect the new defaults.\n- [ ] `ssh-audit` against a fresh install reports no `[fail]` entries.",
-                "severity": "MEDIUM",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -9867,8 +9867,8 @@
             },
             "GHSA-m984-2424-x6vw": {
                 "cve_id": "GHSA-m984-2424-x6vw",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Generic attachment downloads bypass draft-release visibility checks",
+                "description": "### Summary In Gitea 1.26.1, anonymous users can download draft release assets through `/attachments/{uuid}` even when the draft release itself is hidden. The generic attachment route does not re-apply the draft-release visibility check before serving the file. ### Details The verified report ties this to `routers/web/repo/attachment.go:141-173`, which serves linked attachments without reloading the parent release or enforcing the draft flag again. `routers/api/v1/repo/release_attachment.go:23-40,134-150` shows the normal release path does enforce `canAccessReleaseDraft(ctx)`, while `services/repository/repository.go:199-204` collapses release attachments down to `unit.TypeReleases` and loses the `IsDraft` context. `routers/web/web.go:872,1471` routes UUID-based attachment downloads to the generic handler. In the verified test, anonymous access to the draft release API returned `404`, but anonymous access to `/attachments/{uuid}` returned `200` and served the draft asset content. ### PoC 1. Start an isolated Gitea 1.26.1 instance and set `BASE=http://127.0.0.1:3000`. Create a test user `owner`. 2. As `owner`, create a public initialized repository: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'name':'draft-asset-demo','private':false,'auto_init':true}' '$BASE/api/v1/user/repos'` 3. As `owner`, create a draft release and copy the returned numeric release ID: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'tag_name':'draft-1','name':'draft-1','draft':true}' '$BASE/api/v1/repos/owner/draft-asset-demo/releases'` 4. Create a harmless asset with recognizable content: `printf 'draft-only-binary' > /tmp/draft-asset.txt` 5. Upload it to the draft release and copy the returned `uuid` or `browser_download_url`: `curl -u owner:ownerpass123 -X POST -H 'Content-Type: application/octet-stream' --data-binary @/tmp/draft-asset.txt '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID/assets?name=draft-asset.txt'` 6. As an anonymous user with no cookies, verify the draft release itself is hidden: `curl -i '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID'` 7. Confirm this returns `404`. 8. As the same anonymous user, request the generic attachment route: `curl -i '$BASE/attachments/$UUID'` 9. Observe `200 OK` and the file body `draft-only-binary`. 10. Optionally compare with the normal release download route `/owner/draft-asset-demo/releases/download/draft-1/draft-asset.txt`, which should remain hidden while `/attachments/$UUID` succeeds. ### Impact This leaks unpublished release assets. Anyone who learns the attachment UUID can retrieve draft binaries or other release files before the maintainer chooses to publish them.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -10436,8 +10436,8 @@
             },
             "CVE-2026-25946": {
                 "cve_id": "CVE-2026-25946",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Server-Side Request Forgery (SSRF) via OpenID Discovery - Gitea v1.25.4",
+                "description": "### Summary An unauthenticated Server-Side Request Forgery (SSRF) vulnerability in Gitea's OpenID authentication allows any remote attacker to make arbitrary HTTP requests to internal network services. This enables internal port scanning, service fingerprinting, and access to localhost-only resources without authentication, effectively bypassing network security controls. ### Details **Vulnerable Code:** routers/web/auth/openid.go - SignInOpenID() function **Affected Endpoint:** POST /user/login/openid **Parameter:** openid_url The OpenID authentication handler accepts user-controlled URLs and performs HTTP requests without validation: ``` // routers/web/auth/openid.go func SignInOpenID(ctx *context.Context) { openidURL := ctx.FormString('openid_url') // Vulnerable: No URL validation before HTTP request redirectURL := setting.AppURL + 'user/openid/callback' authenticateURL, err := openid.RedirectURL(openidURL, redirectURL, '') // ... } ``` ### PoC - Target: Any Gitea instance with OpenID enabled (default) - Test Instance: http://143.244.141.81:3000 - Navigate to OpenID login page: http://143.244.141.81:3000/user/login/openid - Enter internal service URL in 'OpenID URI' field: ``` http://127.0.0.1:22/ (SSH) http://127.0.0.1:3306/ (MySQL) ``` <img width='2250' height='1350' alt='image' src='https://github.com/user-attachments/assets/00c144f0-aadf-49c5-9877-f48a5c1af435' /> - Click 'Sign In' - Check server logs for confirmation ``` journalctl -u gitea -f --no-hostname | grep -E --color 'openid|http|dial|error|127\\.0\\.0\\.1' ``` <img width='2832' height='754' alt='image' src='https://github.com/user-attachments/assets/d83736ce-c519-4ad2-bd51-ce091ed9d20f' /> ### Impact - All Gitea instances with OpenID enabled (default configuration) - Any unauthenticated remote attacker - Organizations with internal services bound to localhost or private networks",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11383,8 +11383,8 @@
             },
             "CVE-2026-59774": {
                 "cve_id": "CVE-2026-59774",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated Arbitrary File Read can lead to RCE",
+                "description": "### Summary An unauthenticated remote attacker can submit Org-mode markup containing a #+INCLUDE directive to POST /{owner}/{repo}/markup for any suitable public repository to read arbitrary server files. By extracting INTERNAL_TOKEN from app.ini, they can inject a Git hook through the internal logger and achieve command execution as the Gitea OS user during an anonymous clone. ### Details Gitea registers `POST /{username}/{reponame}/markup` with optional sign-in, repository assignment, and a repository-unit reader check. An anonymous user passes that check for a public repository with a normal readable code unit. The handler passes the supplied `Mode`, `Text`, and `FilePath` into Gitea's generic markup renderer. Selecting `Mode: file` and a `.org` filename chooses the Org-mode renderer. Gitea 1.27.0 initializes `go-org` using `org.New()` and does not replace its default `ReadFile` callback. In `go-org` 1.9.1, that callback is `ioutil.ReadFile`; `#+INCLUDE` accepts absolute paths and passes them directly to that callback. #### Preconditions - At least one repository is publicly readable and exposes a unit accepted by the repository markup route. A normal public repository with its code unit enabled satisfies this condition. - Standard Gitea storage permissions allow the service user to update Gitea's managed global Git configuration. ### Impact - Read arbitrary files accessible to the Gitea service user without an account. - Submit the file-read payload directly through a public repository's web markup route without committing a file or obtaining repository write access. - Expose Gitea configuration, internal bearer tokens, OAuth/JWT material, and deployment metadata ### Affected - The vulnerable version seem v1.22.1 ~ v1.27.0 ### Credit Found by @xbow-security. Triaged by Guido Leo <guido.leo@xbow.com>. Independently reported by https://github.com/NightRang3r",
                 "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
@@ -11409,8 +11409,8 @@
             },
             "CVE-2026-60008": {
                 "cve_id": "CVE-2026-60008",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Jupyter notebook renderer emits attacker-controlled CSS classes into unsanitized, unsandboxed output",
+                "description": "`modules/markup/jupyter/jupyter.go` sets `SanitizerDisabled: true` but leaves `DisplayInIframe` and `ContentSandbox` at their zero values. It is the only renderer in the tree that turns the sanitizer off while still rendering into the main document. Within that unsanitized output it interpolates `notebook.metadata.language_info.name` \u2014 a value read directly from the file \u2014 into a literal `class` attribute without routing it through `RenderInternal.FormatWithSafeAttrs`. HTML-escaping prevents closing the attribute, but whitespace is untouched, so the notebook can choose its own list of CSS classes on a page where nothing filters them. Combined with Fomantic's `.ui.dimmer` and Gitea's `!important` Tailwind layer, a repository file can replace the entire viewport of a repository page and intercept clicks on it. Script execution was not reached. The reason to fix this is not the overlay: it is that the class attribute is the one place on this path where a security control was skipped, and there is no sanitizer, no iframe sandbox and no CSP behind it. ## Why this is a boundary failure rather than a cosmetic bug Gitea has a deliberate mechanism to stop rendered content from choosing CSS classes. `RenderInternal.ProtectSafeAttrs` rewrites `class='X'` into `data-attr-class='<per-render-nonce>:X'`; the sanitizer allows `data-attr-class`; and `finalProcessor.Close` converts it back only when the nonce matches. Content cannot forge the nonce, so only the renderer's own trusted code can emit a class. `orgmode.go` uses this correctly: ```go _ = ctx.RenderInternal.FormatWithSafeAttrs(sb, `<pre><code class='chroma language-%s'>`, ...) ``` The intent is also written down inside the affected file itself, in the `text/html` MIME handler: ```go // To future developers: don't allow custom CSS classes or attributes, // because '.link-action' or 'data-fetch-xxx' can send POST requests and lead to XSS. ``` That rule is enforced for MIME output and missed for the language field. ## Details **1. The sanitizer is disabled and the output is not confined.** ```go func (renderer) GetExternalRendererOptions() markup.ExternalRendererOptions { return markup.ExternalRendererOptions{ SanitizerDisabled: true, } } ``` `DisplayInIframe` and `ContentSandbox` are left unset. In `modules/markup/render.go` that removes `SanitizeReader` from the pipeline, and the bytes land inside `<div class='file-view markup jupyter-render'>` on the ordinary repository page. By contrast the `openapi-swagger`, `viewer-3d` and `asciicast` renderers also disable the sanitizer, but set `DisplayInIframe: true` and `ContentSandbox: setting.MarkupRenderDefaultSandbox`, so their output is confined to an iframe with no `allow-same-origin`. **2. Untrusted input reaches a literal `class` attribute.** The `language` value comes from `notebook.metadata.language_info.name`, falling back to `metadata.kernelspec.language`, and is interpolated into a `class='chroma language-\u2026'` attribute. `htmlutil.WriteFormat` applies `template.HTMLEscapeString`, which handles `< > & ' '` and leaves whitespace alone. No input yields a raw `'`, so no new attribute can be created \u2014 but spaces pass through, which is enough to append arbitrary additional CSS classes. **3. `/render/` serves the same content with no CSP.** The `/render/` route adds a `Content-Security-Policy: sandbox \u2026` header only when the renderer sets `ContentSandbox`, a field the Jupyter renderer never sets. The result is a top-level, same-origin, navigable `text/html` document built from repository content, with the sanitizer off and no restrictions, reachable anonymously on public repositories. Repository authorization on the route itself is sound (private repositories return 404 to unauthorized users). **4. The notebook selects which frontend renderer processes it.** Because the class is built as `language-%s` from the file, a notebook can declare `'language_info': {'name': 'mermaid'}` (or `math`) and hand its cell source to mermaid.js / KaTeX. Those frontend paths assign markup via `innerHTML` in the parent document before moving it into a non-sandboxed iframe. Today mermaid's `securityLevel: 'strict'` and KaTeX's `trust: false` hold, so script execution was not achieved \u2014 but this is the same unsanitized, no-CSP surface, reached from a file type where nothing signals that a diagram will be drawn. ## Impact Anyone with write access to a repository can make its pages display arbitrary full-screen content on the Gitea origin, with the real hostname and certificate, and make the underlying page unusable. Pushed to a shared repository, it affects every colleague who opens that repository, with no link sent and no unusual action taken \u2014 making fake session-expiry notices, credential-rotation instructions or outage banners credible because the instance itself serves them. Two bounds are worth stating explicitly: - **It does not cross a permission boundary.** The attacker needs write access to the repository holding the notebook; read-only access is not enough. Existing repository permissions are respected. - **The overlay is text.** The cell body passes through chroma, so there is no input, button or link. A credential prompt must end in 'go to this other host', which the victim types by hand. ## Remediation Upgrade to a fixed release. Until then, avoid rendering or serving untrusted `.ipynb` files (for example by disabling the Jupyter renderer on instances that accept notebooks from untrusted contributors). ## Reporter Toprak Yagcioglu. Found and reproduced against a local throwaway `gitea/gitea:1.27.1` container; nothing was tested against any third-party or production instance. Happy to supply a reproduction and to verify a candidate patch.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11422,8 +11422,8 @@
             },
             "CVE-2026-60010": {
                 "cve_id": "CVE-2026-60010",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Repo-side team-link endpoint still bypasses RepoAdminChangeTeamAccess",
+                "description": "### Summary `PUT /api/v1/repos/{owner}/{repo}/teams/{team}` allows a non-owner repository admin to attach organization teams to a repository even when the organization has disabled that behaviour with `RepoAdminChangeTeamAccess=false`. An earlier advisory fixed the corresponding team-side endpoint; the repository-side endpoint retained the weaker check. ### Details The repository-side handler's exception relies on a repository permission check (`IsOwner()`), which for an organization repository is satisfied by a user promoted to owner-level access through an attached admin team. The fixed team-side endpoint instead checks actual organization ownership when `RepoAdminChangeTeamAccess` is disabled. The matching web collaboration-settings handler had the same weak check. ### Impact A user with delegated admin rights on one organization repository can grant other organization teams read or write access to that repository without approval from an actual organization owner, exposing private source and history and, for a write-capable team, granting push access. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39046, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -11435,8 +11435,8 @@
             },
             "CVE-2026-60018": {
                 "cve_id": "CVE-2026-60018",
-                "title": "Authenticated DoS in OneDev migration via unbounded version response body",
-                "description": "### Summary The OneDev migration downloader reads the entire `/~api/version/server` response body into memory before validating the version string, and the migration HTTP client has no timeout. A malicious OneDev-compatible server can return a very large or never-ending response. ### Details Reachable from the web, API and background-task migration paths. Reachable by any authenticated user who can start a repository migration. ### Impact Authenticated availability. An attacker who can start migrations against a server they control can force Gitea to read arbitrarily large response bodies, hold migration requests and workers open until timeout or cancellation, retain that data in memory, and exhaust the migration worker pool. On constrained deployments this creates memory pressure and a possible out-of-memory condition. ### Affected versions Gitea `>= 1.16.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39024, #39033). ### Workarounds Restrict repository-migration permission to trusted users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11500,8 +11500,8 @@
             },
             "CVE-2026-66849": {
                 "cve_id": "CVE-2026-66849",
-                "title": "Package registry: restricted users can read packages of limited-visibility users (authorization bypass)",
-                "description": "### Summary The package-registry access check grants read access to a package owned by a Limited-visibility user to any non-ghost logged-in user, without excluding restricted accounts. A restricted account can therefore enumerate and download the entire package registry (for example Docker, npm, PyPI) of any Limited-visibility user. ### Details The user-owner branch of `determineAccessMode` omits the restricted-user check that the organization-owner branch and the repository permission model apply. ### Impact Authorization boundary / confidentiality. A restricted account can read package content of Limited-visibility users that it should not be able to see. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39043, #39058). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11513,8 +11513,8 @@
             },
             "CVE-2026-66853": {
                 "cve_id": "CVE-2026-66853",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Restricted users can enumerate limited-visibility organizations via the user org-list API (authorization bypass)",
+                "description": "### Summary A restricted account can enumerate Limited-visibility organizations and their name, description and avatar by listing the public organization memberships of a known user through `GET /api/v1/users/{username}/orgs`. ### Details The helper that decides which organization visibilities to include for the viewer returns 'Limited' for any signed-in, non-admin, non-self viewer without excluding restricted accounts, so the response admits both public and limited organizations. The single-organization endpoint `GET /api/v1/orgs/{org}` correctly returns `404` to a restricted viewer for a limited organization; the list path uses a different, unrestricted helper. ### Impact Authorization boundary / confidentiality. A restricted account, which by policy may reach only public content, can discover Limited-visibility organizations and their metadata by walking the public memberships of known users. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39047, #39058). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -11539,8 +11539,8 @@
             },
             "CVE-2026-66877": {
                 "cve_id": "CVE-2026-66877",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "RCE on self-hosted runners | fork-PR approval gate (`NeedApproval`) bypass via job-level concurrency cancellation",
+                "description": "### Summary Workflow runs from first-time fork contributors are held for maintainer approval only by inserting the run's jobs in a blocked state. The component that transitions blocked jobs to waiting does not re-check whether the run still needs approval. A separate, legitimate run in the same repository that shares a job-level `concurrency` group with the pending run can cause the pending run to be re-evaluated, which unblocks and dispatches its remaining jobs to runners without approval. Any user who can open a pull request can reach this. ### Details The approval decision itself is correct, but it is enforced purely as job status. The job emitter, the concurrency-preparation path and the runner task-pickup path do not check approval; only the concurrency-wake path did. Cancelling one job of the pending run through the shared job-level concurrency group triggers a re-emit over that run's still-blocked sibling jobs, which are then moved to waiting and picked up by runners. ### Impact Arbitrary, unreviewed workflow code execution on the self-hosted runners of any repository that accepts fork pull requests, defeating the first-time-contributor approval boundary. Fork pull request secrets remain withheld and the run token remains read-only; the impact is access to the runner host (internal network reachability, runner-local caches, workspaces and credentials, and persistence into later trusted builds). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39005, #39018). ### Workarounds Instances that do not run fork pull request workflows on self-hosted runners are not exposed to the code-execution impact. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -11629,8 +11629,8 @@
             },
             "CVE-2026-70402": {
                 "cve_id": "CVE-2026-70402",
-                "title": "Permissive Git hook directory and script modes may allow local code execution as the Gitea service account",
-                "description": "### Summary Gitea creates server-side Git hook directories and scripts with mode `0777`, relying on the process umask to reduce it. Under a permissive umask (for example `0000` or `0002`) the resulting files or directories are group- or world-writable. On a deployment where another local principal can reach the repository storage, that principal can modify an existing hook or add an executable file to a writable hook directory; a later Git operation then runs it as the Gitea service account. ### Details The hook-creation function is reached through ordinary operations (creating or forking a repository, completing a migration, converting a mirror, synchronizing hooks, creating a wiki). A standard systemd deployment with umask `0022` produces mode `0755` and is not directly affected. This does not by itself grant root unless Gitea runs as root. ### Impact Local code execution as the Gitea service account on affected deployments, with the consequences that account allows (modifying repositories, reading accessible files, persistence through hooks). ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39008, #39016). ### Workarounds Run Gitea with a restrictive umask (`0022` or tighter) and ensure repository storage is not writable by untrusted local users. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11642,8 +11642,8 @@
             },
             "CVE-2026-70406": {
                 "cve_id": "CVE-2026-70406",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Public-only tokens can read private head repositories via compare and pull request creation (incomplete fix of CVE-2026-58443)",
+                "description": "### Summary The fix for CVE-2026-58443 added a 'token can access repository' check to `UpdatePullRequest` only. The shared helper `parseCompareInfo`, used by the compare-diff endpoint and by pull request creation, lacked the same check. A `public-only, read:repository` token can read commit history and diff content of a private head repository by routing the request through a public base repository. ### Details The route-level public-only middleware validates only the base repository named in the route. The head repository resolved inside `parseCompareInfo` is checked for user permission but not against the token's scope. Two entry points reach it: 1. `GET /api/v1/repos/{owner}/{repo}/compare/{basehead}` with `head` given as `owner/repo:branch`. The head repository does not need to be a fork of the base. 2. `POST /api/v1/repos/{owner}/{repo}/pulls` with the same `head` syntax. Gitea then pushes the private head branch to `refs/pull/{index}/head` of the public base repository, where the public diff and patch endpoints serve it. The related disclosure of private head repository metadata and commit SHA through `ToAPIPullRequest` in the pull request read endpoints is handled separately in https://github.com/go-gitea/gitea/pull/39167. ### Impact Confidentiality bypass of the `public-only` token boundary. A leaked public-only token can read private repository commits and diffs it was explicitly restricted from. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 by https://github.com/go-gitea/gitea/pull/39006 and https://github.com/go-gitea/gitea/pull/39013. ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -11681,8 +11681,8 @@
             },
             "CVE-2026-71301": {
                 "cve_id": "CVE-2026-71301",
-                "title": "Wiki-only members can read private pull request titles through markup preview",
-                "description": "### Summary In a private repository, a member with only Wiki access can use `POST /{owner}/{repo}/markup` to resolve a same-repository pull request reference and receive the pull request title and state icon, despite having no Issues or Pull Requests access. ### Details The markup route accepts any one of Code, Issues, Pull Requests, Releases or Wiki access. The renderer's unit check for referenced issues and pull requests is applied only in the cross-repository branch, so a same-repository reference reaches title and icon rendering without a unit check. No bodies, comments or attachments are returned. ### Impact Confidentiality. A Wiki-only member can read pull request titles and displayed state from a private repository. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39045, #39054). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -11720,8 +11720,8 @@
             },
             "CVE-2026-73135": {
                 "cve_id": "CVE-2026-73135",
-                "title": "Repository listing exposes repositories owned by hidden users due to inconsistent visibility predicate",
-                "description": "### Summary Gitea implements repository visibility with several SQL predicates that are meant to be equivalent. One of them, used by the accessible-repository condition, treats repositories owned by hidden users differently from the others. As a result, some repository-listing endpoints return repositories owned by hidden users even though those repositories are unreachable through their direct routes, which still return `404`. ### Details The authenticated repository-search API is the broadest affected surface; the forks listing is also affected for anonymous users, and watched repositories for users already subscribed. ### Impact Any authenticated user can enumerate repositories owned by hidden users through repository search; anonymous users can do so through the forks listing. Metadata disclosure only. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39009, #39012). ### Workarounds None. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11733,8 +11733,8 @@
             },
             "CVE-2026-73273": {
                 "cve_id": "CVE-2026-73273",
-                "title": "Package size quota bypass and unbounded memory read in the Maven checksum upload path",
-                "description": "### Summary When a Maven artifact is uploaded with a checksum extension (`.md5`, `.sha1`, `.sha256`, `.sha512`), the handler reads the entire request body into memory and compares it to the stored digest, then returns \u2014 before the code path that enforces the package size quota. The checksum branch therefore has neither a size quota nor any bound on how much is read into memory, although a valid checksum value is at most 128 bytes. ### Details The body is read with `io.ReadAll` and copied again for the comparison; both allocations are sized by the client. The configured `LIMIT_SIZE_MAVEN` is not applied to this path. Reachable by any authenticated user with Maven package write access. ### Impact Package size-quota bypass and client-controlled memory allocation for a single request (uncontrolled resource consumption). A practical outage was not demonstrated; the issue should be read as an unbounded allocation and a quota bypass. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39028, #39031). ### Workarounds Limit request body size at the reverse proxy. Upgrade to 1.27.3.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11759,8 +11759,8 @@
             },
             "CVE-2026-73504": {
                 "cve_id": "CVE-2026-73504",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Unauthenticated artifact-to-repository oracle in raw Actions downloads",
+                "description": "### Summary The raw Actions artifact download endpoint looks up the artifact row before validating the signed URL. Without authentication, an invalid signature produces one response when the supplied global artifact ID belongs to the named repository (and is upload-confirmed or expired) and a different response when it does not. Because artifact IDs are global auto-incrementing integers, this lets an unauthenticated caller test whether a guessed artifact ID belongs to an already-named private repository. ### Details The signature check still protects artifact bytes; only the ordering of the row lookup and the signature check creates the distinguishable responses. The endpoint does not reveal whether the repository exists, since inaccessible and nonexistent repositories return the same status. ### Impact Unauthenticated confirmation of the association between an artifact ID and a known private repository. Artifact contents are not exposed. ### Affected versions Gitea `<= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39049, #39053). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -11837,8 +11837,8 @@
             },
             "CVE-2026-78231": {
                 "cve_id": "CVE-2026-78231",
-                "title": "Unauthenticated Blind SSRF via OpenID Sign-In Verification",
-                "description": "### Summary When OpenID sign-in is enabled, Gitea accepts an unauthenticated GET request to `/user/login/openid` and passes attacker-controlled OpenID assertion parameters into the OpenID 2.0 verification flow. During verification, the upstream `github.com/yohcop/openid-go` library sends a server-side `POST` request to the attacker-controlled `openid.op_endpoint` URL using `http.DefaultClient`. This gives an unauthenticated remote attacker a blind SSRF primitive from the Gitea server. The attacker controls the destination URL and the form-encoded POST body. In deployments where the Gitea server can reach loopback, private-network, link-local, or otherwise internal HTTP services, this can be used to interact with services that are not directly reachable by the attacker. ### Details The vulnerable route is the OpenID sign-in endpoint: ```go m.Combo('/login/openid'). Get(auth.SignInOpenID). Post(web.Bind(forms.SignInOpenIDForm{}), auth.SignInOpenIDPost) ``` The route is gated by `openIDSignInEnabled`, but it does not require an authenticated user. When `[openid] ENABLE_OPENID_SIGNIN = true`, an anonymous client can reach the GET handler. ### Impact An attacker can cause the Gitea server to send an outbound HTTP POST request to an attacker-controlled URL by sending one unauthenticated GET request to `/user/login/openid`, provided OpenID sign-in is enabled. The attacker controls the target URL through `openid.op_endpoint` and controls much of the form-encoded body through the supplied OpenID query parameters. The impact depends on the deployment environment and network reachability. In common self-hosted deployments, Gitea may be able to reach services that are not exposed to the internet, including loopback services, internal admin panels, CI/CD endpoints, internal webhooks, private-network APIs, or link-local metadata endpoints. Because the response is not returned to the attacker, the primitive is blind, but it can still trigger state-changing actions on internal services that accept POST requests, and it can be used as an internal network interaction primitive. This also creates an availability risk if outbound requests can be made to slow or non-responsive targets, because the OpenID path uses the default HTTP client behavior without an apparent request timeout in this path. I would honestly argue that a higher environmental score may be appropriate where the Gitea server can reach sensitive unauthenticated internal services that accept form-encoded POST requests.",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -11850,8 +11850,8 @@
             },
             "CVE-2026-78433": {
                 "cve_id": "CVE-2026-78433",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Attachments created before the January 2026 cutoff skip the cross repository check entirely, and permission is then evaluated against the repository named in the URL rather than the repository owning the attachment, so a private repository's attachment is served through any public repository's path",
+                "description": "### Summary The web attachment handler contains a guard that rejects a request for an attachment made through a repository other than the one that owns it. That guard is applied only to attachments created after 16 January 2026; older attachments skip it even when their owning-repository id is correctly populated. When the guard is skipped, the handler evaluates permission against the repository named in the request URL instead of the repository that owns the attachment. An attachment belonging to a private repository can therefore be retrieved by requesting it through any public repository's attachment path. The route allows anonymous access, so no authentication is required. ### Details In `routers/web/repo/attachment.go` the cross-repository check is gated only on the attachment's creation timestamp, unlike its two sibling call sites which also require the owning-repository id to be unset. A migration backfills that id on upgrade, so the timestamp-only exemption protects no legitimate rows and instead allows permission to be checked against the wrong repository. Downstream draft-release and token-scope checks inherit the same wrong subject. Attachment UUIDs are random and not enumerable, so exploitation requires knowledge of a specific attachment UUID (for example from a removed collaborator, a public-to-private conversion, notification mail, webhook payloads, or proxy/CDN logs). ### Impact Disclosure of private-repository attachment contents \u2014 issue and pull request attachments and release assets \u2014 to an unauthenticated caller who knows the attachment UUID. Incorrect authorization / cross-repository access control bypass. Affects any instance that held attachments created before 16 January 2026. ### Affected versions Gitea `>= 1.26.0, <= 1.27.2`. ### Patches Fixed in Gitea 1.27.3 (#39048, #39077). ### Workarounds None. Upgrade to 1.27.3.",
                 "severity": "",
                 "status": "fixed",
                 "events": [
@@ -12031,9 +12031,9 @@
             },
             "GHSA-3m6q-h5gj-7mrw": {
                 "cve_id": "GHSA-3m6q-h5gj-7mrw",
-                "title": "Gitea has insecure default SSH settings",
-                "description": "## Summary\n\nThe built-in SSH server currently advertises a number of key exchange, MAC, and host key algorithms that are considered weak or broken. The defaults should be tightened so a fresh installation passes a baseline SSH security audit out of the box.\n\n## Details\n\nRunning `ssh-audit` against a default deployment flags the following as `fail`:\n\n- **Key exchange**\n  - `ecdh-sha2-nistp256`\n  - `ecdh-sha2-nistp384`\n  - `ecdh-sha2-nistp521`\n- **MAC**\n  - `hmac-sha1`\n- **Host key**\n  - `ssh-rsa`\n\n## Reproduction\n\n```sh\ndocker run -it --rm positronsecurity/ssh-audit -p 2222 gitea.local\n```\n\n## Impact\n\nDefault deployments expose algorithms that are known-weak or deprecated upstream. The current workaround requires manually setting several `GITEA__server__SSH_SERVER_*` variables, which most users will never do.\n\n### Workaround\n\n```ini\n[server]\nSSH_SERVER_KEY_EXCHANGES = curve25519-sha256, diffie-hellman-group14-sha256\nSSH_SERVER_CIPHERS       = chacha20-poly1305@openssh.com, aes128-ctr, aes192-ctr, aes256-ctr, aes128-gcm@openssh.com, aes256-gcm@openssh.com\nSSH_SERVER_MACS          = hmac-sha2-256-etm@openssh.com, hmac-sha2-256\n```\n\nThere is no exposed option to restrict host key algorithms, so `ssh-rsa` remains advertised.\n\n## Acceptance criteria\n\n- [ ] Default `SSH_SERVER_KEY_EXCHANGES`, `SSH_SERVER_CIPHERS`, and `SSH_SERVER_MACS` updated to the secure list above.\n- [ ] New `SSH_SERVER_HOST_KEY_ALGORITHMS` option added, with a default that excludes `ssh-rsa`.\n- [ ] Documentation updated to reflect the new defaults.\n- [ ] `ssh-audit` against a fresh install reports no `[fail]` entries.",
-                "severity": "MEDIUM",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -12056,8 +12056,8 @@
             },
             "GHSA-m984-2424-x6vw": {
                 "cve_id": "GHSA-m984-2424-x6vw",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Generic attachment downloads bypass draft-release visibility checks",
+                "description": "### Summary In Gitea 1.26.1, anonymous users can download draft release assets through `/attachments/{uuid}` even when the draft release itself is hidden. The generic attachment route does not re-apply the draft-release visibility check before serving the file. ### Details The verified report ties this to `routers/web/repo/attachment.go:141-173`, which serves linked attachments without reloading the parent release or enforcing the draft flag again. `routers/api/v1/repo/release_attachment.go:23-40,134-150` shows the normal release path does enforce `canAccessReleaseDraft(ctx)`, while `services/repository/repository.go:199-204` collapses release attachments down to `unit.TypeReleases` and loses the `IsDraft` context. `routers/web/web.go:872,1471` routes UUID-based attachment downloads to the generic handler. In the verified test, anonymous access to the draft release API returned `404`, but anonymous access to `/attachments/{uuid}` returned `200` and served the draft asset content. ### PoC 1. Start an isolated Gitea 1.26.1 instance and set `BASE=http://127.0.0.1:3000`. Create a test user `owner`. 2. As `owner`, create a public initialized repository: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'name':'draft-asset-demo','private':false,'auto_init':true}' '$BASE/api/v1/user/repos'` 3. As `owner`, create a draft release and copy the returned numeric release ID: `curl -u owner:ownerpass123 -H 'Content-Type: application/json' -d '{'tag_name':'draft-1','name':'draft-1','draft':true}' '$BASE/api/v1/repos/owner/draft-asset-demo/releases'` 4. Create a harmless asset with recognizable content: `printf 'draft-only-binary' > /tmp/draft-asset.txt` 5. Upload it to the draft release and copy the returned `uuid` or `browser_download_url`: `curl -u owner:ownerpass123 -X POST -H 'Content-Type: application/octet-stream' --data-binary @/tmp/draft-asset.txt '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID/assets?name=draft-asset.txt'` 6. As an anonymous user with no cookies, verify the draft release itself is hidden: `curl -i '$BASE/api/v1/repos/owner/draft-asset-demo/releases/$RELEASE_ID'` 7. Confirm this returns `404`. 8. As the same anonymous user, request the generic attachment route: `curl -i '$BASE/attachments/$UUID'` 9. Observe `200 OK` and the file body `draft-only-binary`. 10. Optionally compare with the normal release download route `/owner/draft-asset-demo/releases/download/draft-1/draft-asset.txt`, which should remain hidden while `/attachments/$UUID` succeeds. ### Impact This leaks unpublished release assets. Anyone who learns the attachment UUID can retrieve draft binaries or other release files before the maintainer chooses to publish them.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
