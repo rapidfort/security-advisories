@@ -98927,6 +98927,114 @@
                     }
                 ]
             },
+            "CVE-2026-98270": {
+                "cve_id": "CVE-2026-98270",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: check ras and obj before dereference\n\nnbio_v7_9_handle_ras_controller_intr_no_bifring() dereferences ras and obj\nwithout checking either for NULL. Both amdgpu_ras_get_context() and\namdgpu_ras_find_obj() can return NULL, e.g. during the window between\nadev->nbio.ras being set (early in amdgpu_ras_init(), by design, to\nenable the fatal-error interrupt as soon as possible) and the PCIE_BIF\nras object actually being created in RAS late_init. Any interrupt in that\nwindow crashes in hard-IRQ context.\n\nThis is analogous to commit d190b459b2a4 (\"drm/amdgpu: the warning\ndereferencing obj for nbio_v7_4\"), which fixed the same issue in the\nnbio_v7_4 handler.\n\nFound by Linux Verification Center (linuxtesting.org) with SVACE.\n\n(cherry picked from commit c7071767a50a32ed727cf800ac84372429e3b4b3)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98271": {
+                "cve_id": "CVE-2026-98271",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: do not leave stale header offsets after pskb_carve()\n\npskb_carve_inside_header() and pskb_carve_inside_nonlinear() remove\nthe first bytes of a packet and reallocate skb->head.\n\nAll the headers that were present before the operation are gone,\nbut both functions call skb_headers_offset_update(skb, 0), which\nis a no-op : skb->mac_header, skb->network_header,\nskb->transport_header and skb->csum_start keep their old values and\nnow describe bytes which are no longer there.\n\nBoth helpers size the new head from the old skb_end_offset(), so the\nstale offsets still land inside the new allocation. They point past\nskb_tail_pointer() though, to bytes that were never initialized.\n\npskb_carve_inside_nonlinear() is the worst case, because it leaves a\nzombie skb with an empty linear part (skb->data ==\nskb_tail_pointer(skb), skb_headlen(skb) == 0), while\nskb_mac_header_was_set() is still true and skb->mac_header is way\nahead of skb->data.\n\nThe only user of pskb_extract() is rds_tcp_data_recv(), and the\ncarved skb is queued on tinc->ti_skb_list. When the RDS incoming\nmessage is released, rds_tcp_inc_free() calls skb_queue_purge(),\nwhich frees the skbs with SKB_DROP_REASON_QUEUE_PURGE. This is\nvisible from drop_monitor, which then tries to pull back to the\n(bogus) mac header :\n\nskbuff: __skb_pull(len=234)\nskb len=6968 data_len=6968 headroom=0 headlen=0 tailroom=0\nend-tail=384 mac=(234,14) mac_len=14 net=(248,40) trans=288\nshinfo(txflags=0 nr_frags=1 gso(size=1428 type=16 segs=5))\ncsum(0x100120 start=288 offset=16 ip_summed=3 complete_sw=0 valid=1 level=0)\nhash(0x7b446c6c sw=0 l4=1) proto=0x86dd pkttype=0 iif=60\nkernel BUG at ./include/linux/skbuff.h:2847!\n\nAdd skb_carve_reset_headers() to mark the mac and transport headers\nas not set, reset the network header, clear skb->mac_len, and drop\na now meaningless CHECKSUM_PARTIAL (csum_start no longer describes\nanything).\n\nInvalidate the inner offsets as well. Unlike mac_header and\ntransport_header they have no \"unset\" sentinel, so a leftover\nnon-zero value still looks like a real header. Zero\nskb->inner_mac_header, skb->inner_network_header,\nskb->inner_transport_header, skb->inner_protocol and\nskb->encapsulation, so that all the header state is invalidated in\none place.\n\nv2: fixed an inaccurate changelog. The stale offsets stay inside the\n    new skb->head, which is never smaller than the old one, they\n    simply point past skb_tail_pointer() to bytes that are gone.\n    Thanks to Xuanqiang Luo for insisting on this.\n    Also invalidate the inner header state, as suggested by the\n    netdev AI review :\n    https://netdev-ai.bots.linux.dev/sashiko/#/patchset/20260911114922.621937-1-edumazet%40google.com",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98273": {
+                "cve_id": "CVE-2026-98273",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/kprobes: Fix crash when probing CS CALL instructions\n\nWhen using eBPF to probe CS CALL instructions within a function,\na crash can be triggered.\n\nThe eBPF tool probes offset 257 of the __hrtimer_run_queues()\nfunction:\n\n<__hrtimer_run_queues+249>:  nopl   0x0(%rax,%rax,1)\n<__hrtimer_run_queues+254>:  mov    %r14,%rdi\n<__hrtimer_run_queues+257>:  cs call <__x86_indirect_thunk_r12>\n<__hrtimer_run_queues+263>:  mov    %eax,%r12d\n<__hrtimer_run_queues+266>:  xchg   %ax,%ax\n<__hrtimer_run_queues+268>:  mov    %r13,%rdi\n\nWhich triggers this crash:\n\n  BUG: unable to handle page fault for address: 00000000000f41c9\n  #PF: supervisor write access in kernel mode\n  #PF: error_code(0x0002) - not-present page\n  PGD 0 P4D 0\n  Oops: 0002 [#1] SMP NOPTI\n  CPU: 1 PID: 0 Comm: swapper/1 Kdump: loaded Tainted: P\n  RIP: 0010:__hrtimer_run_queues+0x106/0x230\n\nNote that __hrtimer_run_queues+0x106 is __hrtimer_run_queues+262, which is\nat the 6th byte of the above CS CALL instruction. Since the CS CALL\ninstruction occupies 6 bytes, the exception occurred in the middle of that\ncall instruction.\n\nThe root cause is that when using eBPF tools to probe in the middle of a\nfunction, a kprobe with INT3 is used as the underlying implementation.\n\nDuring single-step emulation of the original CALL instruction,\nint3_emulate_call() assumes that the probed CALL instruction is 5 bytes\nlong. However, the actual CS-prefixed CALL instruction occupies 6 bytes,\nso it constructs an incorrect exception return address. When the CPU\nreturns from the kprobe handler, the next instruction to be executed is at\nthe address of the last byte of that CS CALL instruction. Coincidentally,\nstarting from that address, the CPU fetches and decodes a completely\ndifferent instruction, which ultimately triggers a kernel crash.\n\nFix the issue by using the actual instruction length obtained from\nthe instruction decoder when constructing the exception return\naddress, rather than relying on the hardcoded CALL_INSN_SIZE macro.\n\n[ mingo: Refined the changelog ]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98276": {
+                "cve_id": "CVE-2026-98276",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: lock the socket in sock_gettstamp()\n\nsk->sk_flags must only be changed while holding the socket lock,\nbecause sock_set_flag() and sock_reset_flag() use non atomic\noperations (__set_bit() and __clear_bit()).\n\nsock_gettstamp() is one of the last places where a bit of sk->sk_flags\nis changed from a syscall without owning the socket lock, through\nsock_enable_timestamp(sk, SOCK_TIMESTAMP).\n\nsk_set_memalloc() and sk_clear_memalloc() also change sk->sk_flags\nwithout the socket lock, but their callers (nbd, iscsi_tcp, nvme-tcp,\nsunrpc, wireguard) need a careful audit, this will be addressed in a\nseparate patch.\n\nJungwoo Lee and Wongi Lee reported an UDP socket use-after-free\ncaused by this bug: a SIOCGSTAMPNS_NEW ioctl racing with bind()\ncan cancel the SOCK_RCU_FREE bit that udp_lib_get_port() just set,\nbecause both threads perform a read-modify-write on the same word.\n\n  CPU 0 (bind)                        CPU 1 (SIOCGSTAMPNS_NEW)\n  --------------------------------    ----------------------------\n  read sk_flags = F                   read sk_flags = F\n  compute F | BIT(SOCK_RCU_FREE)      compute F | BIT(SOCK_TIMESTAMP)\n  store F | BIT(SOCK_RCU_FREE)\n  sk_add_node_rcu(sk, ...)\n                                      store F | BIT(SOCK_TIMESTAMP)\n\nAfter the lost update, SOCK_RCU_FREE is clear while the socket is\nvisible to lockless UDP receive lookups. sk_destruct() then frees\nthe socket immediately instead of waiting for a RCU grace period,\nwhile the receive path still holds a reference-less pointer to it:\n\n BUG: KASAN: slab-use-after-free in ipv4_pktinfo_prepare+0x30/0x410\n Read of size 8 at addr ffff888008806610 by task exploit/207\n CPU: 0 UID: 1000 PID: 207 Comm: exploit Not tainted 6.12.95+ #1\n  ipv4_pktinfo_prepare+0x30/0x410\n  udp_queue_rcv_one_skb+0x51c/0x1180\n  udp_unicast_rcv_skb+0x109/0x350\n  ip_protocol_deliver_rcu+0x14b/0x310\n  ip_local_deliver_finish+0x29d/0x390\n  ip_local_deliver+0x24d/0x2a0\n\nOnly grab the socket lock when SOCK_TIMESTAMP has to be set,\nto keep the common case lockless.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98280": {
+                "cve_id": "CVE-2026-98280",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/xe/i2c: Disable IRQ on unbind\n\nCurrently, struct xe_i2c is freed before SGUnit IRQ is disabled in unbind\npath, leaving a potential UAF in case I2C IRQ is hit during this small\nwindow. Explicitly disable I2C IRQ in xe_i2c_remove() and fix this.\n\n(cherry picked from commit 8ba5c8b8ab3fd362267c11df2cd5a90ee46f6e24)",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98281": {
+                "cve_id": "CVE-2026-98281",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfutex: Also allocate private hash on vfork()\n\nAs Jann demonstrated, it is entirely feasible to access the mm through vfork().\nTherefore we need to allocate a private hash on vfork() as well as any other\nCLONE_VM user.\n\nSpecifically, it must be avoided to have (private) futex waiters before\nallocating the private hash.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
             "CVE-2026-98287": {
                 "cve_id": "CVE-2026-98287",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -167803,6 +167911,114 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: core: Fix potential UAF after asynchronous card release\n\nUsually a sound driver releases the resources assigned to the card via\nsnd_card_free(), and it synchronizes with the whole release procedure.\nHowever, when the card is released asynchronously via\nsnd_card_free_when_closed() like USB-audio driver, the situation is\nslightly different; although the snd_card_disconnect() call at the\ndisconnection guarantees that any newer accesses will be gated, the\nin-flight tasks might be still accessing to the underlying card->dev\ndevice even after the disconnection, which would cause a\nuse-after-free in the end, as reported by fuzzers.\n\nFor addressing the bug above, this patch takes the refcount of\ncard->dev at initialization of the card object, and releases at its\ndestructor.   This assures the availability of the card->dev in its\nwhole lifecycle.",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98270": {
+                "cve_id": "CVE-2026-98270",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: check ras and obj before dereference\n\nnbio_v7_9_handle_ras_controller_intr_no_bifring() dereferences ras and obj\nwithout checking either for NULL. Both amdgpu_ras_get_context() and\namdgpu_ras_find_obj() can return NULL, e.g. during the window between\nadev->nbio.ras being set (early in amdgpu_ras_init(), by design, to\nenable the fatal-error interrupt as soon as possible) and the PCIE_BIF\nras object actually being created in RAS late_init. Any interrupt in that\nwindow crashes in hard-IRQ context.\n\nThis is analogous to commit d190b459b2a4 (\"drm/amdgpu: the warning\ndereferencing obj for nbio_v7_4\"), which fixed the same issue in the\nnbio_v7_4 handler.\n\nFound by Linux Verification Center (linuxtesting.org) with SVACE.\n\n(cherry picked from commit c7071767a50a32ed727cf800ac84372429e3b4b3)",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98271": {
+                "cve_id": "CVE-2026-98271",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: do not leave stale header offsets after pskb_carve()\n\npskb_carve_inside_header() and pskb_carve_inside_nonlinear() remove\nthe first bytes of a packet and reallocate skb->head.\n\nAll the headers that were present before the operation are gone,\nbut both functions call skb_headers_offset_update(skb, 0), which\nis a no-op : skb->mac_header, skb->network_header,\nskb->transport_header and skb->csum_start keep their old values and\nnow describe bytes which are no longer there.\n\nBoth helpers size the new head from the old skb_end_offset(), so the\nstale offsets still land inside the new allocation. They point past\nskb_tail_pointer() though, to bytes that were never initialized.\n\npskb_carve_inside_nonlinear() is the worst case, because it leaves a\nzombie skb with an empty linear part (skb->data ==\nskb_tail_pointer(skb), skb_headlen(skb) == 0), while\nskb_mac_header_was_set() is still true and skb->mac_header is way\nahead of skb->data.\n\nThe only user of pskb_extract() is rds_tcp_data_recv(), and the\ncarved skb is queued on tinc->ti_skb_list. When the RDS incoming\nmessage is released, rds_tcp_inc_free() calls skb_queue_purge(),\nwhich frees the skbs with SKB_DROP_REASON_QUEUE_PURGE. This is\nvisible from drop_monitor, which then tries to pull back to the\n(bogus) mac header :\n\nskbuff: __skb_pull(len=234)\nskb len=6968 data_len=6968 headroom=0 headlen=0 tailroom=0\nend-tail=384 mac=(234,14) mac_len=14 net=(248,40) trans=288\nshinfo(txflags=0 nr_frags=1 gso(size=1428 type=16 segs=5))\ncsum(0x100120 start=288 offset=16 ip_summed=3 complete_sw=0 valid=1 level=0)\nhash(0x7b446c6c sw=0 l4=1) proto=0x86dd pkttype=0 iif=60\nkernel BUG at ./include/linux/skbuff.h:2847!\n\nAdd skb_carve_reset_headers() to mark the mac and transport headers\nas not set, reset the network header, clear skb->mac_len, and drop\na now meaningless CHECKSUM_PARTIAL (csum_start no longer describes\nanything).\n\nInvalidate the inner offsets as well. Unlike mac_header and\ntransport_header they have no \"unset\" sentinel, so a leftover\nnon-zero value still looks like a real header. Zero\nskb->inner_mac_header, skb->inner_network_header,\nskb->inner_transport_header, skb->inner_protocol and\nskb->encapsulation, so that all the header state is invalidated in\none place.\n\nv2: fixed an inaccurate changelog. The stale offsets stay inside the\n    new skb->head, which is never smaller than the old one, they\n    simply point past skb_tail_pointer() to bytes that are gone.\n    Thanks to Xuanqiang Luo for insisting on this.\n    Also invalidate the inner header state, as suggested by the\n    netdev AI review :\n    https://netdev-ai.bots.linux.dev/sashiko/#/patchset/20260911114922.621937-1-edumazet%40google.com",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98273": {
+                "cve_id": "CVE-2026-98273",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/kprobes: Fix crash when probing CS CALL instructions\n\nWhen using eBPF to probe CS CALL instructions within a function,\na crash can be triggered.\n\nThe eBPF tool probes offset 257 of the __hrtimer_run_queues()\nfunction:\n\n<__hrtimer_run_queues+249>:  nopl   0x0(%rax,%rax,1)\n<__hrtimer_run_queues+254>:  mov    %r14,%rdi\n<__hrtimer_run_queues+257>:  cs call <__x86_indirect_thunk_r12>\n<__hrtimer_run_queues+263>:  mov    %eax,%r12d\n<__hrtimer_run_queues+266>:  xchg   %ax,%ax\n<__hrtimer_run_queues+268>:  mov    %r13,%rdi\n\nWhich triggers this crash:\n\n  BUG: unable to handle page fault for address: 00000000000f41c9\n  #PF: supervisor write access in kernel mode\n  #PF: error_code(0x0002) - not-present page\n  PGD 0 P4D 0\n  Oops: 0002 [#1] SMP NOPTI\n  CPU: 1 PID: 0 Comm: swapper/1 Kdump: loaded Tainted: P\n  RIP: 0010:__hrtimer_run_queues+0x106/0x230\n\nNote that __hrtimer_run_queues+0x106 is __hrtimer_run_queues+262, which is\nat the 6th byte of the above CS CALL instruction. Since the CS CALL\ninstruction occupies 6 bytes, the exception occurred in the middle of that\ncall instruction.\n\nThe root cause is that when using eBPF tools to probe in the middle of a\nfunction, a kprobe with INT3 is used as the underlying implementation.\n\nDuring single-step emulation of the original CALL instruction,\nint3_emulate_call() assumes that the probed CALL instruction is 5 bytes\nlong. However, the actual CS-prefixed CALL instruction occupies 6 bytes,\nso it constructs an incorrect exception return address. When the CPU\nreturns from the kprobe handler, the next instruction to be executed is at\nthe address of the last byte of that CS CALL instruction. Coincidentally,\nstarting from that address, the CPU fetches and decodes a completely\ndifferent instruction, which ultimately triggers a kernel crash.\n\nFix the issue by using the actual instruction length obtained from\nthe instruction decoder when constructing the exception return\naddress, rather than relying on the hardcoded CALL_INSN_SIZE macro.\n\n[ mingo: Refined the changelog ]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98276": {
+                "cve_id": "CVE-2026-98276",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: lock the socket in sock_gettstamp()\n\nsk->sk_flags must only be changed while holding the socket lock,\nbecause sock_set_flag() and sock_reset_flag() use non atomic\noperations (__set_bit() and __clear_bit()).\n\nsock_gettstamp() is one of the last places where a bit of sk->sk_flags\nis changed from a syscall without owning the socket lock, through\nsock_enable_timestamp(sk, SOCK_TIMESTAMP).\n\nsk_set_memalloc() and sk_clear_memalloc() also change sk->sk_flags\nwithout the socket lock, but their callers (nbd, iscsi_tcp, nvme-tcp,\nsunrpc, wireguard) need a careful audit, this will be addressed in a\nseparate patch.\n\nJungwoo Lee and Wongi Lee reported an UDP socket use-after-free\ncaused by this bug: a SIOCGSTAMPNS_NEW ioctl racing with bind()\ncan cancel the SOCK_RCU_FREE bit that udp_lib_get_port() just set,\nbecause both threads perform a read-modify-write on the same word.\n\n  CPU 0 (bind)                        CPU 1 (SIOCGSTAMPNS_NEW)\n  --------------------------------    ----------------------------\n  read sk_flags = F                   read sk_flags = F\n  compute F | BIT(SOCK_RCU_FREE)      compute F | BIT(SOCK_TIMESTAMP)\n  store F | BIT(SOCK_RCU_FREE)\n  sk_add_node_rcu(sk, ...)\n                                      store F | BIT(SOCK_TIMESTAMP)\n\nAfter the lost update, SOCK_RCU_FREE is clear while the socket is\nvisible to lockless UDP receive lookups. sk_destruct() then frees\nthe socket immediately instead of waiting for a RCU grace period,\nwhile the receive path still holds a reference-less pointer to it:\n\n BUG: KASAN: slab-use-after-free in ipv4_pktinfo_prepare+0x30/0x410\n Read of size 8 at addr ffff888008806610 by task exploit/207\n CPU: 0 UID: 1000 PID: 207 Comm: exploit Not tainted 6.12.95+ #1\n  ipv4_pktinfo_prepare+0x30/0x410\n  udp_queue_rcv_one_skb+0x51c/0x1180\n  udp_unicast_rcv_skb+0x109/0x350\n  ip_protocol_deliver_rcu+0x14b/0x310\n  ip_local_deliver_finish+0x29d/0x390\n  ip_local_deliver+0x24d/0x2a0\n\nOnly grab the socket lock when SOCK_TIMESTAMP has to be set,\nto keep the common case lockless.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98280": {
+                "cve_id": "CVE-2026-98280",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/xe/i2c: Disable IRQ on unbind\n\nCurrently, struct xe_i2c is freed before SGUnit IRQ is disabled in unbind\npath, leaving a potential UAF in case I2C IRQ is hit during this small\nwindow. Explicitly disable I2C IRQ in xe_i2c_remove() and fix this.\n\n(cherry picked from commit 8ba5c8b8ab3fd362267c11df2cd5a90ee46f6e24)",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.9-102.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98281": {
+                "cve_id": "CVE-2026-98281",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfutex: Also allocate private hash on vfork()\n\nAs Jann demonstrated, it is entirely feasible to access the mm through vfork().\nTherefore we need to allocate a private hash on vfork() as well as any other\nCLONE_VM user.\n\nSpecifically, it must be avoided to have (private) futex waiters before\nallocating the private hash.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
