@@ -78884,7 +78884,7 @@
                 "cve_id": "CVE-2025-68325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_cake: Fix incorrect qlen reduction in cake_drop\n\nIn cake_drop(), qdisc_tree_reduce_backlog() is used to update the qlen\nand backlog of the qdisc hierarchy. Its caller, cake_enqueue(), assumes\nthat the parent qdisc will enqueue the current packet. However, this\nassumption breaks when cake_enqueue() returns NET_XMIT_CN: the parent\nqdisc stops enqueuing current packet, leaving the tree qlen/backlog\naccounting inconsistent. This mismatch can lead to a NULL dereference\n(e.g., when the parent Qdisc is qfq_qdisc).\n\nThis patch computes the qlen/backlog delta in a more robust way by\nobserving the difference before and after the series of cake_drop()\ncalls, and then compensates the qdisc tree accounting if cake_enqueue()\nreturns NET_XMIT_CN.\n\nTo ensure correct compensation when ACK thinning is enabled, a new\nvariable is introduced to keep qlen unchanged.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -109054,7 +109054,7 @@
                 "cve_id": "CVE-2026-74346",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/irdma: Fix OOB read during CQ MR registration\n\nSashiko pointed out an unrelated bug during a previous patch:\nhttps://sashiko.dev/#/patchset/20260512183852.614045-1-jmoroni%40google.com\n\nThis change fixes the bug by eliminating the cqmr->split field which\nwas not being set properly and instead just checks the CQ resize\nfeature flag directly.\n\nThe cqmr->split field essentially tracks whether IRDMA_FEATURE_CQ_RESIZE\nis set, but it was not being set until CQ creation time, which is _after_\nCQ memory registration (the only other place where it is referenced).\n\nAs a result, it would always be false during MR registration and would\ntherefore cause irdma_handle_q_mem to populate cqmr->shadow even for GEN_2\nHW and beyond:\n\n    cqmr->shadow = (dma_addr_t)arr[req->cq_pages];\n\nThe issue is that for GEN_2 and beyond, req->cq_pages may be exactly equal\nto iwmr->page_cnt and therefore equal to the size of arr, which would cause\nan OOB read by one.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114482,7 +114482,7 @@
                 "cve_id": "CVE-2026-80756",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: do not cancel a policy conversion that never started\n\nsel_write_load() calls selinux_policy_cancel() when sel_make_policy_nodes()\nfails, and that helper dereferences the outgoing policy to cancel its\nsidtab conversion. On the first policy load there is no outgoing policy:\nsecurity_load_policy() returns early for that case, before it converts\nanything, and state->policy is still NULL. A first load that fails while\nbuilding the selinuxfs tree therefore takes a NULL dereference in\nselinux_policy_cancel(), reached from a write(2) to /sys/fs/selinux/load.\n\nSkip the cancel when there is no old policy, mirroring the check\nsecurity_load_policy() already makes before it converts.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114510,7 +114510,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114551,7 +114551,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -115087,7 +115087,7 @@
                 "cve_id": "CVE-2026-80889",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: isotp: fix timer drain order, wakeup handling and tx_gen ordering\n\nThis patch is a follow-up to commit cf070fe33bfb (\"can: isotp: serialize\nTX state transitions under so->rx_lock\") which addresses following\nsashiko-bot findings:\n\n- isotp_sendmsg(): drain so->txfrtimer first so a stale callback can't\n  re-arm echotimer after the claim\n\n- isotp_release(): wake so->wait after forcing ISOTP_SHUTDOWN so a\n  sleeping sendmsg() claim isn't stranded\n\n- isotp_sendmsg(): have both wait_event_interruptible() calls in\n  isotp_sendmsg() also wake on ISOTP_SHUTDOWN and do not return claim to\n  IDLE to avoid corrupting a concurrent isotp_release() process.\n\n- isotp_sendmsg(): handle potential claim of a new transfer when\n  the wait_event_interruptible() call returns in CAN_ISOTP_WAIT_TX_DONE\n  mode. Don't touch timers and states of the new transfer if a new thread\n  incremented so->tx_gen before getting the lock at err_event_drop.\n\n- isotp_sendmsg(): handle a stuck can_send() and omit timer and state\n  changes if a new transfer was claimed. wait_tx_done() returns the error\n  recorded in so->tx_result[], tagged with the caller's own generation.\n\n- isotp_tx_timeout(): on a claimed timeout, record the ECOMM error for\n  the timed-out transfer's own generation in so->tx_result[]; sk->sk_err\n  is raised unconditionally, same as every other error path here.\n\n- isotp_tx_gen_done()/isotp_tx_timeout(): always read tx.state (acquire)\n  before tx_gen - the reverse order let a weakly ordered CPU pair a fresh\n  tx.state with a stale tx_gen/tx_result slot.\n\n- isotp_sendmsg(): wait_tx_done: drain sk_err via sock_error() once we\n  have read the result from so->tx_result[], so an already-reported error\n  doesn't stay latched for a later poll()/SO_ERROR.\n\nAlso align the remaining lock-free so->tx.state/rx.state/cfecho accesses\nand use skb->hash as unique loopback echo frame indicator.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -115184,7 +115184,7 @@
                 "cve_id": "CVE-2026-80916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nkcov: fix data corruption and race conditions on PREEMPT_RT\n\nsyzbot is reporting KCOV state corruption on PREEMPT_RT kernels, for the\ntemporary storage used for saving/restoring remote KCOV state is currently\nallocated as the per-CPU area.\n\nOn PREEMPT_RT kernels, softirq handlers run as preemptible task threads\n(e.g., ksoftirqd). If a softirq context preempts a task running a remote\nKCOV session, it safely saves the task's state into the per-CPU area.\nHowever, if that softirq thread is subsequently preempted by a higher-\npriority softirq thread on the same CPU, the second softirq will overwrite\nthe same per-CPU area, permanently destroying the original task's KCOV\nstate.\n\nFix this data corruption by moving the temporary storage from the per-CPU\narea to the per-thread area. Since each softirq thread now owns its own\ntask context, nested softirq preemption no longer causes data overwrites.\n\nNote that while the temporary storage is now on a per-thread basis, the\nper-CPU kcov_percpu_data.lock must be retained, for we need to ensure that\nkcov_remote_start() and kcov_remote_stop() operate atomically without\nracing against asynchronous interrupts that manipulate the current task's\nKCOV state.\n\nIt is likely that GFP_KERNEL allocation by vmalloc_node() in kcov_init()\nhas already called panic() before returning NULL, for there will be no\nOOM-killable userspace processes when __init function of built-in module\nruns. But this patch also fixes crashing the kernel when vmalloc_node()\nin kcov_init() returned NULL, for kcov_init() left per-CPU irq_area == NULL\nbut kcov_remote_start() depends on per-CPU irq_area != NULL, resulting in\n\n  (1) doing vmalloc() in kcov_remote_start() despite !in_task() context\n\n  (2) out-of-array-bounds access if (1) succeeded but\n      kcov->remote_size < CONFIG_KCOV_IRQ_AREA_SIZE\n\n  (3) always leak memory allocated by (1), eventually killing all\n      OOM-killable userspace processes\n\nproblems.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -115198,7 +115198,7 @@
                 "cve_id": "CVE-2026-80917",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: host-generic: Fix NULL pointer dereference on 32-bit CAM systems\n\nOn 32-bit systems the config space is too large to ioremap in one go, so\npci_ecam_create() maps each bus segment separately and relies on the\n->add_bus callback (pci_ecam_add_bus) to populate the per-bus mapping in\ncfg->winp[]. pci_ecam_map_bus() then uses that mapping as the base for\nevery config access.\n\nThe generic ECAM ops (pci_generic_ecam_ops) already provide the ->add_bus\nand ->remove_bus callbacks, but the CAM (legacy) ops in pci-host-generic.c\ndo not. As a result, on a 32-bit host using \"pci-host-cam-generic\" the\nper-bus mapping is never set up and the first config read dereferences a\nNULL base, crashing during bus enumeration:\n\n Unable to handle kernel NULL pointer dereference at virtual address 00000800\n Oops [#1]\n CPU: 0 PID: 1 Comm: swapper Not tainted 6.9.7+ #43\n Hardware name: Digilent Nexys-Video-A7 RV32 (DT)\n epc : pci_generic_config_read+0x40/0xb0\n  ra : pci_generic_config_read+0x2c/0xb0\n [<c038db9c>] pci_generic_config_read+0x40/0xb0\n [<c038da04>] pci_bus_read_config_dword+0x50/0xb0\n [<c0391e94>] pci_bus_generic_read_dev_vendor_id+0x3c/0x1ec\n [<c039245c>] pci_scan_single_device+0xa4/0x11c\n [<c0392570>] pci_scan_slot+0x9c/0x23c\n [<c039388c>] pci_scan_child_bus_extend+0x58/0x2f4\n [<c0393db0>] pci_scan_root_bus_bridge+0x64/0xe8\n [<c0393e54>] pci_host_probe+0x20/0xc8\n [<c03bc6f4>] pci_host_common_probe+0x144/0x1e4\n\nFix this by giving the CAM ops the same ->add_bus/->remove_bus callbacks.\nSince pci_ecam_add_bus() and pci_ecam_remove_bus() are static to ecam.c,\nmove the CAM ops definition there as pci_generic_cam_ops (mirroring\npci_generic_ecam_ops) and export it for pci-host-generic.c to reference.\n\n[mani: removed timestamp from log]",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -115212,7 +115212,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -184080,7 +184080,7 @@
                 "cve_id": "CVE-2025-68325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_cake: Fix incorrect qlen reduction in cake_drop\n\nIn cake_drop(), qdisc_tree_reduce_backlog() is used to update the qlen\nand backlog of the qdisc hierarchy. Its caller, cake_enqueue(), assumes\nthat the parent qdisc will enqueue the current packet. However, this\nassumption breaks when cake_enqueue() returns NET_XMIT_CN: the parent\nqdisc stops enqueuing current packet, leaving the tree qlen/backlog\naccounting inconsistent. This mismatch can lead to a NULL dereference\n(e.g., when the parent Qdisc is qfq_qdisc).\n\nThis patch computes the qlen/backlog delta in a more robust way by\nobserving the difference before and after the series of cake_drop()\ncalls, and then compensates the qdisc tree accounting if cake_enqueue()\nreturns NET_XMIT_CN.\n\nTo ensure correct compensation when ACK thinning is enabled, a new\nvariable is introduced to keep qlen unchanged.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -204672,7 +204672,7 @@
                 "cve_id": "CVE-2026-74346",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/irdma: Fix OOB read during CQ MR registration\n\nSashiko pointed out an unrelated bug during a previous patch:\nhttps://sashiko.dev/#/patchset/20260512183852.614045-1-jmoroni%40google.com\n\nThis change fixes the bug by eliminating the cqmr->split field which\nwas not being set properly and instead just checks the CQ resize\nfeature flag directly.\n\nThe cqmr->split field essentially tracks whether IRDMA_FEATURE_CQ_RESIZE\nis set, but it was not being set until CQ creation time, which is _after_\nCQ memory registration (the only other place where it is referenced).\n\nAs a result, it would always be false during MR registration and would\ntherefore cause irdma_handle_q_mem to populate cqmr->shadow even for GEN_2\nHW and beyond:\n\n    cqmr->shadow = (dma_addr_t)arr[req->cq_pages];\n\nThe issue is that for GEN_2 and beyond, req->cq_pages may be exactly equal\nto iwmr->page_cnt and therefore equal to the size of arr, which would cause\nan OOB read by one.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -208332,7 +208332,7 @@
                 "cve_id": "CVE-2026-80756",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: do not cancel a policy conversion that never started\n\nsel_write_load() calls selinux_policy_cancel() when sel_make_policy_nodes()\nfails, and that helper dereferences the outgoing policy to cancel its\nsidtab conversion. On the first policy load there is no outgoing policy:\nsecurity_load_policy() returns early for that case, before it converts\nanything, and state->policy is still NULL. A first load that fails while\nbuilding the selinuxfs tree therefore takes a NULL dereference in\nselinux_policy_cancel(), reached from a write(2) to /sys/fs/selinux/load.\n\nSkip the cancel when there is no old policy, mirroring the check\nsecurity_load_policy() already makes before it converts.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -208360,7 +208360,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -208388,7 +208388,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -208859,7 +208859,7 @@
                 "cve_id": "CVE-2026-80889",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: isotp: fix timer drain order, wakeup handling and tx_gen ordering\n\nThis patch is a follow-up to commit cf070fe33bfb (\"can: isotp: serialize\nTX state transitions under so->rx_lock\") which addresses following\nsashiko-bot findings:\n\n- isotp_sendmsg(): drain so->txfrtimer first so a stale callback can't\n  re-arm echotimer after the claim\n\n- isotp_release(): wake so->wait after forcing ISOTP_SHUTDOWN so a\n  sleeping sendmsg() claim isn't stranded\n\n- isotp_sendmsg(): have both wait_event_interruptible() calls in\n  isotp_sendmsg() also wake on ISOTP_SHUTDOWN and do not return claim to\n  IDLE to avoid corrupting a concurrent isotp_release() process.\n\n- isotp_sendmsg(): handle potential claim of a new transfer when\n  the wait_event_interruptible() call returns in CAN_ISOTP_WAIT_TX_DONE\n  mode. Don't touch timers and states of the new transfer if a new thread\n  incremented so->tx_gen before getting the lock at err_event_drop.\n\n- isotp_sendmsg(): handle a stuck can_send() and omit timer and state\n  changes if a new transfer was claimed. wait_tx_done() returns the error\n  recorded in so->tx_result[], tagged with the caller's own generation.\n\n- isotp_tx_timeout(): on a claimed timeout, record the ECOMM error for\n  the timed-out transfer's own generation in so->tx_result[]; sk->sk_err\n  is raised unconditionally, same as every other error path here.\n\n- isotp_tx_gen_done()/isotp_tx_timeout(): always read tx.state (acquire)\n  before tx_gen - the reverse order let a weakly ordered CPU pair a fresh\n  tx.state with a stale tx_gen/tx_result slot.\n\n- isotp_sendmsg(): wait_tx_done: drain sk_err via sock_error() once we\n  have read the result from so->tx_result[], so an already-reported error\n  doesn't stay latched for a later poll()/SO_ERROR.\n\nAlso align the remaining lock-free so->tx.state/rx.state/cfecho accesses\nand use skb->hash as unique loopback echo frame indicator.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -208943,7 +208943,7 @@
                 "cve_id": "CVE-2026-80916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nkcov: fix data corruption and race conditions on PREEMPT_RT\n\nsyzbot is reporting KCOV state corruption on PREEMPT_RT kernels, for the\ntemporary storage used for saving/restoring remote KCOV state is currently\nallocated as the per-CPU area.\n\nOn PREEMPT_RT kernels, softirq handlers run as preemptible task threads\n(e.g., ksoftirqd). If a softirq context preempts a task running a remote\nKCOV session, it safely saves the task's state into the per-CPU area.\nHowever, if that softirq thread is subsequently preempted by a higher-\npriority softirq thread on the same CPU, the second softirq will overwrite\nthe same per-CPU area, permanently destroying the original task's KCOV\nstate.\n\nFix this data corruption by moving the temporary storage from the per-CPU\narea to the per-thread area. Since each softirq thread now owns its own\ntask context, nested softirq preemption no longer causes data overwrites.\n\nNote that while the temporary storage is now on a per-thread basis, the\nper-CPU kcov_percpu_data.lock must be retained, for we need to ensure that\nkcov_remote_start() and kcov_remote_stop() operate atomically without\nracing against asynchronous interrupts that manipulate the current task's\nKCOV state.\n\nIt is likely that GFP_KERNEL allocation by vmalloc_node() in kcov_init()\nhas already called panic() before returning NULL, for there will be no\nOOM-killable userspace processes when __init function of built-in module\nruns. But this patch also fixes crashing the kernel when vmalloc_node()\nin kcov_init() returned NULL, for kcov_init() left per-CPU irq_area == NULL\nbut kcov_remote_start() depends on per-CPU irq_area != NULL, resulting in\n\n  (1) doing vmalloc() in kcov_remote_start() despite !in_task() context\n\n  (2) out-of-array-bounds access if (1) succeeded but\n      kcov->remote_size < CONFIG_KCOV_IRQ_AREA_SIZE\n\n  (3) always leak memory allocated by (1), eventually killing all\n      OOM-killable userspace processes\n\nproblems.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -208957,7 +208957,7 @@
                 "cve_id": "CVE-2026-80917",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: host-generic: Fix NULL pointer dereference on 32-bit CAM systems\n\nOn 32-bit systems the config space is too large to ioremap in one go, so\npci_ecam_create() maps each bus segment separately and relies on the\n->add_bus callback (pci_ecam_add_bus) to populate the per-bus mapping in\ncfg->winp[]. pci_ecam_map_bus() then uses that mapping as the base for\nevery config access.\n\nThe generic ECAM ops (pci_generic_ecam_ops) already provide the ->add_bus\nand ->remove_bus callbacks, but the CAM (legacy) ops in pci-host-generic.c\ndo not. As a result, on a 32-bit host using \"pci-host-cam-generic\" the\nper-bus mapping is never set up and the first config read dereferences a\nNULL base, crashing during bus enumeration:\n\n Unable to handle kernel NULL pointer dereference at virtual address 00000800\n Oops [#1]\n CPU: 0 PID: 1 Comm: swapper Not tainted 6.9.7+ #43\n Hardware name: Digilent Nexys-Video-A7 RV32 (DT)\n epc : pci_generic_config_read+0x40/0xb0\n  ra : pci_generic_config_read+0x2c/0xb0\n [<c038db9c>] pci_generic_config_read+0x40/0xb0\n [<c038da04>] pci_bus_read_config_dword+0x50/0xb0\n [<c0391e94>] pci_bus_generic_read_dev_vendor_id+0x3c/0x1ec\n [<c039245c>] pci_scan_single_device+0xa4/0x11c\n [<c0392570>] pci_scan_slot+0x9c/0x23c\n [<c039388c>] pci_scan_child_bus_extend+0x58/0x2f4\n [<c0393db0>] pci_scan_root_bus_bridge+0x64/0xe8\n [<c0393e54>] pci_host_probe+0x20/0xc8\n [<c03bc6f4>] pci_host_common_probe+0x144/0x1e4\n\nFix this by giving the CAM ops the same ->add_bus/->remove_bus callbacks.\nSince pci_ecam_add_bus() and pci_ecam_remove_bus() are static to ecam.c,\nmove the CAM ops definition there as pci_generic_cam_ops (mirroring\npci_generic_ecam_ops) and export it for pci-host-generic.c to reference.\n\n[mani: removed timestamp from log]",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -208971,7 +208971,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
