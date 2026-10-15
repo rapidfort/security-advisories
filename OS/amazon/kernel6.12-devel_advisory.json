@@ -3996,7 +3996,7 @@
                 "cve_id": "CVE-2025-40209",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: fix memory leak of qgroup_list in btrfs_add_qgroup_relation\n\nWhen btrfs_add_qgroup_relation() is called with invalid qgroup levels\n(src >= dst), the function returns -EINVAL directly without freeing the\npreallocated qgroup_list structure passed by the caller. This causes a\nmemory leak because the caller unconditionally sets the pointer to NULL\nafter the call, preventing any cleanup.\n\nThe issue occurs because the level validation check happens before the\nmutex is acquired and before any error handling path that would free\nthe prealloc pointer. On this early return, the cleanup code at the\n'out' label (which includes kfree(prealloc)) is never reached.\n\nIn btrfs_ioctl_qgroup_assign(), the code pattern is:\n\n    prealloc = kzalloc(sizeof(*prealloc), GFP_KERNEL);\n    ret = btrfs_add_qgroup_relation(trans, sa->src, sa->dst, prealloc);\n    prealloc = NULL;  // Always set to NULL regardless of return value\n    ...\n    kfree(prealloc);  // This becomes kfree(NULL), does nothing\n\nWhen the level check fails, 'prealloc' is never freed by either the\ncallee or the caller, resulting in a 64-byte memory leak per failed\noperation. This can be triggered repeatedly by an unprivileged user\nwith access to a writable btrfs mount, potentially exhausting kernel\nmemory.\n\nFix this by freeing prealloc before the early return, ensuring prealloc\nis always freed on all error paths.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -5004,7 +5004,7 @@
                 "cve_id": "CVE-2025-68202",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsched_ext: Fix unsafe locking in the scx_dump_state()\n\nFor built with CONFIG_PREEMPT_RT=y kernels, the dump_lock will be converted\nsleepable spinlock and not disable-irq, so the following scenarios occur:\n\ninconsistent {IN-HARDIRQ-W} -> {HARDIRQ-ON-W} usage.\nirq_work/0/27 [HC0[0]:SC0[0]:HE1:SE1] takes:\n(&rq->__lock){?...}-{2:2}, at: raw_spin_rq_lock_nested+0x2b/0x40\n{IN-HARDIRQ-W} state was registered at:\n   lock_acquire+0x1e1/0x510\n   _raw_spin_lock_nested+0x42/0x80\n   raw_spin_rq_lock_nested+0x2b/0x40\n   sched_tick+0xae/0x7b0\n   update_process_times+0x14c/0x1b0\n   tick_periodic+0x62/0x1f0\n   tick_handle_periodic+0x48/0xf0\n   timer_interrupt+0x55/0x80\n   __handle_irq_event_percpu+0x20a/0x5c0\n   handle_irq_event_percpu+0x18/0xc0\n   handle_irq_event+0xb5/0x150\n   handle_level_irq+0x220/0x460\n   __common_interrupt+0xa2/0x1e0\n   common_interrupt+0xb0/0xd0\n   asm_common_interrupt+0x2b/0x40\n   _raw_spin_unlock_irqrestore+0x45/0x80\n   __setup_irq+0xc34/0x1a30\n   request_threaded_irq+0x214/0x2f0\n   hpet_time_init+0x3e/0x60\n   x86_late_time_init+0x5b/0xb0\n   start_kernel+0x308/0x410\n   x86_64_start_reservations+0x1c/0x30\n   x86_64_start_kernel+0x96/0xa0\n   common_startup_64+0x13e/0x148\n\n other info that might help us debug this:\n Possible unsafe locking scenario:\n\n        CPU0\n        ----\n   lock(&rq->__lock);\n   <Interrupt>\n     lock(&rq->__lock);\n\n  *** DEADLOCK ***\n\n stack backtrace:\n CPU: 0 UID: 0 PID: 27 Comm: irq_work/0\n Call Trace:\n  <TASK>\n  dump_stack_lvl+0x8c/0xd0\n  dump_stack+0x14/0x20\n  print_usage_bug+0x42e/0x690\n  mark_lock.part.44+0x867/0xa70\n  ? __pfx_mark_lock.part.44+0x10/0x10\n  ? string_nocheck+0x19c/0x310\n  ? number+0x739/0x9f0\n  ? __pfx_string_nocheck+0x10/0x10\n  ? __pfx_check_pointer+0x10/0x10\n  ? kvm_sched_clock_read+0x15/0x30\n  ? sched_clock_noinstr+0xd/0x20\n  ? local_clock_noinstr+0x1c/0xe0\n  __lock_acquire+0xc4b/0x62b0\n  ? __pfx_format_decode+0x10/0x10\n  ? __pfx_string+0x10/0x10\n  ? __pfx___lock_acquire+0x10/0x10\n  ? __pfx_vsnprintf+0x10/0x10\n  lock_acquire+0x1e1/0x510\n  ? raw_spin_rq_lock_nested+0x2b/0x40\n  ? __pfx_lock_acquire+0x10/0x10\n  ? dump_line+0x12e/0x270\n  ? raw_spin_rq_lock_nested+0x20/0x40\n  _raw_spin_lock_nested+0x42/0x80\n  ? raw_spin_rq_lock_nested+0x2b/0x40\n  raw_spin_rq_lock_nested+0x2b/0x40\n  scx_dump_state+0x3b3/0x1270\n  ? finish_task_switch+0x27e/0x840\n  scx_ops_error_irq_workfn+0x67/0x80\n  irq_work_single+0x113/0x260\n  irq_work_run_list.part.3+0x44/0x70\n  run_irq_workd+0x6b/0x90\n  ? __pfx_run_irq_workd+0x10/0x10\n  smpboot_thread_fn+0x529/0x870\n  ? __pfx_smpboot_thread_fn+0x10/0x10\n  kthread+0x305/0x3f0\n  ? __pfx_kthread+0x10/0x10\n  ret_from_fork+0x40/0x70\n  ? __pfx_kthread+0x10/0x10\n  ret_from_fork_asm+0x1a/0x30\n  </TASK>\n\nThis commit therefore use rq_lock_irqsave/irqrestore() to replace\nrq_lock/unlock() in the scx_dump_state().",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -5396,7 +5396,7 @@
                 "cve_id": "CVE-2025-68311",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntty: serial: ip22zilog: Use platform device for probing\n\nAfter commit 84a9582fd203 (\"serial: core: Start managing serial controllers\nto enable runtime PM\") serial drivers need to provide a device in\nstruct uart_port.dev otherwise an oops happens. To fix this issue\nfor ip22zilog driver switch driver to a platform driver and setup\nthe serial device in sgi-ip22 code.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -5452,7 +5452,7 @@
                 "cve_id": "CVE-2025-68325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_cake: Fix incorrect qlen reduction in cake_drop\n\nIn cake_drop(), qdisc_tree_reduce_backlog() is used to update the qlen\nand backlog of the qdisc hierarchy. Its caller, cake_enqueue(), assumes\nthat the parent qdisc will enqueue the current packet. However, this\nassumption breaks when cake_enqueue() returns NET_XMIT_CN: the parent\nqdisc stops enqueuing current packet, leaving the tree qlen/backlog\naccounting inconsistent. This mismatch can lead to a NULL dereference\n(e.g., when the parent Qdisc is qfq_qdisc).\n\nThis patch computes the qlen/backlog delta in a more robust way by\nobserving the difference before and after the series of cake_drop()\ncalls, and then compensates the qdisc tree accounting if cake_enqueue()\nreturns NET_XMIT_CN.\n\nTo ensure correct compensation when ACK thinning is enabled, a new\nvariable is introduced to keep qlen unchanged.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -5774,7 +5774,7 @@
                 "cve_id": "CVE-2025-68727",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs3: Fix uninit buffer allocated by __getname()\n\nFix uninit errors caused after buffer allocation given to 'de'; by\ninitializing the buffer with zeroes. The fix was found by using KMSAN.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -5788,7 +5788,7 @@
                 "cve_id": "CVE-2025-68728",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs3: fix uninit memory after failed mi_read in mi_format_new\n\nFix a KMSAN un-init bug found by syzkaller.\n\nntfs_get_bh() expects a buffer from sb_getblk(), that buffer may not be\nuptodate. We do not bring the buffer uptodate before setting it as\nuptodate. If the buffer were to not be uptodate, it could mean adding a\nbuffer with un-init data to the mi record. Attempting to load that record\nwill trigger KMSAN.\n\nAvoid this by setting the buffer as uptodate, if it\u2019s not already, by\noverwriting it.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -18808,7 +18808,7 @@
                 "cve_id": "CVE-2026-63876",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nserial: zs: Convert to use a platform device\n\nPrevent a crash from happening as the first serial port is initialised:\n\n  Console: switching to mono frame buffer device 160x64\n  fb0: PMAG-AA frame buffer device at tc0\n  DECstation Z85C30 serial driver version 0.10\n  CPU 0 Unable to handle kernel paging request at virtual address 0000002c, epc == 803ab00c, ra == 803aafe0\n  Oops[#1]:\n  CPU: 0 PID: 1 Comm: swapper Not tainted 6.4.0-rc3-00031-g84a9582fd203-dirty #57\n  $ 0   : 00000000 10012c00 803aaeb0 00000000\n  $ 4   : 80e12f60 80e12f50 80e12f58 81000030\n  $ 8   : 00000000 805ff37c 00000000 33433538\n  $12   : 65732030 00000006 80c2915d 6c616972\n  $16   : 80e12f00 807b7630 00000000 00000000\n  $20   : 00000004 00000348 000001a0 807623b8\n  $24   : 00000018 00000000\n  $28   : 80c24000 80c25d60 8078b148 803aafe0\n  Hi    : 00000000\n  Lo    : 00000000\n  epc   : 803ab00c serial_base_ctrl_add+0x78/0xf4\n  ra    : 803aafe0 serial_base_ctrl_add+0x4c/0xf4\n  Status: 10012c03\tKERNEL EXL IE\n  Cause : 00000008 (ExcCode 02)\n  BadVA : 0000002c\n  PrId  : 00000440 (R4400SC)\n  Modules linked in:\n  Process swapper (pid: 1, threadinfo=(ptrval), task=(ptrval), tls=00000000)\n  Stack : 80760000 00000cc0 00400044 00400040 803aa02c 80d61ab8 00000000 807b7630\n          80760000 807623b8 807b7628 803aa644 80386998 00000000 80e17780 80220f68\n          80e17780 80d61ab8 80c17d80 80e17780 80e17780 8063c798 80e17780 80383fa0\n          00000010 80e17780 00000000 80386998 807a0000 00000000 00400040 8038f848\n          807623b8 80d61ab8 00000004 80e17780 00000000 803a68e4 80c25e2c 803bb884\n          ...\n  Call Trace:\n  [<803ab00c>] serial_base_ctrl_add+0x78/0xf4\n  [<803aa644>] serial_core_register_port+0x174/0x69c\n  [<8077e9ac>] zs_init+0xc8/0xfc\n  [<800404d4>] do_one_initcall+0x40/0x2ac\n  [<8076cecc>] kernel_init_freeable+0x1e4/0x270\n  [<80605bec>] kernel_init+0x20/0x108\n  [<800431e8>] ret_from_kernel_thread+0x14/0x1c\n\n  Code: 2442aeb0  ae120024  ae0200d0 <8c67002c> 50e00001  8c670000  3c06806e  3c05806e  afb30010\n\n  ---[ end trace 0000000000000000 ]---\n\n(report at the offending commit) -- where a pointer is dereferenced that\nhas been derived from a null pointer to the port's parent device.\n\nSince no device is available with legacy probing and it's not anymore a\npreferable way to discover devices anyway, switch the driver to using a\nplatform device and use it as the port's parent device.  Update resource\nhandling accordingly and only request the actual span of addresses used\nwithin the slot, which will have had its resource already requested by\ngeneric platform device code.\n\nUse platform_driver_probe() not just because SCC devices are fixed with\nsolder on board and not straightforward to remove, but foremost because\nthe associated TTY's major device number is the same as used by the dz\ndriver and the first driver to claim it will prevent the other one from\nusing it.  Either one DZ device or some SCC devices will be present in a\ngiven system but never both at a time, and therefore we want the major\ndevice number to be claimed by the first driver to actually successfully\nbind to its device and platform_driver_probe() is a way to fulfil that.\n\nAn unfortunate consequence of the switch to a platform device is we now\nhand the console over from the bootconsole much later in the bootstrap.\nThe firmware console handler appears good enough though to work so late\nand in particular with interrupts enabled.\n\nSince there is one way only remaining to reach zs_reset() now, remove\nthe port initialisation marker as no longer needed and go through the\nchannel reset unconditionally.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -18822,7 +18822,7 @@
                 "cve_id": "CVE-2026-63877",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nserial: dz: Convert to use a platform device\n\nPrevent a crash from happening as the first serial port is initialised:\n\n  Console: switching to colour frame buffer device 160x64\n  tgafb: SFB+ detected, rev=0x02\n  fb0: Digital ZLX-E1 frame buffer device at 0x1e000000\n  DECstation DZ serial driver version 1.04\n  CPU 0 Unable to handle kernel paging request at virtual address 000000bc, epc == 8048b3a4, ra == 80470a78\n  Oops[#1]:\n  CPU: 0 UID: 0 PID: 1 Comm: swapper/0 Not tainted 6.19.0-dirty #35 NONE\n  $ 0   : 00000000 1000ac00 00000004 804707ac\n  $ 4   : 00000000 80e20850 80e20858 81000030\n  $ 8   : 00000000 8072c81c 00000008 fefefeff\n  $12   : 6c616972 00000006 80c5917f 69726420\n  $16   : 80e20800 00000000 808f8968 80e20800\n  $20   : 00000000 807f5a90 808b0094 808d3bc8\n  $24   : 00000018 80479030\n  $28   : 80c2e000 80c2fd70 00000069 80470a78\n  Hi    : 00000004\n  Lo    : 00000000\n  epc   : 8048b3a4 __dev_fwnode+0x0/0xc\n  ra    : 80470a78 serial_base_ctrl_add+0xa0/0x168\n  Status: 1000ac04\tIEp\n  Cause : 30000008 (ExcCode 02)\n  BadVA : 000000bc\n  PrId  : 00000220 (R3000)\n  Modules linked in:\n  Process swapper/0 (pid: 1, threadinfo=(ptrval), task=(ptrval), tls=00000000)\n  Stack : 00400044 00400040 8046f4cc 00000000 808a6148 808a0000 808f8968 8086983c\n          808e0000 8046fc84 1000ac01 00000028 80e20700 802ba3f8 80e20700 80d34a94\n          80c1b900 80e20700 80e20700 80e20700 80e20700 80444650 00000000 00000000\n          00000000 807f5a90 808b0094 80447080 00400040 808e0000 80d34a94 808a6148\n          80d34a94 00000004 80e20700 00000000 8076974c 80469810 80c2fe3c 1000ac01\n          ...\n  Call Trace:\n  [<8048b3a4>] __dev_fwnode+0x0/0xc\n  [<80470a78>] serial_base_ctrl_add+0xa0/0x168\n  [<8046fc84>] serial_core_register_port+0x1c8/0x974\n  [<808c6af0>] dz_init+0x74/0xc8\n  [<800470e0>] do_one_initcall+0x44/0x2d4\n  [<808b111c>] kernel_init_freeable+0x258/0x308\n  [<8072e434>] kernel_init+0x20/0x114\n  [<80049cd0>] ret_from_kernel_thread+0x14/0x1c\n\n  Code: 27bd0018  03e00008  2402ffea <8c8200bc> 03e00008  00000000  27bdffc0  afbe0038  afb30024\n\n  ---[ end trace 0000000000000000 ]---\n\n-- where a pointer is dereferenced that has been derived from a null\npointer to the port's parent device.\n\nSince no device is available with legacy probing and it's not anymore a\npreferable way to discover devices anyway, switch the driver to using a\nplatform device and use it as the port's parent device.  Update resource\nhandling accordingly and only request the actual span of addresses used\nwithin the slot, which will have had its resource already requested by\ngeneric platform device code.\n\nUse platform_driver_probe() not just because the DZ device is fixed with\nsolder on board and not straightforward to remove, but foremost because\nthe associated TTY's major device number is the same as used by the zs\ndriver and the first driver to claim it will prevent the other one from\nusing it.  Either one DZ device or some SCC devices will be present in a\ngiven system but never both at a time, and therefore we want the major\ndevice number to be claimed by the first driver to actually successfully\nbind to its device and platform_driver_probe() is a way to fulfil that.\n\nAn unfortunate consequence of the switch to a platform device is we now\nhand the console over from the bootconsole much later in the bootstrap.\nThe firmware console handler appears good enough though to work so late\nand in particular with interrupts enabled.\n\nConversely only starting the console port so late lets the reset code\nfully utilise our delay handlers, so switch from udelay() to fsleep()\nfor transmitter draining so as to avoid busy-waiting for an excessive\namount of time.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -21356,7 +21356,7 @@
                 "cve_id": "CVE-2026-64518",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: Fix out-of-bounds access for twsk in tcp_ao_established_key().\n\nlockdep_sock_is_held() was added in tcp_ao_established_key()\nby the cited commit.\n\nIt can be called from tcp_v[46]_timewait_ack() with twsk.\n\nSince it does not have sk->sk_lock, the lockdep annotation\nresults in out-of-bound access.\n\n  $ pahole -C tcp_timewait_sock vmlinux | grep size\n  \t/* size: 288, cachelines: 5, members: 8 */\n  $ pahole -C sock vmlinux | grep sk_lock\n  \tsocket_lock_t              sk_lock;              /*   440   192 */\n\nLet's not use lockdep_sock_is_held() for TCP_TIME_WAIT.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -21804,7 +21804,7 @@
                 "cve_id": "CVE-2026-64589",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: core: fix NULL-deref on adapter registration failure\n\nIf adapter registration ever fails the release callback would trigger a\nNULL-pointer dereference as the completion struct has not been\ninitialised.\n\nNote that before the offending commit this would instead have resulted\nin a minor memory leak of the adapter name.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -21818,7 +21818,7 @@
                 "cve_id": "CVE-2026-64593",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: do not trim a device which is not writeable\n\n[BUG]\nThere is a bug report that btrfs/242 can randomly fail with the\nfollowing NULL pointer dereference:\n\n  run fstests btrfs/242 at 2026-06-01 10:25:08\n  BTRFS: device fsid d4d7f234-487c-4787-88e4-47a8b68c9874 devid 1 transid 9 /dev/sdc (8:32) scanned by mount (122609)\n  BTRFS info (device sdc): first mount of filesystem d4d7f234-487c-4787-88e4-47a8b68c9874\n  BTRFS info (device sdc): using crc32c checksum algorithm\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS info (device sdc): allowing degraded mounts\n  BTRFS info (device sdc): turning on async discard\n  BTRFS info (device sdc): enabling free space tree\n  Unable to handle kernel NULL pointer dereference at virtual address 0000000000000018\n  user pgtable: 4k pages, 48-bit VAs, pgdp=000000013fd6b000\n  CPU: 4 UID: 0 PID: 122625 Comm: fstrim Not tainted 7.0.10-2-default #1 PREEMPT(full) openSUSE Tumbleweed e9a5f6b24978fba3bf015a992f865837fdfff3dd\n  Hardware name: QEMU KVM Virtual Machine, BIOS edk2-20250812-19.fc42 08/12/2025\n  pstate: 01400005 (nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)\n  pc : btrfs_trim_fs+0x34c/0xa00 [btrfs]\n  lr : btrfs_trim_fs+0x1f0/0xa00 [btrfs]\n  Call trace:\n   btrfs_trim_fs+0x34c/0xa00 [btrfs f02c1d570ceea621c69d302ba75dd61868083840] (P)\n   btrfs_ioctl_fitrim+0xe8/0x178 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   btrfs_ioctl+0xdd4/0x2bd8 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   __arm64_sys_ioctl+0xac/0x108\n   invoke_syscall.constprop.0+0x5c/0xd0\n   el0_svc_common.constprop.0+0x40/0xf0\n   do_el0_svc+0x24/0x40\n   el0_svc+0x40/0x1d0\n   el0t_64_sync_handler+0xa0/0xe8\n   el0t_64_sync+0x1b0/0x1b8\n  Code: 17ffff83 f94017e0 f9002be0 f9402ea0 (f9400c00)\n  ---[ end trace 0000000000000000  ]---\n\nAlso the reporter is very kind to test the following ASSERT() added to\nbtrfs_trim_free_extents_throttle():\n\n\tASSERT(device->bdev,\n\t       \"devid=%llu path=%s dev_state=0x%lx\\n\",\n\t       device->devid, btrfs_dev_name(device), device->dev_state);\n\nAnd it shows the following output:\n\n  assertion failed: device->bdev, in extent-tree.c:6630 (devid=2 path=/dev/sdd dev_state=0x82)\n\nWhich means the device->bdev is NULL, and the dev_state is\nBTRFS_DEV_STATE_IN_FS_METADATA | BTRFS_DEV_STATE_ITEM_FOUND, without\nBTRFS_DEV_STATE_WRITEABLE flag set.\n\n[CAUSE]\nThe pc points to the following call chain:\n\n  btrfs_trim_fs()\n  |- btrfs_trim_free_extents()\n     |- btrfs_trim_free_extents_throttle()\n        |- bdev_max_discard_sectors(device->bdev)\n\nSo the NULL pointer dereference is caused by device->bdev being NULL.\n\nThis looks impossible by a quick glance, as just before calling\nbtrfs_trim_free_extents_throttle(), we have skipped any device that has\nBTRFS_DEV_STATE_MISSING flag set.\n\nHowever in this particular case, there is a window where the missing\ndevice is later re-scanned, causing btrfs to remove the\nBTRFS_DEV_STATE_MISSING flag:\n\n  btrfs_control_ioctl()\n  |- btrfs_scan_one_device()\n     |- device_list_add()\n        |- rcu_assign_pointer(device->name, name);\n        |  This updates the missing device's path to the new good path.\n        |\n        |- clear_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state)\n           This removes the BTRFS_DEV_STATE_MISSING flag.\n\nThis allows the missing device to re-appear and clear the\nBTRFS_DEV_STATE_MISSING flag.  However the device still does not have\nthe BTRFS_DEV_STATE_WRITEABLE flag set, nor is its bdev pointer updated.\n\nThe bdev pointer remains NULL, triggering the crash later.\n\n[FIX]\nThis is a big de-synchronization between BTRFS_DEV_STATE_MISSING and\ndevice->bdev pointer, and shows a gap in btrfs's re-appearing-device\nhandling.\n\nThe proper handling of re-appearing device will need quite some extra\nwork, which is out of the context of this small\n---truncated---",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -24562,7 +24562,7 @@
                 "cve_id": "CVE-2026-72276",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfbdev: metronomefb: fix potential memory leak in metronomefb_probe()\n\nThe memory allocated for pagerefs in fb_deferred_io_init() is not freed\non the error path. Fix it by calling fb_deferred_io_cleanup().",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -25682,7 +25682,7 @@
                 "cve_id": "CVE-2026-74286",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: pfcp: allocate per-cpu tstats for PFCP netdevs\n\nPFCP uses dev_get_tstats64() as its ndo_get_stats64 callback, but\npfcp_link_setup() does not request NETDEV_PCPU_STAT_TSTATS.  The net\ncore therefore leaves dev->tstats NULL for PFCP devices.\n\nCreating a PFCP rtnetlink device can immediately ask the new netdev for\nstats while building the RTM_NEWLINK notification.  That reaches\ndev_get_tstats64() and dereferences the NULL dev->tstats pointer.\n\nSet pcpu_stat_type to NETDEV_PCPU_STAT_TSTATS during PFCP link setup so\nthe net core allocates the storage expected by dev_get_tstats64().",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -25962,7 +25962,7 @@
                 "cve_id": "CVE-2026-74346",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/irdma: Fix OOB read during CQ MR registration\n\nSashiko pointed out an unrelated bug during a previous patch:\nhttps://sashiko.dev/#/patchset/20260512183852.614045-1-jmoroni%40google.com\n\nThis change fixes the bug by eliminating the cqmr->split field which\nwas not being set properly and instead just checks the CQ resize\nfeature flag directly.\n\nThe cqmr->split field essentially tracks whether IRDMA_FEATURE_CQ_RESIZE\nis set, but it was not being set until CQ creation time, which is _after_\nCQ memory registration (the only other place where it is referenced).\n\nAs a result, it would always be false during MR registration and would\ntherefore cause irdma_handle_q_mem to populate cqmr->shadow even for GEN_2\nHW and beyond:\n\n    cqmr->shadow = (dma_addr_t)arr[req->cq_pages];\n\nThe issue is that for GEN_2 and beyond, req->cq_pages may be exactly equal\nto iwmr->page_cnt and therefore equal to the size of arr, which would cause\nan OOB read by one.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -28776,7 +28776,7 @@
                 "cve_id": "CVE-2026-80757",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: reject a class permission count below its inherited common\n\nsecurity_get_permissions() maps an inherited common's permissions into\nan array sized by the class's own permissions.nprim, but class_read()\ntakes that nprim verbatim from the policy image and never checks that it\ncovers the common.  A class that inherits a common of N permissions while\ndeclaring a smaller nprim is accepted, and on load the common's\npermissions are written past the class-sized array -- an out-of-bounds\nheap write.\n\nReject a class whose permission count is below its inherited common's.\nWell-formed policies, where the class count already includes the\ninherited permissions, are unaffected.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -28846,7 +28846,7 @@
                 "cve_id": "CVE-2026-80793",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: reject undersized MTUs in ip_do_fragment()\n\nip_do_fragment() subtracts the IPv4 header length from the effective\nMTU and passes the resulting payload MTU to ip_frag_next().\n\nIf the effective MTU is smaller than hlen + 8, ip_frag_next() rounds\nthe fragment payload length down to zero. The fragmentation state then\nnever makes forward progress: state->left, state->ptr and state->offset\nstay unchanged while ip_do_fragment() keeps allocating and transmitting\nheader-only fragments until the softlockup detector fires.\n\nThis is reproducible with a route installed using \"mtu lock 20\", but it\nis also reproducible without route MTU lock, for example by forwarding a\npacket to a device whose MTU is 20.\n\nFix it in ip_do_fragment() by rejecting mtu < hlen + 8 with -EMSGSIZE,\nmatching the existing IPv6 fragmentation check.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -28860,7 +28860,7 @@
                 "cve_id": "CVE-2026-80805",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: validate attr entry pointer before field access\n\nxfs_attr3_leaf_verify_entry() accesses lentry/rentry fields (namelen,\nvaluelen) before checking if the entry pointer itself is within bounds.\nIf nameidx is crafted to point near the end of the buffer, these field\naccesses can read out-of-bounds before the bounds check at\nname_end > buf_end is performed.\n\nAdd explicit bounds checks for entry pointers before accessing their\nfields. Use offsetof() to check that the start of the flexible array\nmember (nameval/name) is within bounds, which ensures all preceding\nfields are safe to access.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -28888,7 +28888,7 @@
                 "cve_id": "CVE-2026-80808",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: stop retrying saturated xattr cache entries\n\next4_xattr_block_set() retries when a cache entry selected for reuse\nhas a saturated reference count after taking the buffer lock. The retry\nreturns to the mbcache lookup without making that entry ineligible, so\nit can select the same unusable entry indefinitely. A task spinning\nthere can hold the parent directory's i_rwsem and leave concurrent\nrmdir callers blocked.\n\nNormally a reusable entry has a reference count below\nEXT4_XATTR_REFCOUNT_MAX because the count and MBE_REUSABLE_B are\nupdated under the same buffer lock. A corrupted filesystem can violate\nthat invariant. The syzbot reproducer reports allocator and xattr\ncorruption before triggering this retry loop.\n\nCheck the untrusted on-disk count before incrementing it, avoiding\noverflow, and clear MBE_REUSABLE_B when it is already saturated. The\nnext lookup then skips the entry that was just proven unusable. This\nmirrors the normal transition at EXT4_XATTR_REFCOUNT_MAX; the release\npath marks the entry reusable again on the exact 1024-to-1023\ntransition.\n\nUsing the same QEMU harness and guest parameters, current unpatched\nLinux hung in 6 of 8 420-second trials with the do_rmdir signature;\nrepresentative NMI backtraces caught the owner spinning in\next4_xattr_block_set(). The patched kernel completed 28 of 28 trials\nwithout a hung-task report; the final twelve trials exercised the\nreviewed overflow-safe form of the change. syzbot's patch testing also\ncompleted without reproducing the hang.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -28916,7 +28916,7 @@
                 "cve_id": "CVE-2026-80830",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: Add lock to usb_wakeup_notification()\n\nAdd a spin lock to usb_wakeup notification to prevent a race condition\nwith dereferencing freed memory. This could be hit by the xHCI driver as\nit calls this function from an IRQ and could race with the\nhub_disconnect() function, which properly grabs this lock to protect the\nstate of the device.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -28944,7 +28944,7 @@
                 "cve_id": "CVE-2026-80838",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvxlan: keep the last remote linked during FDB flush\n\nA non-nexthop FDB entry is expected to have at least one remote while it\nremains reachable through the FDB hash table. A filtered bulk flush\nviolates this invariant when every remote matches: It unlinks the last\nremote in vxlan_fdb_dst_destroy() and only afterwards tells vxlan_flush()\nto destroy the parent FDB entry.\n\nAn RCU reader can find the parent during this interval.\nfirst_remote_rcu() then applies list_entry_rcu() to the empty list head,\nproducing an invalid remote pointer that the receive learning path can\nread from and write to.\n\nWhen a matching remote is the sole remaining remote, leave it linked and\nask the caller to destroy the entire FDB entry. vxlan_fdb_destroy() keeps\nthe remote attached while sending the deletion notification and removing\nthe parent from the lookup structures.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29028,7 +29028,7 @@
                 "cve_id": "CVE-2026-80845",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: avoid lock inversion in nat keepalive work\n\nnat_keepalive_work() walks the state table while xfrm_state_walk()\nholds net->xfrm.xfrm_state_lock. Its callback then acquires x->lock,\nwhich conflicts with the delete path taking the same locks in reverse\norder via xfrm_state_delete() and __xfrm_state_delete(). This creates\nan AB-BA deadlock that is reported by lockdep when a NAT keepalive\nworker races with SA deletion.\n\nFix this by splitting the keepalive walk into two phases. First,\ncollect the candidate states while the walk holds xfrm_state_lock and\ntake a reference on each state. Then, after the walk completes, process\neach collected state and acquire x->lock without nesting it under\nxfrm_state_lock.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29098,7 +29098,7 @@
                 "cve_id": "CVE-2026-80860",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: fix race between interrupt and resend\n\nAfter commit f8fce75fedf7 (\"fuse: clear intr_entry in fuse_resend and\nfuse_remove_pending_req\") the WARN_ON(!list_empty(&req->intr_entry)) in\nfuse_request_free() still triggers due to the following race:\n\nIn request_wait_answer()\n  if (test_bit(FR_SENT, &req->flags)) -> returns true\n\nIn fuse_chan_resend()\n  clear_bit(FR_SENT, &req->flags)\n\nIn request_wait_answer()\n  queue_interrupt(req)\n\nFix by:\n\n - move clearing FR_SENT inside fpq->lock\n\n - move setting FR_PENDING inside fiq->lock\n\n - recheck FR_SENT after acquiring fiq->lock in fuse_dev_queue_interrupt()",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -29154,7 +29154,7 @@
                 "cve_id": "CVE-2026-80867",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nalpha/PCI: Add security_locked_down() check to pci_mmap_resource()\n\nCurrently, Alpha's pci_mmap_resource() does not check\nsecurity_locked_down(LOCKDOWN_PCI_ACCESS) before allowing userspace to mmap\nPCI BARs.\n\nThe generic version has had this check since commit eb627e17727e (\"PCI:\nLock down BAR access when the kernel is locked down\") to prevent DMA\nattacks when the kernel is locked down.\n\nAdd the same check to Alpha's pci_mmap_resource().",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29182,7 +29182,7 @@
                 "cve_id": "CVE-2026-80876",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nring-buffer: Fix event length with forced 8-byte alignment\n\nWhen RB_FORCE_8BYTE_ALIGNMENT is true, rb_calculate_event_length()\nreserves the space of event->array[0] for placing the data length and\nrb_update_event() stores the data length in event->array[0]\naccordingly. As a result the whole event length will add extra 4 bytes\nfor sizeof(event.array[0]) unconditionally.\n\nBut ring_buffer_event_length() only subtracts the\nsizeof(event->array[0]) for events larger than RB_MAX_SMALL_DATA +\nsizeof(event->array[0]). As a result, small events on architectures\nwith RB_FORCE_8BYTE_ALIGNMENT=true report a data length that is 4\nbytes larger than expected.\n\nTo fix it, add the RB_FORCE_8BYTE_ALIGNMENT as a condition to subtract\nthe size of that length field whenever RB_FORCE_8BYTE_ALIGNMENT is\ntrue.\n\nThis issue is observed in a riscv64 kernel with\nCONFIG_HAVE_64BIT_ALIGNED_ACCESS set to y, when we run ftrace selftest\ntrace_marker_raw.tc, we get the weird log: for cases where the id is\n1..100, the number of data field is 8*N, but once id exceeds 100, the\nnumber of data field becomes 8*N+4:\n # 1 buf: 58 00 00 00 80 5e d1 63 (number of data field is 8*1)\n ...\n # a buf: 58 ...                  (number of data field is 8*2)\n ...\n # 64 buf: 58 ...                 (number of data field is 8*13)\n # 65 buf: 58 ...                 (number of data field is 8*13+4)\n\nAfter applying this change, the number of data field keeps being 8*N+4\nconsistently.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29238,7 +29238,7 @@
                 "cve_id": "CVE-2026-80890",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: reject stale cookies with mismatched verification tags\n\nsctp_unpack_cookie() skips cookie expiration checks whenever an\nassociation already exists.  This is broader than the exception in\nRFC 9260 Section 5.2.4.\n\nFor an existing association, Section 5.2.4 permits an expired State\nCookie only when both Verification Tags in the cookie match the current\nassociation.  Otherwise, the packet SHOULD be discarded and a Stale\nCookie ERROR MUST be sent.\n\nThe broad check lets an expired Action A restart cookie reach\nsctp_sf_do_dupcook_a().  In a runtime test with the default 60 second\ncookie lifetime, replaying such a cookie after 65 seconds returned a\nCOOKIE-ACK and restarted the association.\n\nCheck cookie expiration unless both Verification Tags match.  This\npreserves the Action D exception for a lost COOKIE ACK while rejecting\nexpired cookies in all other cases.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29252,7 +29252,7 @@
                 "cve_id": "CVE-2026-80892",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nerofs: cap LZMA stream pool size\n\nfs/erofs/decompressor_lzma.c sizes the module-global MicroLZMA stream\npool from num_possible_cpus() when the lzma_streams module parameter is\nunset, then z_erofs_load_lzma_config() preallocates one image-supplied\ndictionary per stream, accepting dictionaries up to 8 MiB.  On high-CPU\nsystems, a small EROFS image can pin hundreds of MiB of vmalloc-backed\ndecoder state until the erofs module is unloaded.\n\nImpact: An EROFS image mounted by the system can pin up to 8 MiB of\nvmalloc memory per LZMA stream, either as intended or unexpectedly.\n\nBound the default stream count by a new\nCONFIG_EROFS_FS_ZIP_LZMA_DEFAULT_MAX_STREAMS option, default 16, so the\nworst-case default preallocation is 128 MiB if the number of CPUs is no\nless than 16 while preserving the existing per-image dictionary limit.\nAn explicit lzma_streams module parameter is still honoured as-is, so\nadministrators who deliberately size the pool are not affected.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -29294,7 +29294,7 @@
                 "cve_id": "CVE-2026-80904",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/tls: Fail tls_sw_splice_read() after a failed async decrypt\n\nWhen an async decrypt fails, tls_decrypt_done() records the error in\nctx->async_wait.err and calls tls_err_abort(), which stores it in\nsk_err. tls_sw_recvmsg() and tls_sw_read_sock() each read\nasync_wait.err once they hold the reader lock and fail the call: a\nrecord that did not authenticate breaks the connection.\n\ntls_sw_splice_read() has no such check, and sk_err does not stand in\nfor one. tls_rx_rec_wait() tests sk_err only inside the loop it\nskips whenever a record is already parsed, and the first reader to\nreach sock_error() clears it, while async_wait.err persists. A\nsplice therefore keeps delivering records on a connection that\nrecvmsg() and read_sock() refuse to read.\n\nRead async_wait.err in tls_sw_splice_read() as the other two readers\ndo.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29322,7 +29322,7 @@
                 "cve_id": "CVE-2026-80912",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: reject an unclaimed class value in security_get_classes()\n\nsecurity_get_classes() sizes an array by p_classes.nprim and fills it at\nvalue - 1, so a class value the policy never defines leaves a NULL.\nsel_make_classes() passes every entry to sel_make_dir(), reaching the same\nd_alloc_name() dereference as the permission array. The class symbol table\nis allowed to be sparse (policydb_class_isvalid() exists to absorb that),\nbut this getter builds its own array straight from the hash table and has\nno such predicate.\n\nFail the lookup when a value went unclaimed instead of handing out the\nNULL. Conforming policies define every class they declare and are\nunaffected.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -29350,7 +29350,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29364,7 +29364,7 @@
                 "cve_id": "CVE-2026-80925",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvlan: fix skb_under_panic and races when toggling HW VLAN offload\n\nToggling hardware VLAN TX offload (NETIF_F_HW_VLAN_CTAG_TX or\nNETIF_F_HW_VLAN_STAG_TX) on a lower device invokes vlan_transfer_features(),\nwhich dynamically changed vlandev->hard_header_len.\n\nThis causes two issues:\n1. Lockless TX paths (e.g. packet_snd in af_packet.c, ip6_finish_output2)\n   read dev->hard_header_len without holding RTNL lock. Mutating\n   hard_header_len dynamically under RTNL creates a data race where upper\n   layers reserve insufficient headroom based on a stale hard_header_len,\n   resulting in skb_under_panic when vlan_dev_hard_header() is called.\n2. In addition, vlan_transfer_features() updated hard_header_len without\n   updating header_ops, causing a mismatch between allocated headroom\n   and header creation.\n\nAlways setting dev->hard_header_len = real_dev->hard_header_len and\ndev->needed_headroom = real_dev->needed_headroom + VLAN_HLEN unconditionally\nensures:\n- dev->hard_header_len remains 100% static and immutable at real_dev->hard_header_len,\n  eliminating all dynamic runtime updates and data races on hard_header_len.\n- Upper layers allocating skbs via LL_RESERVED_SPACE() will always reserve\n  sufficient headroom for software VLAN tag insertion (real_dev->hard_header_len +\n  real_dev->needed_headroom + VLAN_HLEN).\n- vlandev inherits real_dev->needed_tailroom so underlying trailer/padding/ICV\n  requirements are honored.\n- AF_PACKET SOCK_RAW network header offsets remain correctly aligned at\n  real_dev->hard_header_len.\n- vlan_header_ops is used unconditionally.\n\nNote to stable teams: Make sure to backport these commits:\n\ne16e960d55a4 (\"ipvlan: inherit needed_headroom and needed_tailroom from phy_dev\")\ncef51860becd (\"macvlan: inherit needed_headroom and needed_tailroom from lowerdev\")",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -29490,7 +29490,7 @@
                 "cve_id": "CVE-2026-81005",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipmi: si: Fix NULL pointer dereference after failed registration\n\ntry_smi_init() allocates new_smi->si_sm and later calls\nipmi_register_smi_mod(), which maps to ipmi_add_smi().\n\nDuring ipmi_add_smi(), the upper IPMI message handler obtains the\ninitial BMC device information through __bmc_get_device_id(). This can\nfail if the BMC does not return a successful response to the Get Device\nID command.\n\nWhen the BMC returns a nonzero completion code, the device-id helper\nretries the command and eventually returns -EIO if the device ID still\ncannot be fetched.\n\nOn this failure path, ipmi_add_smi() logs \"Unable to get the device id\"\nand goes to out_err_started, where it invokes the lower driver's\nshutdown callback. try_smi_init() then logs the returned registration\nfailure:\n\n ipmi_si IPI0001:00: IPMI message handler: Unable to get the device id: -5\n ipmi_si IPI0001:00: Unable to register device: error -5\n\nFor ipmi_si, the shutdown callback is shutdown_smi(), which cleans up\nthe SI state machine data, frees smi_info->si_sm, and sets\nsmi_info->si_sm and smi_info->intf to NULL.\n\nHowever, intf->in_shutdown is not set on this failed-registration\nrollback path. Therefore, the asynchronous redo_bmc_reg work item can\nstill retry BMC device-id probing after the lower driver has already\ncleared its SI state machine data. In the observed case, that retry path\nreached start_next_msg(), which passed the NULL smi_info->si_sm pointer\nto the selected KCS state machine handler:\n\nBUG: unable to handle kernel NULL pointer dereference at 0000000000000000\nWorkqueue: events redo_bmc_reg [ipmi_msghandler]\nRIP: start_kcs_transaction+0x2c/0x190 [ipmi_si]\nCall Trace:\n start_next_msg+0x50/0x80 [ipmi_si]\n check_start_timer_thread.part.9+0x3b/0x50 [ipmi_si]\n sender+0x69/0x80 [ipmi_si]\n i_ipmi_request+0x2ac/0x9d0 [ipmi_msghandler]\n __get_device_id.isra.29+0xaa/0x180 [ipmi_msghandler]\n __bmc_get_device_id+0xef/0x950 [ipmi_msghandler]\n redo_bmc_reg+0x52/0x60 [ipmi_msghandler]\n process_one_work+0x1a7/0x360\n\nSet intf->in_shutdown on the out_err_started path before invoking the\nlower driver's shutdown callback. This prevents later redo_bmc_reg\nretries from using an interface whose lower driver state has been\ncleaned up, and applies the same shutdown state to other IPMI interfaces\nas well.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -31408,7 +31408,7 @@
                 "cve_id": "CVE-2026-89785",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/ntfs3: fix out-of-bounds read of INDEX_ROOT in reparse/objid init\n\nntfs_reparse_init() and ntfs_objid_init() parse the index root of the\n$Extend/$Reparse and $Extend/$ObjId metafiles (the INDEX_ROOT attributes\nnamed $R and $O). They read its type and rule fields through\nresident_data(), which does not check that the resident attribute is\nlarge enough to hold them.\n\nmi_enum_attr() accepts a resident attribute with data_off == asize and\ndata_size == 0. For such an attribute placed last in its MFT record,\nresident_data() returns a pointer to the end of the record_size buffer,\nso reading root->type / root->rule reads past the allocation.\n\nUse resident_data_ex(attr, sizeof(struct INDEX_ROOT)) and bail out when\nit returns NULL, as ntfs_security_init() already does for $SDH / $SII.\n\nThe attribute is only parsed while mounting a crafted image, so this\nneeds CAP_SYS_ADMIN.\n\n BUG: KASAN: slab-out-of-bounds in ntfs_reparse_init (fs/ntfs3/fsntfs.c:2306)\n Read of size 4 at addr ffff88801219dc00 by task mount\n  ntfs_reparse_init (fs/ntfs3/fsntfs.c:2306)\n  ntfs_fill_super (fs/ntfs3/super.c:1604)\n  get_tree_bdev_flags (fs/super.c:1703)\n  vfs_get_tree (fs/super.c:1758)\n  path_mount (fs/namespace.c:4131)\n  __x64_sys_mount (fs/namespace.c:4360)",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -31436,7 +31436,7 @@
                 "cve_id": "CVE-2026-89796",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/damon/core: avoid infinite kdamond_merge_regions() internal loop\n\nPatch series \"mm/damon: unurgent fixes for infinite loop, NULL de-ref and\nraces\", v1.1.\n\nSashiko found a few issues in DAMON that could cause infinite loop, NULL\ndereference and monitoring results degradation.  The first two sounds\nscary but the infinite loop happens only under unreasonable user setup. \nThe NULL dereference is only in a unit test.  Monitoring results\ndegradation is trivial since it is only best-effort, and those happens\nfrom only unlikely races.  Still those are bugs that better to fix if\npossible.  Fix those.\n\n\nThis patch (of 6):\n\nDue to online parameter update like events, the number of DAMON regions\ncould be higher than the user-set upper limit.  kdamond_merge_regions()\nrepeats merge regions until the number meets the limit, while doubling the\nmerge threshold up to the theoretical maximum threshold.  It is tried only\nup to the theoretical maximum threshold because even the aggressive\nmerging can fail from reducing the number of regions under the\nuser-defined upper limit.  For example, there could be many user-defined\nnon-contiguous regions that cannot be merged.\n\nThe threshold based loop break condition is evaluated by comparing the\nthreshold for the next merging try against the theoretical maximum\nthreshold.  If max_thres is larger than UINT_MAX / 2, doubling the\nthreshold could make it overflow, and bypass the loop break condition.  In\nthe case, if the number of regions cannot be reduced under the upper limit\nlike explained above, the loop will run infinitely.\n\nPrevent the case by doing the break condition check before doubling the\nthreshold.  Also, prevent the threshold exceeding the maximum threshold,\nas it could overflow and apply the wrong merge threshold.\n\nThis issue is unlikely to occur in real world, since having the max_thres\nhigher than UINT_MAX / 2 require unrealistically large aggregation\nintervals compared to the sampling interval.  Also, it requires an\nunrealistically large number of uncontiguous regions setup.  Nonetheless,\nthe consequence is bad and the fix is simple.\n\nThe issue was discovered [1] by Sashiko.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -31478,7 +31478,7 @@
                 "cve_id": "CVE-2026-89822",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/i915: Guard against NULL driver_data in i915_pci_probe()\n\npci_match_device() can return the dummy pci_device_id_any entry\nwhen a device is force-bound via sysfs driver_override, in which\ncase ->driver_data is unset (NULL). i915_pci_probe() casts it to\nstruct intel_device_info * unconditionally and dereferences\nintel_info->require_force_probe, causing a NULL-ptr-deref.\n\n(cherry picked from commit 2727922084672cc274ecea726ea00363c2893731)",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -31912,7 +31912,7 @@
                 "cve_id": "CVE-2026-90063",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio-net: Ensure that TCP packets don't overflow gso_segs\n\nThe user can specify any gso_size in a packet crafted with an AF_PACKET\nPACKET_VNET_HDR socket, even smaller than TCP_MIN_GSO_SIZE = 8. At the\nsame time, GSO_MAX_SIZE = 8 * GSO_MAX_SEGS = 8 * 65535. When the user\ncrafts a packet with gso_size < 8, there is a risk for partial GSO to\noverflow the 16-bit gso_segs field when dividing the SKB length by\ngso_size.\n\nAdjust gso_size of TCP packets to be at least TCP_MIN_GSO_SIZE = 8. Keep\ngso_size of UDP GSO packets, as gso_size=1 is valid and explicitly\ntested at tools/testing/selftests/net/tun.c:649.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -32458,7 +32458,7 @@
                 "cve_id": "CVE-2026-90218",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/cma: Fix WARNING in res_to_rt\n\nsyzbot reported a WARN_ON(!res->dev) in res_to_rt() triggered via\naddr_handler() during asynchronous address resolution:\n\n\"\nWARNING: drivers/infiniband/core/restrack.c:138 at res_to_rt+0x1c4/0x230\nCPU#1: kworker/u8:4/59\nModules linked in:\nCPU: 1 UID: 0 PID: 59 Comm: kworker/u8:4 Not tainted syzkaller #0 PREEMPT(full)\nHardware name: Google Compute Engine, BIOS Google 07/24/2026\nWorkqueue: ib_addr process_one_req\nRIP: 0010:res_to_rt+0x1c4/0x230 drivers/infiniband/core/restrack.c:138\nRSP: 0018:ffffc9000201f850 EFLAGS: 00010293\nRAX: ffffffff88d00ce5 RBX: ffff88807f0fd4f8 RCX: ffff88801e6e0000\nRDX: 0000000000000000 RSI: ffffffff8fd996f0 RDI: 0000000000000003\nRBP: 0000000000000000 R08: ffff88801e6e0000 R09: 000000000000000a\nR10: 0000000000000009 R11: 0000000000000000 R12: dffffc0000000000\nR13: 1ffff1100fe1fa9f R14: 0000000000000000 R15: 0000000000000003\nFS:  0000000000000000(0000) GS:ffff888125012000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 00001d559c3d2000 CR3: 0000000077c4c000 CR4: 00000000003526f0\nCall Trace:\n <TASK>\n rdma_restrack_add+0x5a/0x8a0 drivers/infiniband/core/restrack.c:236\n addr_handler+0x41a/0x5a0 drivers/infiniband/core/cma.c:3534\n process_one_req+0x2eb/0x540 drivers/infiniband/core/addr.c:624\n process_one_work kernel/workqueue.c:3375 [inline]\n process_scheduled_works+0xc4e/0x1630 kernel/workqueue.c:3458\n worker_thread+0xa47/0xfb0 kernel/workqueue.c:3539\n kthread+0x388/0x470 kernel/kthread.c:436\n ret_from_fork+0x514/0xb70 arch/x86/kernel/process.c:158\n ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:245\n </TASK>\n\"\n\nIn addr_handler(), cma_acquire_dev_by_src_ip() is called to populate\nid_priv->cma_dev and bind the associated ib_device to id_priv->id.device.\nIf cma_acquire_dev_by_src_ip() returns an error (non-zero status), the ID\nremains unassociated with any RDMA device.\n\nPreviously, rdma_restrack_add(&id_priv->res) was invoked unconditionally\neven when cma_acquire_dev_by_src_ip() failed, passing a resource with a\nNULL dev pointer and triggering the WARN_ON assertion in res_to_rt().\n\nFix this by only adding the resource to restrack when acquiring the device\nsucceeds.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -32710,7 +32710,7 @@
                 "cve_id": "CVE-2026-90385",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmd/raid1: create serial pool adding rdev to array with serialize_policy=1\n\nThe following bug has been observed with kernel 7.1.3 after adding a new\nrdev to an existing RAID1 array with serialize_policy enabled:\n\n  Oops: 0002 [#1]\n  CPU: 0 UID: 0 PID: 19639 Comm: ext4lazyinit Not tainted 7.1.3-1-default\n  RIP: _raw_spin_lock_irqsave+0x27/0x50\n  CR2: 0000000000004960\n  Call Trace:\n   wait_for_serialization+0xb9/0x260 [raid1]\n   raid1_make_request+0x762/0xaff [raid1]\n   md_handle_request+0x1c9/0x2e0 [md_mod]\n\nThe raid1.c code calls wait_for_serialization() if the MD_SERIALIZE_POLICY\nis set, and wait_for_serialization assumes that rdev->serial is\ninitialized. Normally this will be the case for arrays that have\nthe serialize_policy sysfs attribute set to 1.\n\nBut when a new rdev is added to an existing array in bind_rdev_to_array(),\nthe condition at mddev_create_serial_pool() causes creation of rdev->serial\nto be skipped. Fix it.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32738,7 +32738,7 @@
                 "cve_id": "CVE-2026-90389",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmd: scope memalloc_noio to allocation critical sections\n\nStoring a memalloc_noio_save() token in mddev->noio_flags lets one task\nsave the token and another task restore it. With concurrent suspend sysfs\nwrites, task A can enter PF_MEMALLOC_NOIO, return to userspace still in\nthat scope, and later task B can restore A's saved token.\n\nAvoid tying the token lifetime to mddev. Keep mddev_suspend() and\nmddev_resume() only responsible for array suspension, and enter\nPF_MEMALLOC_NOIO only in the MD paths that allocate memory after the array\nhas been suspended. Restore the token before resuming the array.\n\nA reproducer repeatedly writes suspend_lo and suspend_hi from concurrent\nworkers and checks each worker's /proc/self/stat flags before and after the\nsysfs write.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -32822,7 +32822,7 @@
                 "cve_id": "CVE-2026-90426",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\niommu/tegra241-cmdqv: Free the error IRQ before tearing down VINTFs\n\ntegra241_cmdqv_remove() tears each VINTF down first, then calls free_irq().\nTearing a VINTF down frees vintf0 and clears cmdqv->vintfs[0]. An error in\nthat window makes tegra241_cmdqv_isr() read the stale slot and hand it to\ntegra241_vintf0_handle_error(), which dereferences a NULL or freed pointer.\n\nFree the IRQ before tearing the VINTFs down. free_irq() waits for in-flight\nhandlers to finish and blocks new ones, so no ISR can observe a VINTF as it\nis torn down.\n\nNote: a user-owned VINTF (viommu) could outlive this teardown, which unmaps\ncmdqv->base and frees cmdqv->vintfs, so a later viommu close then touches\nfreed memory. This is neither introduced nor fixed here: a physical IOMMU\nis not a pluggable device, so iommufd by design holds no reference on the\none behind a viommu, and this teardown is not expected while that viommu is\nstill alive.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -32836,7 +32836,7 @@
                 "cve_id": "CVE-2026-90428",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\niommu/tegra241-cmdqv: Don't run the error ISR before probe sets up vintfs\n\n__tegra241_cmdqv_probe() requests the error IRQ before it has allocated the\ncmdqv->vintfs array and set cmdqv->num_vintfs. A CMDQV left enabled with a\nlatched error across a kexec fires the IRQ as soon as it is requested, and\ntegra241_cmdqv_isr() then walks the uninitialized cmdqv->vintfs array.\n\nRequest the IRQ only after cmdqv->vintfs is allocated and zeroed, so that\na latched interrupt firing early runs the ISR against a valid array of NULL\nslots that it safely skips.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -32850,7 +32850,7 @@
                 "cve_id": "CVE-2026-90430",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\niommu/tegra241-cmdqv: Publish an LVCMDQ only after it is fully initialized\n\ntegra241_vintf_init_lvcmdq() stores the freshly allocated vcmdq pointer to\nthe vintf->lvcmdqs[] array, before tegra241_vcmdq_alloc_smmu_cmdq() builds\nthe vcmdq->cmdq. The error ISR dereferences that cmdq, so a latched LVCMDQ\nerror (e.g. one inherited across a kexec) firing in this window would make\ntegra241_vintf0_handle_error() pass the still-zeroed arm_smmu_cmdq down to\n__arm_smmu_cmdq_skip_err(), dereferencing NULL queue register pointers.\n\nDrop the store from tegra241_vintf_init_lvcmdq() and publish the vcmdq at\nthe end of the allocation instead, with an smp_store_release() that pairs\nwith an smp_load_acquire() in the ISR, which can see a fully built LVCMDQ\nor NULL.\n\nThe user-owned LVCMDQ allocation moves accordingly, publishing the vcmdq\nonce tegra241_vcmdq_hw_init_user() succeeds, using a plain store since a\nuser VINTF's lvcmdqs[] has no lockless reader -- the error ISR only walks\nthe VINTF0 array.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -32920,7 +32920,7 @@
                 "cve_id": "CVE-2026-92501",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: drain in-flight DIO before buffered write fallback\n\ngeneric/746 started failing intermittently on ext3 (no-extent inodes).\nThe test triggers 'Page cache invalidation failure on direct I/O'\nwarnings and subsequent fsync returns -EIO. Adding a 50ms delay\nbetween ext4_buffered_write_iter() and filemap_write_and_wait_range()\nin ext4_dio_write_iter() makes the race almost always reproducible.\n\nOn no-extent inodes, DIO writes to holes cannot use unwritten extents,\nso ext4_iomap_alloc() leaves m_flags=0 and ext4_map_blocks() returns 0.\nThe iomap layer then returns -ENOTBLK, causing fallback to buffered I/O.\n\nThe fallback path in ext4_dio_write_iter() calls\next4_buffered_write_iter() which dirties pages, then does flush and\ninvalidate. However, there's an unprotected window between\next4_buffered_write_iter() returning (with inode lock released) and\nthe subsequent flush+invalidate.\n\nConcurrent async DIO completions from other threads can run\nkiocb_invalidate_post_direct_write() during this window. If pages have\nbeen re-dirtied, post-invalidation finds dirty pages and triggers the\nwarning, setting -EIO in the error sequence.\n\nConsider a file with two 4k extents: [hole][written]. Thread A does\nDIO to the written extent, while thread B does DIO spanning both:\n\n  kworker A (4k DIO, allocated block)    kworker B (8k DIO, fallback)\n  -----------------------------------    ----------------------------\n  inode_lock_shared()                    inode_lock_shared()\n  iomap_dio_rw():                        iomap_dio_rw():\n    kiocb_invalidate_pages -> clean        iomap_begin -> -ENOTBLK\n    submit_bio (async)                     dio->size = 0\n  inode_unlock_shared()                  inode_unlock_shared()\n\n  [bio pending in block layer]           /* fallback: lock released */\n                                         ext4_buffered_write_iter()\n                                           inode_lock(exclusive)\n                                           generic_perform_write()\n                                             -> dirty pages [0, 8k]\n                                           inode_unlock(exclusive)\n\n                                         /* pages dirty, no lock */\n  [bio completes]                        filemap_write_and_wait_range()\n  iomap_dio_complete()                     -> flush dirty pages\n    kiocb_invalidate_post_direct_write() invalidate_mapping_pages()\n      invalidate_inode_pages2_range()\n      -> finds dirty page!\n      -> dio_warn_stale_pagecache()\n      -> errseq_set(-EIO)\n\nThis issue can be triggered through normal I/O paths, not just\nintentionally overlapping DIO writes from userspace. For example,\ngeneric/746 uses a loop device where multiple kworkers issue concurrent\nI/O to the backing file. Additionally, when block_size < folio_size,\nnon-overlapping DIO writes that share a large folio can also trigger\nthe race.\n\nAdd inode_dio_wait() in ext4_buffered_write_iter() before\next4_write_checks() to drain all in-flight DIO. This ensures that\nall DIO clears existing pages before submitting IO (via\nkiocb_invalidate_pages()), all BIO waits for all DIO to complete\n(via inode_dio_wait()), and ext4_write_checks() observes the inode\nsize after all completed DIO so that ext4_block_zero_eof() does not\nrace with in-flight DIO, thus eliminating the race.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32934,7 +32934,7 @@
                 "cve_id": "CVE-2026-92502",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: clear stale xarray tags on folios skipped during writeback\n\nIn data=journal mode, the writeback thread can hit the\nWARN_ON_ONCE(sb_rdonly(sb)) in ext4_journal_check_start() while the\nsuperblock is being remounted read-only during reboot:\n\nWorkqueue: writeback wb_workfn (flush-253:0)\nRIP: 0010:ext4_journal_check_start+0x8b/0xd0\nCall Trace:\n  __ext4_journal_start_sb+0x3c/0x1e0\n  mpage_prepare_extent_to_map+0x4af/0x580\n  ext4_do_writepages+0x3c0/0x1080\n  ext4_writepages+0xc8/0x1a0\n  do_writepages+0xc4/0x180\n  __writeback_single_inode+0x45/0x2f0\n  writeback_sb_inodes+0x26b/0x5d0\n  __writeback_inodes_wb+0x54/0x100\n  wb_writeback+0x1ac/0x320\n  wb_workfn+0x394/0x470\n\nAnd followed by the warning:\nEXT4-fs warning (device vda1): ext4_evict_inode:195: inode #6263:\ncomm (sd-umount): data will be lost\n\nThis issue is not reproduced every time, but frequently.\nThe reproduction step is to create a VM with 8 CPUs, 16G memory and\nsetup data=journal:\nsudo tune2fs -o journal_data /dev/vda1\nRun fio:\nrm -f fiotest\nfio --name=fiotest --rw=randwrite --bs=4k --runtime=6 --ioengine=libaio\n--iodepth=256 --numjobs=8 --filename=fiotest --filesize=30G\n--group_reporting\nReboot the VM, and check the console output from:\nvirsh console testvm\n\nBut there is no dirty inode, folio_clear_dirty_for_io clears PG_dirty\nbut leaves tags PAGECACHE_TAG_DIRTY and PAGECACHE_TAG_TOWRITE set which\nare only cleared by __folio_start_writeback.\nIn data=journal mode, jbd2 checkpoints the journalled data to its final\nlocation and clears its own dirty flag without touching folio PG_dirty\nor xarray dirty flags.\nThe commit f4a2b42e7891 (\"ext4: fix stale xarray tags after writeback\")\nfixes when PG_dirty is still set but there is no dirty page.\nAnother case is PG_dirty is cleared, but PAGECACHE_TAG_DIRTY and\nPAGECACHE_TAG_TOWRITE is still set. In this case, writeback thread\nchecks clean folio and skips it in mpage_prepare_extent_to_map:\nif (!folio_test_dirty(folio) ||\n    ...\n        folio_unlcok(folio);\n\tcontinue\n\nAnd never reaches ext4_bio_write_folio where the commit f4a2b42e7891\nclears the stale xarray tags. Print debug logs after the filesystem\nis remounted read-only:\nwritepages RDONLY nrpages=2048 dirtytag=1 wbtag=0 towrite=1 sync=0\nAnd all folios are actually clean:\nfolio idx=3 dirty=0 wb=0 checked=0 dirtybuf=0 jbddirty=0 mapped=1\n...\n\nWe need to clear the xarray stale tags for such clean folios by\ncycling them through writeback in the skip path, the same way\nf4a2b42e7891 does in ext4_bio_write_folio.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -32976,7 +32976,7 @@
                 "cve_id": "CVE-2026-92509",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/core: Fix potential use after free in counter_release()\n\nWhen accessing a counter via the netlink path the only synchronization\nmechanism for the said counter is rdma_restrack_get().\nCurrently, rdma_restrack_del() is invoked at the end of\ncounter_release(), which is too late, since by that point\nvendor-specific resources associated with the counter might already be\nfreed. This can leave a short window where the counter remains\naccessible through restrack, leading to a potential use-after-free.\n\nFix this by moving the rdma_restrack_del() call to be before the\nfreeing of the vendor-specific resources, ensuring that the counter is\nremoved from restrack before its internal resources are released.\nThis guarantees that no new users hold references to a counter that is\nin the process of destruction.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33018,7 +33018,7 @@
                 "cve_id": "CVE-2026-92512",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/core: Fix use after free in ib_query_qp()\n\nWhen querying a QP via the netlink flow the only synchronization\nmechanism for the said QP is rdma_restrack_get(), meanwhile during the\nQP destroy path rdma_restrack_del() is called at the end of the\nib_destroy_qp_user() function which is too late, since by then the\nvendor specific resources for said QP would already be destroyed, and\ntill the rdma_restrack_del() is called this QP can still be accessed,\nwhich could cause the use after free below.\n\nFix this by moving the rdma_restrack_begin_del() to the start of the\nib_destroy_qp_user(), which in turn waits for all usages of the QP to be\ndone then removes it from the database to prevent access to it while it\nis being destroyed.\n\nRIP: 0010:ib_query_qp+0x15/0x50 [ib_core]\nCode: 48 83 05 5d 8e b9 ff 01 eb b5 66 66 2e 0f 1f 84 00 00 00 00 00 0f 1f 44 00 00 48 c7 46 40 00 00 00 00 48 c7 46 78 00 00 00 00 <48> 8b 07 48 8b 80 88 01 00 00 48 85 c0 74 1a 48 83 05 54 91 b9 ff\nRSP: 0018:ff11000108a8f2f0 EFLAGS: 00010202\nRAX: 0000000000000000 RBX: ff11000108a8f370 RCX: ff11000108a8f370\nRDX: 0000000000000000 RSI: ff11000108a8f3d8 RDI: 0000000000000000\nRBP: ff1100010de5a000 R08: 0000000000000e80 R09: 0000000000000004\nR10: ff110001057a604c R11: 0000000000000000 R12: ff11000108a8f370\nR13: ff110001090e8000 R14: 0000000000000000 R15: ff110001057a602c\nFS:  00007f2ffd8db6c0(0000) GS:ff110008dc90b000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 0000000000000000 CR3: 000000010b9a7004 CR4: 0000000000373eb0\nCall Trace:\n <TASK>\n mlx5_ib_gsi_query_qp+0x21/0x50 [mlx5_ib]\n mlx5_ib_query_qp+0x689/0x9d0 [mlx5_ib]\n ib_query_qp+0x35/0x50 [ib_core]\n fill_res_qp_entry_query.isra.0+0x47/0x280 [ib_core]\n ? __wake_up+0x40/0x50\n ? netlink_broadcast_filtered+0x15a/0x550\n ? kobject_uevent_env+0x562/0x710\n ? ep_poll_callback+0x242/0x270\n ? __nla_put+0xc/0x20\n ? nla_put+0x28/0x40\n ? nla_put_string+0x2e/0x40 [ib_core]\n fill_res_qp_entry+0x138/0x190 [ib_core]\n res_get_common_dumpit+0x4a5/0x800 [ib_core]\n ? fill_res_qp_entry_query.isra.0+0x280/0x280 [ib_core]\n nldev_res_get_qp_dumpit+0x1e/0x30 [ib_core]\n netlink_dump+0x16f/0x450\n __netlink_dump_start+0x1ce/0x2e0\n rdma_nl_rcv_msg+0x1d3/0x330 [ib_core]\n ? nldev_res_get_qp_raw_dumpit+0x30/0x30 [ib_core]\n rdma_nl_rcv_skb.constprop.0.isra.0+0x108/0x180 [ib_core]\n rdma_nl_rcv+0x12/0x20 [ib_core]\n netlink_unicast+0x255/0x380\n ? __alloc_skb+0xfa/0x1e0\n netlink_sendmsg+0x1f3/0x420\n __sock_sendmsg+0x38/0x60\n ____sys_sendmsg+0x1e8/0x230\n ? copy_msghdr_from_user+0xea/0x170\n ___sys_sendmsg+0x7c/0xb0\n ? __futex_wait+0x95/0xf0\n ? __futex_wake_mark+0x40/0x40\n ? futex_wait+0x67/0x100\n ? futex_wake+0xac/0x1b0\n __sys_sendmsg+0x5f/0xb0\n do_syscall_64+0x55/0xb90\n entry_SYSCALL_64_after_hwframe+0x4b/0x53",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -33032,7 +33032,7 @@
                 "cve_id": "CVE-2026-92515",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Preserve unique-field state across nested structs\n\nbtf_find_struct_field() initializes a fresh seen mask for every recursive\ndescent. Unique special fields in different levels of the same aggregate\ntherefore do not see one another. The duplicate fields can reach\nbtf_parse_fields(), where they trigger an invariant WARN_ON_ONCE(). A\ncrafted user BTF can consequently trigger the warning before map creation\nchecks capabilities.\n\nInitialize the seen mask once in btf_find_field() and pass the same pointer\nthrough struct, datasec, and nested-struct walks. This gives the entire field\ntraversal one shared uniqueness state.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33046,7 +33046,7 @@
                 "cve_id": "CVE-2026-92521",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nACPI: PCI: Clear driver_data on all paths that free the acpi_pci_root\n\nacpi_pci_root_add() assigns the freshly allocated root to\ndevice->driver_data before dmar_device_add() and pci_acpi_scan_root().\nBoth failure paths reach the end: label where root is kfree()'d, but\nonly the pci_acpi_scan_root() path clears driver_data first.\n\nWhen dmar_device_add() fails during a hot-add, root is freed while\ndevice->driver_data still points at it.  The ACPI core does not clear\ndriver_data on attach failure, so a later acpi_pci_find_root() call may\ndereference this dangling pointer.\n\nacpi_pci_root_remove() has the same problem: it frees root without\nclearing device->driver_data, leaving a dangling pointer behind after\nthe root bridge is removed.\n\nMove the NULL assignment to the shared end: label so every error path in\nacpi_pci_root_add() clears driver_data before freeing root, and clear it\nin acpi_pci_root_remove() as well, so the object is never left reachable\nthrough driver_data after being freed.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33130,7 +33130,7 @@
                 "cve_id": "CVE-2026-93048",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmtd: part: reject MTDPART_OFS_RETAIN in mtd_add_partition()\n\nmtd_add_partition() does not reject the special offset value\nMTDPART_OFS_RETAIN (-3), which leads to a WARN_ON in\nadd_mtd_device() when called through the BLKPG ioctl on NAND\ndevices. The RETAIN value depends on cur_offset being the end of\nthe previous partition, but in the dynamic partition path\ncur_offset equals the offset argument itself, causing undefined\nbehavior.\n\nCommit 5daa7b21496a (\"mtd: prepare partition add and del functions\nfor ioctl requests\") introduced mtd_add_partition() and correctly\nrejected MTDPART_OFS_APPEND (-1) and MTDPART_OFS_NXTBLK (-2),\nsince those special offsets rely on cur_offset tracking the\nprevious partition's end. However, commit 1a31368bf92e (\"mtd: add a flags\nfor partitions which should just leave smth. after them\")\nlater added MTDPART_OFS_RETAIN (-3) for the static\npartition table path without updating mtd_add_partition() to\nalso reject this value.\n\nWith offset=-3 passed via BLKPG, the RETAIN size calculation in\nallocate_partition() underflows (parent_size - 0xFFFFFFFFFFFFFFFD\n= parent_size + 3). If the underflow result does not appear to\nleave enough space, allocate_partition() jumps to out_register via\ngoto, skipping erasesize initialization. This results in\nerasesize=0, which triggers:\n\nWARN_ON((!mtd->erasesize || !master->_erase) &&\n\t\t!(mtd->flags & MTD_NO_ERASE))\n\nin add_mtd_device(). If the underflow result appears to leave\nenough space, a bogus partition size is calculated, but the\n\"out of reach\" sanity check catches the invalid offset and\ncreates a disabled empty partition (offset=0, size=0) instead\nof returning an error.\n\nFix this by adding MTDPART_OFS_RETAIN to the rejection list in\nmtd_add_partition(), consistent with the existing handling of\nAPPEND and NXTBLK.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33158,7 +33158,7 @@
                 "cve_id": "CVE-2026-93055",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUDF symlink pathComponent header OOB read\n\nudf_symlink_filler() can enter udf_pc_to_char() with a partial pathComponent header.\n\nValidate that enough input remains for a complete pathComponent header\nbefore accessing it. Reject malformed symlink data that would otherwise\nmake udf_pc_to_char() perform an out-of-bounds read.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33200,7 +33200,7 @@
                 "cve_id": "CVE-2026-93110",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/core: Wait for RCU callbacks before unloading ib_core\n\nput_gid_ndev() is queued with call_rcu() and implemented in ib_core.\nStopping the workqueues does not drain callbacks already queued, so RCU\ncould invoke it after the module code has been unloaded.\n\nsynchronize_rcu() does not wait for callbacks. Wait for them after all\nproducers have stopped.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -33214,7 +33214,7 @@
                 "cve_id": "CVE-2026-93117",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: fix UAF when probe runs concurrent to dyn ID removal\n\nDynamic IDs are only guaranteed to be valid when usb_dynids_lock is held,\nas remove_id_store can free the node. Thus, make a copy in\nusb_probe_interface. Clarify the documentation that the id parameter is\nonly valid during the probe.\n\nUSB serial has the same pattern, but it does not need fixing as the IDs\ncannot be removed via sysfs.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33298,7 +33298,7 @@
                 "cve_id": "CVE-2026-93163",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhwrng: core - fix rng list on registration error\n\nhwrng_register(rng) does the following:\n\n1. Checks if rng has name and read methods set\n2. Checks if the name already exists\n3. Adds rng to global rng_list\n4. May try to set rng to current_rng\n\nIf step 4 fails, it returns an error. However, it does not remove the\nrng from rng_list, causing a dangling reference which can result in\nuse-after-free if the caller frees rng, since registration failed.\n\nAdd a list_del_init() cleanup step.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33312,7 +33312,7 @@
                 "cve_id": "CVE-2026-93172",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/mm_init: handle alloc_percpu failure in free_area_init_core_hotplug\n\nWe miss a failed allocation check for pgdat->per_cpu_nodestats, which\nresults in a NULL deref when we offset into the per-cpu area.\n\nPropagate -ENOMEM up the stack and leave per_cpu_nodestats pointing\nat boot_nodestats so a later online can retry the allocation.\n\nhotadd_init_pgdat() returns NULL on failure, which __try_online_node()\nalready maps to -ENOMEM.\n\nOn failure nothing needs to be unwound:\n  - the node is never marked online\n  - per_cpu_nodestats is left pointing at boot_nodestats\n  - __add_memory_resource() cleans up pending memblock resources\n  - later online attempts retry the per_cpu_nodestats allocation",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33340,7 +33340,7 @@
                 "cve_id": "CVE-2026-93174",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Copy per-CPU map value padding in copy_map_value_long()\n\nIn kernel, per-CPU map elements are stored with\nround_up(map->value_size, 8) bytes. On UAPI lookup paths, it copies the\nrounded size for each CPU into a temporary buffer.\n\nHowever, copy_map_value_long() passes 'map->value_size' to\nbpf_obj_memcpy(). When the map has special fields, bpf_obj_memcpy() copies\naround those fields with memcpy(), and does not copy the tail padding\nbetween 'map->value_size' and round_up(map->value_size, 8).\n\nThe temporary UAPI lookup buffers are allocated without __GFP_ZERO. As a\nresult, when the per-CPU map's value size is not equal to\nround_up(map->value_size, 8), UAPI LOOKUP_ELEM and its variants can return\nstale heap contents from that padding to user space. The same issue\napplies to bpf_iter for per-CPU maps.\n\nPass round_up(map->value_size, 8) to bpf_obj_memcpy() from\ncopy_map_value_long(), so per-CPU maps both with and without special\nfields copy the entire per-CPU slot. Remove the now redundant round_up()\nfrom bpf_obj_memcpy()'s long_memcpy path.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -33354,7 +33354,7 @@
                 "cve_id": "CVE-2026-93182",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsched/fair: Fix overflow in update_tg_cfs_runnable()\n\nA divide-by-zero crash is observed when running hackbench:\n\n   [14697.488452] CPU: 112 UID: 0 PID: 124791 Comm: hackbench Not tainted 7.1.0-rc2+\n   [14697.492627] RIP: 0010:propagate_entity_load_avg+0x35f/0x3e0\n   [14697.506799]  <TASK>\n   [14697.507411]  __dequeue_task+0x2b4/0xc70\n   [14697.508677]  dequeue_task_fair+0x36/0x370\n   [14697.509047]  dequeue_task+0x101/0x2f0\n   [14697.509426]  __schedule+0x1b1/0x1a00\n   [14697.510868]  anon_pipe_read+0x3da/0x450\n   [14697.511400]  vfs_read+0x361/0x390\n   [14697.512053]  __x64_sys_read+0x19/0x30\n\nThe divide-by-zero happens here:\n\n  if (scale_load_down(gcfs_rq->load.weight)) {\n           load_sum = div_u64(gcfs_rq->avg.load_sum,\n                              scale_load_down(gcfs_rq->load.weight));\n  }\n\ngcfs_rq->load.weight is an insane large value and is truncated\nto the lower 32 bits by div_u64, which happen to be 0.\n\nUsing AI for investigation, the cause is a u32 overflow in\nupdate_tg_cfs_runnable(), and flat pickup became a victim when using\ntg_tasks():\n\n   u32 new_sum, divider;\n   ...\n   new_sum = se->avg.runnable_avg * divider; <-- boom\n\nThe following sequence shows how this triggers the crash:\n\n   propagate_entity_load_avg()\n     update_tg_cfs_runnable()     # u32 overflow corrupts runnable_sum\n\n   __update_load_avg_cfs_rq()\n     ___update_load_avg()         # computes insane runnable_avg\n   update_tg_load_avg()           # propagates to tg->runnable_avg\n\n   update_cfs_group()\n     calc_concur_shares()\n       tg_tasks()                 # long-to-int truncation, negative nr\n     reweight_entity()            # corrupted se->load.weight\n       update_load_add()          # corrupted cfs_rq->load.weight\n\n   propagate_entity_load_avg()\n     update_tg_cfs_load()\n       div_u64()                  # divide-by-zero\n\nFix by widening new_sum from u32 to u64 (no need to force tg_tasks()\nto return unsigned long after this fix)",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33396,7 +33396,7 @@
                 "cve_id": "CVE-2026-93206",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI/proc: Use file_ns_capable() when checking config space read access\n\nproc_bus_pci_read() decides how much of the config space is readable based\non capable(CAP_SYS_ADMIN), which checks the credentials of the task calling\nread(), not the credentials of the process that opened the file.\n\nThe sysfs equivalent, pci_read_config(), has checked the credentials of the\nopening process since commit de139a339395 (\"pci: check caps from sysfs file\nopen to read device dependent config space\"), so a privileged process can\nopen the config space file and pass the file descriptor to an unprivileged\nprocess (for example, a process running a KVM guest with an assigned\ndevice), which can then read the entire config space.  The check was\nsubsequently routed through the LSM framework in commit 47970b1b2aa6 (\"pci:\nuse security_capable() when checking capablities during config space read\")\nand converted to the dedicated helper in commit ab0fa82b2df9 (\"pci-sysfs:\nuse proper file capability helper function\").\n\nThus, the two interfaces check the same capability against different\ncredentials.  Checking the credentials of the task calling read() makes the\noutcome depend on who reads rather than who opened, so the restriction is\nbypassed whenever a more privileged process reads through the descriptor.\nChecking the credentials recorded in file->f_cred settles the decision at\nopen() time and ties it to the file, where it cannot change with the\ncaller.\n\nUse file_ns_capable() to check CAP_SYS_ADMIN against the credentials in\neffect when the file was opened, bringing the procfs interface in line with\nthe sysfs behaviour.\n\nAs a result, a file descriptor opened by a privileged process and passed to\nan unprivileged one now allows the entire config space to be read through\nprocfs, matching sysfs.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33424,7 +33424,7 @@
                 "cve_id": "CVE-2026-93210",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: harden DFS cache against invalid target hints\n\nCurrently, get_tgt_name() returns ERR_PTR(-ENOENT) when ce->tgthint is\nNULL, and dfs_cache_noreq_update_tgthint() assumes ce->tgthint is always\nvalid.\n\nIn preparation for clearing ce->tgthint in free_tgts(), harden callers\nof get_tgt_name() against ERR_PTR results and harden\ndfs_cache_noreq_update_tgthint() against NULL pointer dereferences.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -33438,7 +33438,7 @@
                 "cve_id": "CVE-2026-93211",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: initialize DRC hash table before registering shrinker\n\nshrinker_register() precedes the INIT_LIST_HEAD loop and the\ndrc_hashsize store. On weakly-ordered architectures (arm64, ppc),\na shrinker scan can observe drc_hashsize before the bucket list\nheads are initialized, causing a NULL deref in the DRC shrinker\ncallback.\n\nMove bucket initialization and the drc_hashsize store before\nshrinker_register() so the hash table is fully initialized before\nit becomes visible to the shrinker.",
-                "severity": "HIGH",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -33452,7 +33452,7 @@
                 "cve_id": "CVE-2026-93212",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: guard nfsd_serv deref in nfsd_file_net_dispose\n\nnfsd_file_net_dispose() is the consumer side of l->freeme: the nfsd\nservice thread loop calls it to drain entries that the filecache\ngarbage collector and shrinker append via\nnfsd_file_dispose_list_delayed().  During per-net teardown,\nnn->nfsd_serv is cleared before the filecache laundrette is shut\ndown, so the service thread can still run a dispose pass that finds\nmore than eight entries on l->freeme and dereferences a NULL\nsvc_serv:\n\n    nfsd service thread loop\n      nfsd_file_net_dispose(nn)\n        if (!list_empty(&l->freeme)) {\n            ...\n            svc_wake_up(nn->nfsd_serv);   /* nn->nfsd_serv == NULL */\n        }\n\nThe sibling helper nfsd_file_dispose_list_delayed() already documents\nthis ordering and caches nn->nfsd_serv into a local before testing it\nfor NULL.  nfsd_file_net_dispose() was introduced with the same raw\nsvc_wake_up(nn->nfsd_serv) call and never picked up the guard.\n\nFix by loading nn->nfsd_serv into a local svc_serv pointer and only\ncalling svc_wake_up() when it is non-NULL, matching the pattern in\nnfsd_file_dispose_list_delayed().",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -33522,7 +33522,7 @@
                 "cve_id": "CVE-2026-93239",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm64: mm: Fix the lockless page-table walk in show_pte()\n\nshow_pte() walks page tables locklessly and can run with interrupts\nenabled. A concurrent teardown can free a table page while it is being\nwalked. It can also clear a parent entry after show_pte() checked it; the\nregular pXd_offset() helpers then reread the cleared entry and can derive a\nbogus lower-level pointer and fault again.\n\nUse the lockless offset helpers with the saved parent entries, as\ngup_fast() does, and pass the saved PMD to pte_offset_map().\n\nFor task page tables, arm64 selects MMU_GATHER_RCU_TABLE_FREE. Disable\nlocal interrupts around the walk to hold off RCU-deferred table frees and\nblock the tlb_remove_table_sync_one() IPI until the walk is finished.\n\nPlace the IRQ guard after the header print. This does not make the output a\nconsistent snapshot, but prevents the task page-table walk from\ndereferencing a released table page or deriving a pointer from a different\nparent value.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33536,7 +33536,7 @@
                 "cve_id": "CVE-2026-93240",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmemcg: make the v1 soft limit knob inert\n\nThe v1 soft limit has been deprecated since v6.12 and nobody has reported\ndepending on it.  Start the removal by decoupling the interface from the\nimplementation: keep memory.soft_limit_in_bytes, but ignore writes to it\nand always report the maximum value on read similar to what\nmemory.kmem.limit_in_bytes already does.\n\nWrites are still parsed, so malformed input keeps returning -EINVAL.  The\nknob now also behaves the same everywhere: it used to return -EOPNOTSUPP\non PREEMPT_RT, where soft limit reclaim has always been disabled.\n\nThis also fixes the syzbot report linked below.  Soft limit reclaim is the\nonly caller that runs shrink_lruvec() from kswapd against a specific\nmemcg, so it is the only way to reach lru_gen_shrink_lruvec() and in turn\nset_mm_walk(), which warns when called from kswapd.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -34446,7 +34446,7 @@
                 "cve_id": "CVE-2026-97568",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmptcp: syncookies: remember the request backup flag\n\nInstead of using an uninitialised bit when copying the info in\nsubflow_ulp_clone().\n\nTo fix this, no need to extend the join_entry structure: backup is\ncoming from struct mptcp_subflow_request_sock, only one bit. Do the same\nhere by using one bit for both.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -35286,7 +35286,7 @@
                 "cve_id": "CVE-2026-98076",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing/probes: Fix use-after-free on field name/type of events with multiple probes\n\nThe fields of a probe-based dynamic event (kprobe, uprobe, eprobe and\nfprobe events) are created in traceprobe_define_arg_fields() by handing\nthe probe_arg name/type strings to trace_define_field(), which only\nstores the pointers without copying. Those strings are owned by the\ntrace_probe and are freed when that probe is removed.\n\nAn event can have several probes attached. The field list is defined\nonly once, by the first probe that registers the event, but it is kept\nalive by any surviving sibling probe. Deleting just that first probe by\nsymbol -\n\n  # primary A: fields are defined from A's args\n  echo 'p:kprobes/ev vfs_read  a1=$arg1' >  kprobe_events\n  # append B: shares A's event call\n  echo 'p:kprobes/ev vfs_write a1=$arg1' >> kprobe_events\n  # delete only A (matched by symbol), B survives\n  echo '-:kprobes/ev vfs_read'           >> kprobe_events\n\nfrees A's args (trace_probe_cleanup() -> traceprobe_free_probe_arg()),\nbut trace_probe_unlink() keeps the trace_probe_event because the probe\nlist is not empty. The event call stays registered via B while its\nfields now reference freed memory. Any field lookup then reads it, e.g.\n\n  echo 'a1 == 1' > events/kprobes/ev/filter\n\n  BUG: KASAN: slab-use-after-free in strcmp+0xa7/0xb0\n  Call Trace:\n   strcmp\n   trace_find_event_field\n   parse_pred\n   process_preds\n   create_filter\n   apply_event_filter\n   event_filter_write\n\nfield->name references parg->name (kstrdup'd, freed with the probe) and,\nfor array arguments, field->type references parg->fmt (kmalloc'd, freed\nwith the probe) - the scalar type otherwise points at the static\nfmttype rodata, which is safe.\n\nHave traceprobe_define_arg_fields() duplicate the name and type strings\nand anchor the copies on the trace_probe_event, which embeds the event\ncall and outlives every individual probe; trace_probe_event_free()\nreleases them.\n\nThe reproducer above triggers reliably; the field lookup and the delete\nboth run under event_mutex, so this is a dangling reference after\nremoval rather than a race.\n\nThe issue was found by the autokbug dynamic kernel fuzzer at Tencent\nYunding Lab.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -35300,7 +35300,7 @@
                 "cve_id": "CVE-2026-98077",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nf_conntrack_sip: fix OOB read in sip_skip_whitespace()\n\nsip_skip_whitespace() returns dptr unchanged when its own loop\nexhausts the buffer (dptr == limit), instead of NULL like its sibling\nsip_follow_continuation() returns on its own \"no more data\" path.\n\nct_sip_get_header() only checks for NULL after calling it:\n\n  dptr = sip_skip_whitespace(dptr, limit);\n  if (dptr == NULL)\n          break;\n  if (*dptr != ':' || ++dptr >= limit)\n          break;\n\nso a recognized header name followed only by spaces/tabs running to\nthe exact end of the SIP payload, with no colon, makes the very next\nstatement read one byte past the buffer.\n\nMake both \"no more data\" outcomes return NULL, matching the\nconvention sip_follow_continuation() already uses and that both\nexisting callers already check for.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -35342,7 +35342,7 @@
                 "cve_id": "CVE-2026-98081",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: zoned: finish active block group cleanup if call_zone_finish() fails\n\ndo_zone_finish() clears BLOCK_GROUP_FLAG_ZONE_IS_ACTIVE before finishing\nthe zones. If call_zone_finish() then fails it returned early, leaving the\nnow inactive block group on fs_info->zone_active_bgs, leaking its\nreference, the BTRFS_FS_NEED_ZONE_FINISH waiters are never woken, and as\nits alloc_offset equals the zone capacity btrfs_zone_finish_one_bg() keeps\nselecting it, spinning btrfs_zoned_activate_one_bg().\n\nFall through to the cleanup on failure too and return the error, but keep\nthe block group read-only as its zones are left inconsistent.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -35384,7 +35384,7 @@
                 "cve_id": "CVE-2026-98088",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpt3sas: Avoid out-of-bounds cpumask_of_node() call in _base_assign_reply_queues()\n\ndev_to_node() can return NUMA_NO_NODE (-1) on systems without NUMA\ntopology information for the PCI device, such as single-socket boards\nthat don't expose device-to-node affinity. Passing -1 directly into\ncpumask_of_node() indexes node_to_cpumask_map[-1], an out-of-bounds\narray read caught by UBSAN:\n\n  UBSAN: array-index-out-of-bounds in arch/x86/include/asm/topology.h:72:28\n  index -1 is out of range for type 'cpumask *[1024]'\n\nFall back to cpu_online_mask when no NUMA node is available, rather than\nassuming dev_to_node() always returns a valid node index.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -35412,7 +35412,7 @@
                 "cve_id": "CVE-2026-98090",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: restore active device pointers after failed sprout\n\nbtrfs_init_new_device() switches latest_dev and possibly s_bdev from the\nseed device to the new sprout device before creating the first writable\nchunks.\n\nIf chunk creation or the subsequent sprout setup fails, the error path\nreleases the new device without switching those pointers back.\nbtrfs_show_devname() can then dereference the freed latest_dev and crash.\n\nRestore the active device pointers to the latest seed device before\nremoving and releasing the failed sprout device.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -35426,7 +35426,7 @@
                 "cve_id": "CVE-2026-98091",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: detach failed sprout device from transaction update list\n\nWhen creating the first metadata chunk for a sprout filesystem,\ncreate_chunk() adds the new device to the transaction dev_update_list\nthrough device->post_commit_list.\n\nIf the subsequent system chunk creation fails, btrfs_init_new_device()\naborts the transaction and releases the device while post_commit_list is\nstill linked. This triggers a warning in btrfs_free_device() and leaves\nthe transaction list referencing freed memory.\n\nDetach the device while holding chunk_mutex before releasing it.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -35482,7 +35482,7 @@
                 "cve_id": "CVE-2026-98098",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntipc: fix NULL deref in tipc_named_node_up() on empty publication list\n\nUser-space applications can bind a large number of service addresses to\none or more sockets. Each binding of a local-scope service address inserts\none entry (publication) into the TIPC name table. If the number of these\npublications exceeds TIPC_MAX_PUBL (65535), protocol service types\n(such as node state and link state) are no longer inserted into the name\ntable. This causes two issues:\n\n1. User-space applications subscribing to node or link up/down events\n   stop receiving notifications.\n\n2. A NULL pointer dereference can occur:\n\n   BUG: kernel NULL pointer dereference, address: 00000000000000d0\n   ...\n   CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 7.2.0-rc4-default+ #5 PREEMPT(full)\n   ...\n   RIP: 0010:tipc_named_node_up (./include/linux/skbuff.h:2251 net/tipc/name_distr.c:195 net/tipc/name_distr.c:221)\n   ...\n   Call Trace:\n   <IRQ>\n   tipc_node_write_unlock (net/tipc/node.c:428)\n   tipc_rcv (net/tipc/node.c:934 net/tipc/node.c:2189)\n   tipc_udp_recv (net/tipc/udp_media.c:389)\n\n   Thread 1 (tipc_net_finalize) | Thread 2 (named_distribute)\n   -----------------------------|-----------------------------\n                                | ...\n                                | list_for_each_entry(publ, pls, binding_node) {\n                                | ...\n                                | __skb_queue_tail(list, skb);\n                                | ...\n                                | }\n                                | ...\n                                | hdr = buf_msg(skb_peek_tail(list));\n   ...                          |\n   tipc_nametbl_publish();      |\n\n   If 'tipc_nametbl_publish()' (Thread 1) fails because the number of\n   local publications reaches TIPC_MAX_PUBL, list (Thread 2) will be empty. As a\n   result, NULL is passed to 'buf_msg()', leading to a NULL pointer dereference.\n\nFix these issues by allowing protocol service types (node state, link state,\nand topology server) to be inserted into the name table unconditionally.\nThis ensures that users subscribing to these types always receive\nnotifications. In addition, the maximum number of local user publications is\nreduced to (TIPC_MAX_PUBL - 1). This ensures that the maximum bulk size\ncalculated in tipc_link_set_queue_limits() remains valid.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
