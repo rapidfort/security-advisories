@@ -77192,6 +77192,42 @@
                     }
                 ]
             },
+            "CVE-2026-98399": {
+                "cve_id": "CVE-2026-98399",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ipl: Fix NULL deref in dump_reipl without re-IPL parm block\n\nUnlike kdump, which passes the re-IPL parameter block through os_info,\nthe stand-alone dump passes it through the IPL parm block address and\nchecksum in lowcore.\n\nSome IPL types, like HMC FTP boot or QEMU direct kernel boot, might not\nprovide an IPL parameter block. In this case reipl_type_init() selects\nIPL_TYPE_UNKNOWN and reipl_block_actual remains NULL. Nevertheless,\ndump_reipl_run() unconditionally dereferences it when preparing the\nlowcore fields. This may happen to work by chance when address zero\ncontains readable lowcore data. A zero IPL parameter block address is\nthen stored in lowcore, causing the stand-alone dumper to enter disabled\nwait after completing the dump.\n\nExplicitly store a zero IPL parameter block address and checksum when no\nre-IPL parameter block is available. This does not change the behavior:\nthe stand-alone dumper completes the dump and halts, while valid re-IPL\nparameter blocks continue to be handled as before.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.10-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98400": {
+                "cve_id": "CVE-2026-98400",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ipl: Fix NULL deref in kdump without re-IPL parm block\n\nSome IPL types, like HMC FTP boot or QEMU direct kernel boot, might\nnot provide an IPL parameter block. In this case, reipl_type_init()\nselects IPL_TYPE_UNKNOWN, and reipl_block_actual remains NULL.\n\nkdump passes the re-IPL parameter block to the dump kernel through\nos_info. Before commit 3b9678472bab (\"s390/ipl: correct kdump reipl\nblock checksum calculation\"), the os_info entry was added only for\nIPL types which initialized reipl_block_actual. That commit moved the\nos_info update to machine_crash_shutdown(), making it unconditional. As\na result, set_os_info_reipl_block() dereferences reipl_block_actual for\nIPL_TYPE_UNKNOWN. This may happen to work by chance when address zero\ncontains readable lowcore data and the resulting empty os_info entry is\nignored by the dump kernel.\n\nSkip the os_info update when no re-IPL parameter block is available.\nKdump then collect the dump and reboot without setting re-IPL parameter\nblock.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.10-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-98404": {
                 "cve_id": "CVE-2026-98404",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -87649,6 +87685,19 @@
                 "cve_id": "CVE-2026-90269",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject load-acquire from pointers requiring fault protection\n\nA BPF_LOAD_ACQ is not rewritten to a BPF_PROBE_MEM load by the verifier,\nunlike a regular BPF_LDX, so the JIT emits a plain load with no exception\ntable entry and a fault panics the kernel instead of being handled.\n\nReject the source pointer types that a BPF_LDX would have had that fault\nprotection applied to, i.e. the ones bpf_convert_ctx_accesses() turns\ninto BPF_PROBE_MEM: a bare PTR_TO_BTF_ID, PTR_TO_BTF_ID | PTR_UNTRUSTED,\nPTR_TO_BTF_ID | MEM_ALLOC | PTR_UNTRUSTED and PTR_TO_MEM | MEM_RDONLY |\nPTR_UNTRUSTED.\n\nThis is reachable e.g. by loading ->mm out of a trusted task_struct\nyields an untrusted pointer to mm_struct, and it is NULL for a kernel\nthread:\n\n  [...]\n  SEC(\"tp_btf/sched_switch\")\n  int BPF_PROG(demo, bool preempt, struct task_struct *prev,\n               struct task_struct *next)\n  {\n      struct mm_struct *mm = next->mm;  /* untrusted */\n\n      out_ldx = (__u64)mm->pgd;         /* BPF_LDX      */\n      out_acq = load_acquire(&mm->pgd); /* BPF_LOAD_ACQ */\n      return 0;\n  }\n  [...]\n\nBoth dereference the same pointer, but only the BPF_LDX is protected\n(x86-64 JIT, jump targets shown prog-relative):\n\n  [...]\n  ; out_ldx = (__u64)mm->pgd;\n  17:   movq    $-10485760, %r10\n  1e:   movq    %rsi, %r11\n  21:   addq    $184, %r11\n  28:   subq    %r10, %r11\n  2b:   movabsq $140737498841088, %r10\n  35:   cmpq    %r10, %r11\n  38:   ja      0x3e                 <-- kernel addr?\n  3a:   xorl    %edi, %edi           <-- no: dst = 0, skip the load\n  3c:   jmp     0x45\n  3e:   movq    184(%rsi), %rdi      <-- yes: load + extable entry\n  [...]\n  ; load_acquire(&mm->pgd)\n  53:\tmovq    %rsi, %rdi\n  56:\tmovq    184(%rdi), %rax       <-- no check, no extable entry\n  [...]\n\nNote that BPF_PROBE_MEM is not visible in a bpftool xlated dump, as\nbpf_insn_prepare_dump() rewrites it back to BPF_MEM.\n\nA PTR_TRUSTED pointer is deliberately not on the list. Such a load is\nnot converted either, but it does not need to be, since the pointer is\nguaranteed live, so load-acquire from it stays allowed.\n\nThe check is gated on BPF_LOAD_ACQ so that atomic RMW and store-release\nerror messages are unchanged; writes (RMW / store-release) to such\npointers are already rejected elsewhere, so only load-acquire needs this.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-90272": {
+                "cve_id": "CVE-2026-90272",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: arm_pmuv3: Zero initialize hw_id branch stack field\n\nPERF_SAMPLE_BRANCH_HW_INDEX is supported by BRBE so hw_id is passed to\nuserspace, but it's never set by the BRBE driver. Zero initialize it as\nit should be according to the docs:\n\n   * For the architectures whose raw branch records are\n   * already stored in age order, the hw_idx should be 0.\n\nIt's probably too risky to remove PERF_SAMPLE_BRANCH_HW_INDEX from BRBE\nnow in case anyone is setting it and reading the value, but zero\ninitializing the whole struct also protects against the same issue with\nnew fields that are added in the future.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -143339,6 +143388,34 @@
                 "cve_id": "CVE-2026-98398",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nlocking/lockdep: Invalidate stale class_cache entries for zapped classes\n\nsyzbot reported a lockdep splat hitting DEBUG_LOCKS_WARN_ON(1) in\nhlock_class() due to an invalid class_idx:\n\n  WARNING: kernel/locking/lockdep.c:238 at __lock_acquire+0x382/0x2cf0 kernel/locking/lockdep.c:5203\n  Workqueue: wg-crypt-wg0 wg_packet_tx_worker\n  RIP: 0010:hlock_class kernel/locking/lockdep.c:238 [inline]\n  RIP: 0010:check_wait_context kernel/locking/lockdep.c:4870 [inline]\n  RIP: 0010:__lock_acquire+0x389/0x2cf0 kernel/locking/lockdep.c:5203\n  Call Trace:\n   <IRQ>\n   lock_acquire+0x106/0x350 kernel/locking/lockdep.c:5886\n   _raw_spin_lock+0x2e/0x40 kernel/locking/spinlock.c:173\n   tcp_tsq_handler+0x29/0x200 net/ipv4/tcp_output.c:1291\n   tcp_tsq_workfn+0x384/0x410 net/ipv4/tcp_output.c:1325\n   ...\n\nWhen a lock class is zapped (e.g. during module unload or key\nunregistration), zap_class() clears the class's bit in\nlock_classes_in_use and removes it from the class hash table.\nHowever, existing lockdep_map instances embedded in data structures\nmay still retain a pointer to the zapped class in their class_cache[]\narray.\n\nWhen __lock_acquire() subsequently runs on such a lock, it finds\nlock->class_cache[subclass] != NULL, skipping register_lock_class()\nand assigning hlock->class_idx to the index of the zapped class. When\ncheck_wait_context() or hlock_class() inspects the held_lock, it finds\n!test_bit(class_idx, lock_classes_in_use) and warns. Furthermore, if\nthe zapped slot is subsequently re-allocated to an unrelated lock key,\nthe stale class_cache entry would erroneously match the unrelated\nclass (ABA issue).\n\nAdd lock_class_cache_is_valid() to validate that the cached class is\nwithin lock_classes bounds, still allocated in lock_classes_in_use\n(using uninstrumented arch_test_bit() in __always_inline context so it\nis safe in noinstr contexts like match_held_lock()), and that\nclass->key matches the expected subkey (taking lockdep_set_subclass()\noverrides into account). Also use READ_ONCE()/WRITE_ONCE() when\naccessing class_cache[].  If the entry is invalid or stale, fall back\nto register_lock_class() / look_up_lock_class().",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.10-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98399": {
+                "cve_id": "CVE-2026-98399",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ipl: Fix NULL deref in dump_reipl without re-IPL parm block\n\nUnlike kdump, which passes the re-IPL parameter block through os_info,\nthe stand-alone dump passes it through the IPL parm block address and\nchecksum in lowcore.\n\nSome IPL types, like HMC FTP boot or QEMU direct kernel boot, might not\nprovide an IPL parameter block. In this case reipl_type_init() selects\nIPL_TYPE_UNKNOWN and reipl_block_actual remains NULL. Nevertheless,\ndump_reipl_run() unconditionally dereferences it when preparing the\nlowcore fields. This may happen to work by chance when address zero\ncontains readable lowcore data. A zero IPL parameter block address is\nthen stored in lowcore, causing the stand-alone dumper to enter disabled\nwait after completing the dump.\n\nExplicitly store a zero IPL parameter block address and checksum when no\nre-IPL parameter block is available. This does not change the behavior:\nthe stand-alone dumper completes the dump and halts, while valid re-IPL\nparameter blocks continue to be handled as before.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.10-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98400": {
+                "cve_id": "CVE-2026-98400",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ipl: Fix NULL deref in kdump without re-IPL parm block\n\nSome IPL types, like HMC FTP boot or QEMU direct kernel boot, might\nnot provide an IPL parameter block. In this case, reipl_type_init()\nselects IPL_TYPE_UNKNOWN, and reipl_block_actual remains NULL.\n\nkdump passes the re-IPL parameter block to the dump kernel through\nos_info. Before commit 3b9678472bab (\"s390/ipl: correct kdump reipl\nblock checksum calculation\"), the os_info entry was added only for\nIPL types which initialized reipl_block_actual. That commit moved the\nos_info update to machine_crash_shutdown(), making it unconditional. As\na result, set_os_info_reipl_block() dereferences reipl_block_actual for\nIPL_TYPE_UNKNOWN. This may happen to work by chance when address zero\ncontains readable lowcore data and the resulting empty os_info entry is\nignored by the dump kernel.\n\nSkip the os_info update when no re-IPL parameter block is available.\nKdump then collect the dump and reboot without setting re-IPL parameter\nblock.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -213441,6 +213518,42 @@
                 "cve_id": "CVE-2026-98398",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nlocking/lockdep: Invalidate stale class_cache entries for zapped classes\n\nsyzbot reported a lockdep splat hitting DEBUG_LOCKS_WARN_ON(1) in\nhlock_class() due to an invalid class_idx:\n\n  WARNING: kernel/locking/lockdep.c:238 at __lock_acquire+0x382/0x2cf0 kernel/locking/lockdep.c:5203\n  Workqueue: wg-crypt-wg0 wg_packet_tx_worker\n  RIP: 0010:hlock_class kernel/locking/lockdep.c:238 [inline]\n  RIP: 0010:check_wait_context kernel/locking/lockdep.c:4870 [inline]\n  RIP: 0010:__lock_acquire+0x389/0x2cf0 kernel/locking/lockdep.c:5203\n  Call Trace:\n   <IRQ>\n   lock_acquire+0x106/0x350 kernel/locking/lockdep.c:5886\n   _raw_spin_lock+0x2e/0x40 kernel/locking/spinlock.c:173\n   tcp_tsq_handler+0x29/0x200 net/ipv4/tcp_output.c:1291\n   tcp_tsq_workfn+0x384/0x410 net/ipv4/tcp_output.c:1325\n   ...\n\nWhen a lock class is zapped (e.g. during module unload or key\nunregistration), zap_class() clears the class's bit in\nlock_classes_in_use and removes it from the class hash table.\nHowever, existing lockdep_map instances embedded in data structures\nmay still retain a pointer to the zapped class in their class_cache[]\narray.\n\nWhen __lock_acquire() subsequently runs on such a lock, it finds\nlock->class_cache[subclass] != NULL, skipping register_lock_class()\nand assigning hlock->class_idx to the index of the zapped class. When\ncheck_wait_context() or hlock_class() inspects the held_lock, it finds\n!test_bit(class_idx, lock_classes_in_use) and warns. Furthermore, if\nthe zapped slot is subsequently re-allocated to an unrelated lock key,\nthe stale class_cache entry would erroneously match the unrelated\nclass (ABA issue).\n\nAdd lock_class_cache_is_valid() to validate that the cached class is\nwithin lock_classes bounds, still allocated in lock_classes_in_use\n(using uninstrumented arch_test_bit() in __always_inline context so it\nis safe in noinstr contexts like match_held_lock()), and that\nclass->key matches the expected subkey (taking lockdep_set_subclass()\noverrides into account). Also use READ_ONCE()/WRITE_ONCE() when\naccessing class_cache[].  If the entry is invalid or stale, fall back\nto register_lock_class() / look_up_lock_class().",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.10-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98399": {
+                "cve_id": "CVE-2026-98399",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ipl: Fix NULL deref in dump_reipl without re-IPL parm block\n\nUnlike kdump, which passes the re-IPL parameter block through os_info,\nthe stand-alone dump passes it through the IPL parm block address and\nchecksum in lowcore.\n\nSome IPL types, like HMC FTP boot or QEMU direct kernel boot, might not\nprovide an IPL parameter block. In this case reipl_type_init() selects\nIPL_TYPE_UNKNOWN and reipl_block_actual remains NULL. Nevertheless,\ndump_reipl_run() unconditionally dereferences it when preparing the\nlowcore fields. This may happen to work by chance when address zero\ncontains readable lowcore data. A zero IPL parameter block address is\nthen stored in lowcore, causing the stand-alone dumper to enter disabled\nwait after completing the dump.\n\nExplicitly store a zero IPL parameter block address and checksum when no\nre-IPL parameter block is available. This does not change the behavior:\nthe stand-alone dumper completes the dump and halts, while valid re-IPL\nparameter blocks continue to be handled as before.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.10-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98400": {
+                "cve_id": "CVE-2026-98400",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ipl: Fix NULL deref in kdump without re-IPL parm block\n\nSome IPL types, like HMC FTP boot or QEMU direct kernel boot, might\nnot provide an IPL parameter block. In this case, reipl_type_init()\nselects IPL_TYPE_UNKNOWN, and reipl_block_actual remains NULL.\n\nkdump passes the re-IPL parameter block to the dump kernel through\nos_info. Before commit 3b9678472bab (\"s390/ipl: correct kdump reipl\nblock checksum calculation\"), the os_info entry was added only for\nIPL types which initialized reipl_block_actual. That commit moved the\nos_info update to machine_crash_shutdown(), making it unconditional. As\na result, set_os_info_reipl_block() dereferences reipl_block_actual for\nIPL_TYPE_UNKNOWN. This may happen to work by chance when address zero\ncontains readable lowcore data and the resulting empty os_info entry is\nignored by the dump kernel.\n\nSkip the os_info update when no re-IPL parameter block is available.\nKdump then collect the dump and reboot without setting re-IPL parameter\nblock.",
                 "severity": "LOW",
                 "status": "open",
                 "events": [
