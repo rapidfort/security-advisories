@@ -77063,7 +77063,7 @@
                 "cve_id": "CVE-2025-40256",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: also call xfrm_state_delete_tunnel at destroy time for states that were never added\n\nIn commit b441cf3f8c4b (\"xfrm: delete x->tunnel as we delete x\"), I\nmissed the case where state creation fails between full\ninitialization (->init_state has been called) and being inserted on\nthe lists.\n\nIn this situation, ->init_state has been called, so for IPcomp\ntunnels, the fallback tunnel has been created and added onto the\nlists, but the user state never gets added, because we fail before\nthat. The user state doesn't go through __xfrm_state_delete, so we\ndon't call xfrm_state_delete_tunnel for those states, and we end up\nleaking the FB tunnel.\n\nThere are several codepaths affected by this: the add/update paths, in\nboth net/key and xfrm, and the migrate code (xfrm_migrate,\nxfrm_state_migrate). A \"proper\" rollback of the init_state work would\nprobably be doable in the add/update code, but for migrate it gets\nmore complicated as multiple states may be involved.\n\nAt some point, the new (not-inserted) state will be destroyed, so call\nxfrm_state_delete_tunnel during xfrm_state_gc_destroy. Most states\nwill have their fallback tunnel cleaned up during __xfrm_state_delete,\nwhich solves the issue that b441cf3f8c4b (and other patches before it)\naimed at. All states (including FB tunnels) will be removed from the\nlists once xfrm_state_fini has called flush_work(&xfrm_state_gc_work).",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114233,7 +114233,7 @@
                 "cve_id": "CVE-2026-80742",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_packet: Don't send zero-byte data in tpacket_snd().\n\nsyzbot reported a WARNING in __dev_queue_xmit() triggered via tpacket_snd():\n\nskb_assert_len\nWARNING: at include/linux/skbuff.h:2753 skb_assert_len\nWARNING: at __dev_queue_xmit+0x21bc/0x4970 net/core/dev.c:4781\n\nCall Trace:\n <TASK>\n dev_queue_xmit include/linux/netdevice.h:3448 [inline]\n packet_xmit+0x243/0x310 net/packet/af_packet.c:276\n tpacket_snd net/packet/af_packet.c:2907 [inline]\n packet_sendmsg+0x28d6/0x4eb0 net/packet/af_packet.c:3134\n\nWhen sending 0-byte packets via TPACKET ring buffer on devices with no\nhard header (e.g. dev->hard_header_len == 0), tpacket_fill_skb()\npopulates an skb with skb->len == 0 and returns 0. tpacket_snd() then\nforwards this empty skb to packet_xmit(), causing __dev_queue_xmit() to\nhit skb_assert_len(skb).\n\nSimilar checks exist in packet_snd() via commit dc633700f00f\n(\"net/af_packet: check len when min_header_len equals to 0\") and in\npacket_sendmsg_spkt() via commit 6a341729fb31 (\"af_packet: Don't send\nzero-byte data in packet_sendmsg_spkt().\").\n\nReturn -EINVAL in tpacket_fill_skb() when skb->len is zero to reject\nzero-length packets in tpacket_snd().",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114303,7 +114303,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114344,7 +114344,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114483,7 +114483,7 @@
                 "cve_id": "CVE-2026-80806",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: don't enable DAX on new encrypted files\n\nCurrently, when a new encrypted regular file is created, the call to\next4_set_inode_flags(inode, init=true) in __ext4_new_inode() is made\nbefore EXT4_INODE_ENCRYPT is set.  As a result, it can set S_DAX if the\nfilesystem is mounted with \"-o dax=always\".\n\nEXT4_INODE_ENCRYPT then actually gets set a bit later in\n__ext4_new_inode(), when it calls fscrypt_set_context() which calls\next4_set_context().  ext4_set_context() sets EXT4_INODE_ENCRYPT and\ncalls ext4_set_inode_flags(inode, init=false) to set S_ENCRYPTED too.\n\nThis was intended to clear S_DAX as well.  However, this was broken by\ncommit 043546e46dc7 (\"fs/ext4: Only change S_DAX on inode load\").  This\ncauses data written to the file to bypass encryption, also causing\nxfstests failures such as generic/548 (when \"-o dax=always\" is used).\n\nFix this by simplifying the flow by making __ext4_new_inode() set\nEXT4_INODE_ENCRYPT earlier.  This makes it take effect in\next4_set_inode_flags(inode, init=true), making S_DAX never be set.\n\nSimilarly, make EXT4_STATE_MAY_INLINE_DATA never be set in the first\nplace on new encrypted inodes.  Then it doesn't need to be cleared.\n\nAs a result of these simplifications, ext4_set_context() no longer needs\nto change inode flags or state when 'handle != NULL'.  Remove that too.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114581,7 +114581,7 @@
                 "cve_id": "CVE-2026-80827",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: option: fix slab OOB read in interrupt URB callback\n\nThe interrupt URB buffer is allocated in setup_port_interrupt_in() based\non the endpoint's wMaxPacketSize:\n\n    buffer_size = usb_endpoint_maxp(epd);\n    port->interrupt_in_buffer = kmalloc(buffer_size, GFP_KERNEL);\n\nWhen a USB device declares wMaxPacketSize = 8 on its interrupt IN\nendpoint, the buffer is allocated from kmalloc-8 cache (exactly\n8 bytes).\n\nIf the device sends a short packet (actual_length < wMaxPacketSize),\nthe URB completes with status == 0 and the callback proceeds to read:\n\n    data[sizeof(struct usb_ctrlrequest)]\n\nwhich evaluates to data[8], accessing 1 byte beyond the allocated 8-byte\nbuffer. This results in a slab out-of-bounds read.\n\nFix this by adding the missing bounds check: first verify that the\nactual length is large enough to contain the struct usb_ctrlrequest\nheader before accessing req_pkt->bRequestType and req_pkt->bRequest,\nand then verify that there is an additional byte for the modem signal\nstate before reading data[sizeof(struct usb_ctrlrequest)] inside the\nconditional.  Use sizeof(*req_pkt) instead of sizeof(struct\nusb_ctrlrequest) for consistency.\n\n[ johan: use dev_err(); split signals declaration and initialisation ]",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -114623,7 +114623,7 @@
                 "cve_id": "CVE-2026-80830",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: Add lock to usb_wakeup_notification()\n\nAdd a spin lock to usb_wakeup notification to prevent a race condition\nwith dereferencing freed memory. This could be hit by the xHCI driver as\nit calls this function from an IRQ and could race with the\nhub_disconnect() function, which properly grabs this lock to protect the\nstate of the device.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114908,7 +114908,7 @@
                 "cve_id": "CVE-2026-80906",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: packet: fix wrong transport_header when sending VLAN-tagged frame\n\nIn packet_parse_headers(), when processing a VLAN-tagged frame,\nskb_set_network_header() is called to advance network_header past the\nVLAN tag to the inner protocol header. skb_probe_transport_header() is\nthen called with skb->protocol still set to the outer VLAN EtherType\n(e.g. ETH_P_8021Q), while nhoff (derived from skb_network_offset())\nalready points past the VLAN tag to the inner protocol header.\n\nIn __skb_flow_dissect(), proto is initialized to ETH_P_8021Q and nhoff\npoints past the VLAN tag. When the dissector hits case ETH_P_8021Q, it\nreads a struct vlan_hdr at nhoff via __skb_header_pointer(), but that\noffset contains the inner protocol header (e.g. an IP header). The bytes\nare misinterpreted as a VLAN header, yielding a garbage encapsulated\nEtherType that matches no known protocol. The dissector returns false,\nso skb_probe_transport_header() never calls skb_set_transport_header(),\nleaving transport_header at its uninitialized sentinel value (~0U).\n\nMove skb_probe_transport_header() to before skb_set_network_header(). At\nthe time skb_probe_transport_header() is called, network_header still\npoints to the VLAN header, so nhoff correctly points to the VLAN header.\nThe flow dissector can then parse the VLAN header, extract the inner\nEtherType, and advance nhoff to the inner protocol header, allowing\ntransport_header to be set correctly.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114978,7 +114978,7 @@
                 "cve_id": "CVE-2026-80917",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: host-generic: Fix NULL pointer dereference on 32-bit CAM systems\n\nOn 32-bit systems the config space is too large to ioremap in one go, so\npci_ecam_create() maps each bus segment separately and relies on the\n->add_bus callback (pci_ecam_add_bus) to populate the per-bus mapping in\ncfg->winp[]. pci_ecam_map_bus() then uses that mapping as the base for\nevery config access.\n\nThe generic ECAM ops (pci_generic_ecam_ops) already provide the ->add_bus\nand ->remove_bus callbacks, but the CAM (legacy) ops in pci-host-generic.c\ndo not. As a result, on a 32-bit host using \"pci-host-cam-generic\" the\nper-bus mapping is never set up and the first config read dereferences a\nNULL base, crashing during bus enumeration:\n\n Unable to handle kernel NULL pointer dereference at virtual address 00000800\n Oops [#1]\n CPU: 0 PID: 1 Comm: swapper Not tainted 6.9.7+ #43\n Hardware name: Digilent Nexys-Video-A7 RV32 (DT)\n epc : pci_generic_config_read+0x40/0xb0\n  ra : pci_generic_config_read+0x2c/0xb0\n [<c038db9c>] pci_generic_config_read+0x40/0xb0\n [<c038da04>] pci_bus_read_config_dword+0x50/0xb0\n [<c0391e94>] pci_bus_generic_read_dev_vendor_id+0x3c/0x1ec\n [<c039245c>] pci_scan_single_device+0xa4/0x11c\n [<c0392570>] pci_scan_slot+0x9c/0x23c\n [<c039388c>] pci_scan_child_bus_extend+0x58/0x2f4\n [<c0393db0>] pci_scan_root_bus_bridge+0x64/0xe8\n [<c0393e54>] pci_host_probe+0x20/0xc8\n [<c03bc6f4>] pci_host_common_probe+0x144/0x1e4\n\nFix this by giving the CAM ops the same ->add_bus/->remove_bus callbacks.\nSince pci_ecam_add_bus() and pci_ecam_remove_bus() are static to ecam.c,\nmove the CAM ops definition there as pci_generic_cam_ops (mirroring\npci_generic_ecam_ops) and export it for pci-host-generic.c to reference.\n\n[mani: removed timestamp from log]",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114992,7 +114992,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -184403,7 +184403,7 @@
                 "cve_id": "CVE-2025-40256",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: also call xfrm_state_delete_tunnel at destroy time for states that were never added\n\nIn commit b441cf3f8c4b (\"xfrm: delete x->tunnel as we delete x\"), I\nmissed the case where state creation fails between full\ninitialization (->init_state has been called) and being inserted on\nthe lists.\n\nIn this situation, ->init_state has been called, so for IPcomp\ntunnels, the fallback tunnel has been created and added onto the\nlists, but the user state never gets added, because we fail before\nthat. The user state doesn't go through __xfrm_state_delete, so we\ndon't call xfrm_state_delete_tunnel for those states, and we end up\nleaking the FB tunnel.\n\nThere are several codepaths affected by this: the add/update paths, in\nboth net/key and xfrm, and the migrate code (xfrm_migrate,\nxfrm_state_migrate). A \"proper\" rollback of the init_state work would\nprobably be doable in the add/update code, but for migrate it gets\nmore complicated as multiple states may be involved.\n\nAt some point, the new (not-inserted) state will be destroyed, so call\nxfrm_state_delete_tunnel during xfrm_state_gc_destroy. Most states\nwill have their fallback tunnel cleaned up during __xfrm_state_delete,\nwhich solves the issue that b441cf3f8c4b (and other patches before it)\naimed at. All states (including FB tunnels) will be removed from the\nlists once xfrm_state_fini has called flush_work(&xfrm_state_gc_work).",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -209774,7 +209774,7 @@
                 "cve_id": "CVE-2026-80742",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_packet: Don't send zero-byte data in tpacket_snd().\n\nsyzbot reported a WARNING in __dev_queue_xmit() triggered via tpacket_snd():\n\nskb_assert_len\nWARNING: at include/linux/skbuff.h:2753 skb_assert_len\nWARNING: at __dev_queue_xmit+0x21bc/0x4970 net/core/dev.c:4781\n\nCall Trace:\n <TASK>\n dev_queue_xmit include/linux/netdevice.h:3448 [inline]\n packet_xmit+0x243/0x310 net/packet/af_packet.c:276\n tpacket_snd net/packet/af_packet.c:2907 [inline]\n packet_sendmsg+0x28d6/0x4eb0 net/packet/af_packet.c:3134\n\nWhen sending 0-byte packets via TPACKET ring buffer on devices with no\nhard header (e.g. dev->hard_header_len == 0), tpacket_fill_skb()\npopulates an skb with skb->len == 0 and returns 0. tpacket_snd() then\nforwards this empty skb to packet_xmit(), causing __dev_queue_xmit() to\nhit skb_assert_len(skb).\n\nSimilar checks exist in packet_snd() via commit dc633700f00f\n(\"net/af_packet: check len when min_header_len equals to 0\") and in\npacket_sendmsg_spkt() via commit 6a341729fb31 (\"af_packet: Don't send\nzero-byte data in packet_sendmsg_spkt().\").\n\nReturn -EINVAL in tpacket_fill_skb() when skb->len is zero to reject\nzero-length packets in tpacket_snd().",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -209844,7 +209844,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -209872,7 +209872,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -209998,7 +209998,7 @@
                 "cve_id": "CVE-2026-80806",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: don't enable DAX on new encrypted files\n\nCurrently, when a new encrypted regular file is created, the call to\next4_set_inode_flags(inode, init=true) in __ext4_new_inode() is made\nbefore EXT4_INODE_ENCRYPT is set.  As a result, it can set S_DAX if the\nfilesystem is mounted with \"-o dax=always\".\n\nEXT4_INODE_ENCRYPT then actually gets set a bit later in\n__ext4_new_inode(), when it calls fscrypt_set_context() which calls\next4_set_context().  ext4_set_context() sets EXT4_INODE_ENCRYPT and\ncalls ext4_set_inode_flags(inode, init=false) to set S_ENCRYPTED too.\n\nThis was intended to clear S_DAX as well.  However, this was broken by\ncommit 043546e46dc7 (\"fs/ext4: Only change S_DAX on inode load\").  This\ncauses data written to the file to bypass encryption, also causing\nxfstests failures such as generic/548 (when \"-o dax=always\" is used).\n\nFix this by simplifying the flow by making __ext4_new_inode() set\nEXT4_INODE_ENCRYPT earlier.  This makes it take effect in\next4_set_inode_flags(inode, init=true), making S_DAX never be set.\n\nSimilarly, make EXT4_STATE_MAY_INLINE_DATA never be set in the first\nplace on new encrypted inodes.  Then it doesn't need to be cleared.\n\nAs a result of these simplifications, ext4_set_context() no longer needs\nto change inode flags or state when 'handle != NULL'.  Remove that too.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -210096,7 +210096,7 @@
                 "cve_id": "CVE-2026-80827",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: option: fix slab OOB read in interrupt URB callback\n\nThe interrupt URB buffer is allocated in setup_port_interrupt_in() based\non the endpoint's wMaxPacketSize:\n\n    buffer_size = usb_endpoint_maxp(epd);\n    port->interrupt_in_buffer = kmalloc(buffer_size, GFP_KERNEL);\n\nWhen a USB device declares wMaxPacketSize = 8 on its interrupt IN\nendpoint, the buffer is allocated from kmalloc-8 cache (exactly\n8 bytes).\n\nIf the device sends a short packet (actual_length < wMaxPacketSize),\nthe URB completes with status == 0 and the callback proceeds to read:\n\n    data[sizeof(struct usb_ctrlrequest)]\n\nwhich evaluates to data[8], accessing 1 byte beyond the allocated 8-byte\nbuffer. This results in a slab out-of-bounds read.\n\nFix this by adding the missing bounds check: first verify that the\nactual length is large enough to contain the struct usb_ctrlrequest\nheader before accessing req_pkt->bRequestType and req_pkt->bRequest,\nand then verify that there is an additional byte for the modem signal\nstate before reading data[sizeof(struct usb_ctrlrequest)] inside the\nconditional.  Use sizeof(*req_pkt) instead of sizeof(struct\nusb_ctrlrequest) for consistency.\n\n[ johan: use dev_err(); split signals declaration and initialisation ]",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -210138,7 +210138,7 @@
                 "cve_id": "CVE-2026-80830",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: Add lock to usb_wakeup_notification()\n\nAdd a spin lock to usb_wakeup notification to prevent a race condition\nwith dereferencing freed memory. This could be hit by the xHCI driver as\nit calls this function from an IRQ and could race with the\nhub_disconnect() function, which properly grabs this lock to protect the\nstate of the device.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -210358,7 +210358,7 @@
                 "cve_id": "CVE-2026-80906",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: packet: fix wrong transport_header when sending VLAN-tagged frame\n\nIn packet_parse_headers(), when processing a VLAN-tagged frame,\nskb_set_network_header() is called to advance network_header past the\nVLAN tag to the inner protocol header. skb_probe_transport_header() is\nthen called with skb->protocol still set to the outer VLAN EtherType\n(e.g. ETH_P_8021Q), while nhoff (derived from skb_network_offset())\nalready points past the VLAN tag to the inner protocol header.\n\nIn __skb_flow_dissect(), proto is initialized to ETH_P_8021Q and nhoff\npoints past the VLAN tag. When the dissector hits case ETH_P_8021Q, it\nreads a struct vlan_hdr at nhoff via __skb_header_pointer(), but that\noffset contains the inner protocol header (e.g. an IP header). The bytes\nare misinterpreted as a VLAN header, yielding a garbage encapsulated\nEtherType that matches no known protocol. The dissector returns false,\nso skb_probe_transport_header() never calls skb_set_transport_header(),\nleaving transport_header at its uninitialized sentinel value (~0U).\n\nMove skb_probe_transport_header() to before skb_set_network_header(). At\nthe time skb_probe_transport_header() is called, network_header still\npoints to the VLAN header, so nhoff correctly points to the VLAN header.\nThe flow dissector can then parse the VLAN header, extract the inner\nEtherType, and advance nhoff to the inner protocol header, allowing\ntransport_header to be set correctly.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -210428,7 +210428,7 @@
                 "cve_id": "CVE-2026-80917",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: host-generic: Fix NULL pointer dereference on 32-bit CAM systems\n\nOn 32-bit systems the config space is too large to ioremap in one go, so\npci_ecam_create() maps each bus segment separately and relies on the\n->add_bus callback (pci_ecam_add_bus) to populate the per-bus mapping in\ncfg->winp[]. pci_ecam_map_bus() then uses that mapping as the base for\nevery config access.\n\nThe generic ECAM ops (pci_generic_ecam_ops) already provide the ->add_bus\nand ->remove_bus callbacks, but the CAM (legacy) ops in pci-host-generic.c\ndo not. As a result, on a 32-bit host using \"pci-host-cam-generic\" the\nper-bus mapping is never set up and the first config read dereferences a\nNULL base, crashing during bus enumeration:\n\n Unable to handle kernel NULL pointer dereference at virtual address 00000800\n Oops [#1]\n CPU: 0 PID: 1 Comm: swapper Not tainted 6.9.7+ #43\n Hardware name: Digilent Nexys-Video-A7 RV32 (DT)\n epc : pci_generic_config_read+0x40/0xb0\n  ra : pci_generic_config_read+0x2c/0xb0\n [<c038db9c>] pci_generic_config_read+0x40/0xb0\n [<c038da04>] pci_bus_read_config_dword+0x50/0xb0\n [<c0391e94>] pci_bus_generic_read_dev_vendor_id+0x3c/0x1ec\n [<c039245c>] pci_scan_single_device+0xa4/0x11c\n [<c0392570>] pci_scan_slot+0x9c/0x23c\n [<c039388c>] pci_scan_child_bus_extend+0x58/0x2f4\n [<c0393db0>] pci_scan_root_bus_bridge+0x64/0xe8\n [<c0393e54>] pci_host_probe+0x20/0xc8\n [<c03bc6f4>] pci_host_common_probe+0x144/0x1e4\n\nFix this by giving the CAM ops the same ->add_bus/->remove_bus callbacks.\nSince pci_ecam_add_bus() and pci_ecam_remove_bus() are static to ecam.c,\nmove the CAM ops definition there as pci_generic_cam_ops (mirroring\npci_generic_ecam_ops) and export it for pci-host-generic.c to reference.\n\n[mani: removed timestamp from log]",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -210442,7 +210442,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
