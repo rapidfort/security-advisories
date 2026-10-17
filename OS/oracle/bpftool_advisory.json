@@ -59534,7 +59534,7 @@
                 "cve_id": "CVE-2025-68325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_cake: Fix incorrect qlen reduction in cake_drop\n\nIn cake_drop(), qdisc_tree_reduce_backlog() is used to update the qlen\nand backlog of the qdisc hierarchy. Its caller, cake_enqueue(), assumes\nthat the parent qdisc will enqueue the current packet. However, this\nassumption breaks when cake_enqueue() returns NET_XMIT_CN: the parent\nqdisc stops enqueuing current packet, leaving the tree qlen/backlog\naccounting inconsistent. This mismatch can lead to a NULL dereference\n(e.g., when the parent Qdisc is qfq_qdisc).\n\nThis patch computes the qlen/backlog delta in a more robust way by\nobserving the difference before and after the series of cake_drop()\ncalls, and then compensates the qdisc tree accounting if cake_enqueue()\nreturns NET_XMIT_CN.\n\nTo ensure correct compensation when ACK thinning is enabled, a new\nvariable is introduced to keep qlen unchanged.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -74264,7 +74264,7 @@
                 "cve_id": "CVE-2026-64593",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: do not trim a device which is not writeable\n\n[BUG]\nThere is a bug report that btrfs/242 can randomly fail with the\nfollowing NULL pointer dereference:\n\n  run fstests btrfs/242 at 2026-06-01 10:25:08\n  BTRFS: device fsid d4d7f234-487c-4787-88e4-47a8b68c9874 devid 1 transid 9 /dev/sdc (8:32) scanned by mount (122609)\n  BTRFS info (device sdc): first mount of filesystem d4d7f234-487c-4787-88e4-47a8b68c9874\n  BTRFS info (device sdc): using crc32c checksum algorithm\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS info (device sdc): allowing degraded mounts\n  BTRFS info (device sdc): turning on async discard\n  BTRFS info (device sdc): enabling free space tree\n  Unable to handle kernel NULL pointer dereference at virtual address 0000000000000018\n  user pgtable: 4k pages, 48-bit VAs, pgdp=000000013fd6b000\n  CPU: 4 UID: 0 PID: 122625 Comm: fstrim Not tainted 7.0.10-2-default #1 PREEMPT(full) openSUSE Tumbleweed e9a5f6b24978fba3bf015a992f865837fdfff3dd\n  Hardware name: QEMU KVM Virtual Machine, BIOS edk2-20250812-19.fc42 08/12/2025\n  pstate: 01400005 (nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)\n  pc : btrfs_trim_fs+0x34c/0xa00 [btrfs]\n  lr : btrfs_trim_fs+0x1f0/0xa00 [btrfs]\n  Call trace:\n   btrfs_trim_fs+0x34c/0xa00 [btrfs f02c1d570ceea621c69d302ba75dd61868083840] (P)\n   btrfs_ioctl_fitrim+0xe8/0x178 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   btrfs_ioctl+0xdd4/0x2bd8 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   __arm64_sys_ioctl+0xac/0x108\n   invoke_syscall.constprop.0+0x5c/0xd0\n   el0_svc_common.constprop.0+0x40/0xf0\n   do_el0_svc+0x24/0x40\n   el0_svc+0x40/0x1d0\n   el0t_64_sync_handler+0xa0/0xe8\n   el0t_64_sync+0x1b0/0x1b8\n  Code: 17ffff83 f94017e0 f9002be0 f9402ea0 (f9400c00)\n  ---[ end trace 0000000000000000  ]---\n\nAlso the reporter is very kind to test the following ASSERT() added to\nbtrfs_trim_free_extents_throttle():\n\n\tASSERT(device->bdev,\n\t       \"devid=%llu path=%s dev_state=0x%lx\\n\",\n\t       device->devid, btrfs_dev_name(device), device->dev_state);\n\nAnd it shows the following output:\n\n  assertion failed: device->bdev, in extent-tree.c:6630 (devid=2 path=/dev/sdd dev_state=0x82)\n\nWhich means the device->bdev is NULL, and the dev_state is\nBTRFS_DEV_STATE_IN_FS_METADATA | BTRFS_DEV_STATE_ITEM_FOUND, without\nBTRFS_DEV_STATE_WRITEABLE flag set.\n\n[CAUSE]\nThe pc points to the following call chain:\n\n  btrfs_trim_fs()\n  |- btrfs_trim_free_extents()\n     |- btrfs_trim_free_extents_throttle()\n        |- bdev_max_discard_sectors(device->bdev)\n\nSo the NULL pointer dereference is caused by device->bdev being NULL.\n\nThis looks impossible by a quick glance, as just before calling\nbtrfs_trim_free_extents_throttle(), we have skipped any device that has\nBTRFS_DEV_STATE_MISSING flag set.\n\nHowever in this particular case, there is a window where the missing\ndevice is later re-scanned, causing btrfs to remove the\nBTRFS_DEV_STATE_MISSING flag:\n\n  btrfs_control_ioctl()\n  |- btrfs_scan_one_device()\n     |- device_list_add()\n        |- rcu_assign_pointer(device->name, name);\n        |  This updates the missing device's path to the new good path.\n        |\n        |- clear_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state)\n           This removes the BTRFS_DEV_STATE_MISSING flag.\n\nThis allows the missing device to re-appear and clear the\nBTRFS_DEV_STATE_MISSING flag.  However the device still does not have\nthe BTRFS_DEV_STATE_WRITEABLE flag set, nor is its bdev pointer updated.\n\nThe bdev pointer remains NULL, triggering the crash later.\n\n[FIX]\nThis is a big de-synchronization between BTRFS_DEV_STATE_MISSING and\ndevice->bdev pointer, and shows a gap in btrfs's re-appearing-device\nhandling.\n\nThe proper handling of re-appearing device will need quite some extra\nwork, which is out of the context of this small\n---truncated---",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -74306,7 +74306,7 @@
                 "cve_id": "CVE-2026-64604",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: VMX: Grab vmcs12 on CR8 interception update iff vCPU is in guest mode\n\nWhen updating CR8 intercepts, get vmcs12 if and only if the vCPU is in\nguest mode so that a future change can have update CR8 intercepts during\nvCPU creation, without running afoul of get_vmcs12()'s lockdep assertion.\n\n  ------------[ cut here ]------------\n  debug_locks && !(lock_is_held(&(&vcpu->mutex)->dep_map) || !refcount_read(&vcpu->kvm->users_count))\n  WARNING: arch/x86/kvm/vmx/nested.h:61 at get_vmcs12 arch/x86/kvm/vmx/nested.h:60 [inline], CPU#0: syz.2.19/5879\n  WARNING: arch/x86/kvm/vmx/nested.h:61 at vmx_update_cr8_intercept+0x3de/0x4e0 arch/x86/kvm/vmx/vmx.c:6879, CPU#0: syz.2.19/5879\n  Modules linked in:\n  CPU: 0 UID: 0 PID: 5879 Comm: syz.2.19 Not tainted syzkaller #0 PREEMPT(full)\n  Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-debian-1.16.2-1 04/01/2014\n  RIP: 0010:get_vmcs12 arch/x86/kvm/vmx/nested.h:60 [inline]\n  RIP: 0010:vmx_update_cr8_intercept+0x3de/0x4e0 arch/x86/kvm/vmx/vmx.c:6879\n  Call Trace:\n   <TASK>\n   apic_update_ppr arch/x86/kvm/lapic.c:984 [inline]\n   kvm_lapic_reset+0x1c24/0x2980 arch/x86/kvm/lapic.c:3023\n   kvm_vcpu_reset+0x44c/0x1bf0 arch/x86/kvm/x86.c:12986\n   kvm_arch_vcpu_create+0x746/0x8b0 arch/x86/kvm/x86.c:12847\n   kvm_vm_ioctl_create_vcpu+0x428/0x930 virt/kvm/kvm_main.c:4201\n   kvm_vm_ioctl+0x893/0xd50 virt/kvm/kvm_main.c:5159\n   vfs_ioctl fs/ioctl.c:51 [inline]\n   __do_sys_ioctl fs/ioctl.c:597 [inline]\n   __se_sys_ioctl+0xfc/0x170 fs/ioctl.c:583\n   do_syscall_x64 arch/x86/entry/syscall_64.c:63 [inline]\n   do_syscall_64+0x174/0x580 arch/x86/entry/syscall_64.c:94\n   entry_SYSCALL_64_after_hwframe+0x77/0x7f\n   </TASK>\n\nNo functional change intended.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -75658,7 +75658,7 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "fixed": "0:5.15.0-325.220.5.el8uek",
+                        "fixed": "0:4.18.0-553.173.1.el8_10",
                         "identifier": "el8"
                     }
                 ]
@@ -83741,7 +83741,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -83839,7 +83839,7 @@
                 "cve_id": "CVE-2026-80793",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: reject undersized MTUs in ip_do_fragment()\n\nip_do_fragment() subtracts the IPv4 header length from the effective\nMTU and passes the resulting payload MTU to ip_frag_next().\n\nIf the effective MTU is smaller than hlen + 8, ip_frag_next() rounds\nthe fragment payload length down to zero. The fragmentation state then\nnever makes forward progress: state->left, state->ptr and state->offset\nstay unchanged while ip_do_fragment() keeps allocating and transmitting\nheader-only fragments until the softlockup detector fires.\n\nThis is reproducible with a route installed using \"mtu lock 20\", but it\nis also reproducible without route MTU lock, for example by forwarding a\npacket to a device whose MTU is 20.\n\nFix it in ip_do_fragment() by rejecting mtu < hlen + 8 with -EMSGSIZE,\nmatching the existing IPv6 fragmentation check.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -83853,7 +83853,7 @@
                 "cve_id": "CVE-2026-80805",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: validate attr entry pointer before field access\n\nxfs_attr3_leaf_verify_entry() accesses lentry/rentry fields (namelen,\nvaluelen) before checking if the entry pointer itself is within bounds.\nIf nameidx is crafted to point near the end of the buffer, these field\naccesses can read out-of-bounds before the bounds check at\nname_end > buf_end is performed.\n\nAdd explicit bounds checks for entry pointers before accessing their\nfields. Use offsetof() to check that the start of the flexible array\nmember (nameval/name) is within bounds, which ensures all preceding\nfields are safe to access.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -83965,7 +83965,7 @@
                 "cve_id": "CVE-2026-80827",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: option: fix slab OOB read in interrupt URB callback\n\nThe interrupt URB buffer is allocated in setup_port_interrupt_in() based\non the endpoint's wMaxPacketSize:\n\n    buffer_size = usb_endpoint_maxp(epd);\n    port->interrupt_in_buffer = kmalloc(buffer_size, GFP_KERNEL);\n\nWhen a USB device declares wMaxPacketSize = 8 on its interrupt IN\nendpoint, the buffer is allocated from kmalloc-8 cache (exactly\n8 bytes).\n\nIf the device sends a short packet (actual_length < wMaxPacketSize),\nthe URB completes with status == 0 and the callback proceeds to read:\n\n    data[sizeof(struct usb_ctrlrequest)]\n\nwhich evaluates to data[8], accessing 1 byte beyond the allocated 8-byte\nbuffer. This results in a slab out-of-bounds read.\n\nFix this by adding the missing bounds check: first verify that the\nactual length is large enough to contain the struct usb_ctrlrequest\nheader before accessing req_pkt->bRequestType and req_pkt->bRequest,\nand then verify that there is an additional byte for the modem signal\nstate before reading data[sizeof(struct usb_ctrlrequest)] inside the\nconditional.  Use sizeof(*req_pkt) instead of sizeof(struct\nusb_ctrlrequest) for consistency.\n\n[ johan: use dev_err(); split signals declaration and initialisation ]",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -84227,7 +84227,7 @@
                 "cve_id": "CVE-2026-80906",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: packet: fix wrong transport_header when sending VLAN-tagged frame\n\nIn packet_parse_headers(), when processing a VLAN-tagged frame,\nskb_set_network_header() is called to advance network_header past the\nVLAN tag to the inner protocol header. skb_probe_transport_header() is\nthen called with skb->protocol still set to the outer VLAN EtherType\n(e.g. ETH_P_8021Q), while nhoff (derived from skb_network_offset())\nalready points past the VLAN tag to the inner protocol header.\n\nIn __skb_flow_dissect(), proto is initialized to ETH_P_8021Q and nhoff\npoints past the VLAN tag. When the dissector hits case ETH_P_8021Q, it\nreads a struct vlan_hdr at nhoff via __skb_header_pointer(), but that\noffset contains the inner protocol header (e.g. an IP header). The bytes\nare misinterpreted as a VLAN header, yielding a garbage encapsulated\nEtherType that matches no known protocol. The dissector returns false,\nso skb_probe_transport_header() never calls skb_set_transport_header(),\nleaving transport_header at its uninitialized sentinel value (~0U).\n\nMove skb_probe_transport_header() to before skb_set_network_header(). At\nthe time skb_probe_transport_header() is called, network_header still\npoints to the VLAN header, so nhoff correctly points to the VLAN header.\nThe flow dissector can then parse the VLAN header, extract the inner\nEtherType, and advance nhoff to the inner protocol header, allowing\ntransport_header to be set correctly.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -84297,7 +84297,7 @@
                 "cve_id": "CVE-2026-80917",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: host-generic: Fix NULL pointer dereference on 32-bit CAM systems\n\nOn 32-bit systems the config space is too large to ioremap in one go, so\npci_ecam_create() maps each bus segment separately and relies on the\n->add_bus callback (pci_ecam_add_bus) to populate the per-bus mapping in\ncfg->winp[]. pci_ecam_map_bus() then uses that mapping as the base for\nevery config access.\n\nThe generic ECAM ops (pci_generic_ecam_ops) already provide the ->add_bus\nand ->remove_bus callbacks, but the CAM (legacy) ops in pci-host-generic.c\ndo not. As a result, on a 32-bit host using \"pci-host-cam-generic\" the\nper-bus mapping is never set up and the first config read dereferences a\nNULL base, crashing during bus enumeration:\n\n Unable to handle kernel NULL pointer dereference at virtual address 00000800\n Oops [#1]\n CPU: 0 PID: 1 Comm: swapper Not tainted 6.9.7+ #43\n Hardware name: Digilent Nexys-Video-A7 RV32 (DT)\n epc : pci_generic_config_read+0x40/0xb0\n  ra : pci_generic_config_read+0x2c/0xb0\n [<c038db9c>] pci_generic_config_read+0x40/0xb0\n [<c038da04>] pci_bus_read_config_dword+0x50/0xb0\n [<c0391e94>] pci_bus_generic_read_dev_vendor_id+0x3c/0x1ec\n [<c039245c>] pci_scan_single_device+0xa4/0x11c\n [<c0392570>] pci_scan_slot+0x9c/0x23c\n [<c039388c>] pci_scan_child_bus_extend+0x58/0x2f4\n [<c0393db0>] pci_scan_root_bus_bridge+0x64/0xe8\n [<c0393e54>] pci_host_probe+0x20/0xc8\n [<c03bc6f4>] pci_host_common_probe+0x144/0x1e4\n\nFix this by giving the CAM ops the same ->add_bus/->remove_bus callbacks.\nSince pci_ecam_add_bus() and pci_ecam_remove_bus() are static to ecam.c,\nmove the CAM ops definition there as pci_generic_cam_ops (mirroring\npci_generic_ecam_ops) and export it for pci-host-generic.c to reference.\n\n[mani: removed timestamp from log]",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -84311,7 +84311,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -86001,6 +86001,32 @@
                     }
                 ]
             },
+            "CVE-2026-89783": {
+                "cve_id": "CVE-2026-89783",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm6: fix out-of-bounds write in xfrm6_input_addr() when secpath is full\n\nThe depth check in xfrm6_input_addr() is off by one:\n\n  if (1 + sp->len == XFRM_MAX_DEPTH)\n          goto drop;\n  ...\n  sp->xvec[sp->len++] = x;\n\nxfrm_input() can leave sp->len == XFRM_MAX_DEPTH, and the transport-mode\nreceive path re-enters IPv6 input via xfrm_trans_reinject() with that\nsecpath preserved. If the inner packet carries a destination-options HAO\noption or a type-2 routing header, xfrm6_input_addr() is called with\nsp->len == XFRM_MAX_DEPTH; the check (1 + 6 == 6) is false, so\nsp->xvec[sp->len++] writes one slot past the 6-element xvec[]. The write\nstays within the sec_path allocation (invisible to KASAN); UBSAN_BOUNDS\nflags it and panics under panic_on_warn.\n\nUse \"sp->len >= XFRM_MAX_DEPTH\", matching xfrm_input(). This also\nrestores one chain level the old check rejected at sp->len == 5.\n\n  UBSAN: array-index-out-of-bounds in net/ipv6/xfrm6_input.c:309:10\n  index 6 is out of range for type 'xfrm_state *[6]'",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-89786": {
+                "cve_id": "CVE-2026-89786",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix out-of-bounds read in ext4_read_inline_dir()\n\next4_read_inline_dir() can read a dirent header past the end of its inline\nbuffer, triggering a slab-out-of-bounds read during getdents64():\n\n  BUG: KASAN: slab-out-of-bounds in __ext4_check_dir_entry\n  Read of size 2 at addr ffff88800f3dd23c by task exploit/148\n   ...\n   __ext4_check_dir_entry\n   ext4_read_inline_dir\n   iterate_dir\n\nThe dirent payload lives in a buffer of exactly inline_size bytes:\n\n\tdir_buf = kmalloc(inline_size, GFP_NOFS);\n\nbut iteration runs in a position space extra_offset bytes larger\n(extra_size = extra_offset + inline_size) so the synthetic \".\" and \"..\"\nland at their block-dir offsets. A dirent is formed at \"dir_buf + pos -\nextra_offset\", yet the ext4_check_dir_entry() length argument uses the\nlarger extra_size. A position whose dirent header would extend past\nextra_size is therefore accepted, and the rescan loop's rec_len probe and\next4_check_dir_entry() dereference de->rec_len before the entry is rejected.\n\nReject a position whose minimum-size dirent header would not fit within\nextra_size before forming de, in both the rescan and main loops, and pass\ninline_size rather than extra_size to ext4_check_dir_entry() so the length\ncheck matches the physical buffer.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-89816": {
                 "cve_id": "CVE-2026-89816",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -86079,6 +86105,19 @@
                     }
                 ]
             },
+            "CVE-2026-89930": {
+                "cve_id": "CVE-2026-89930",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: nVMX: Service local TLB flushes on failed nested VM-Enter\n\nKVM services local TLB flushes on \"full\" nested VM-Exits (through\n__nested_vmx_vmexit()), but not if a nested VM-Enter fails (e.g. due to\nfailed VMCS checks in nested_vmx_enter_non_root_mode()).\n\nHowever, it is possible that KVM had queued TLB flushes that need to be\nperformed, even if the nested VM-Enter was not successful. For example,\nif VPID is disabled for L2 (via nested_vmx_transition_tlb_flush(), or if\nvia the MSR load lists, as the SDM says:\n\n  If any MSR is being loaded in such a way that would architecturally\n  require a TLB flush, the TLBs are updated so that, after VM entry, the\n  logical processor will not use any translations that were cached before\n  the transition.\n\nThe SDM is unclear about when the TLB flush should occur, and whether or\nnot a failed VM entry would flush the TLB, so it is safer to always\ndo the TLB flush in this case.\n\nMore concretely, KVM also updates the last VPID L1 used for L2 in\nnested_vmx_transition_tlb_flush() (i.e. last_vpid), even if the VM entry\nultimately fails. With the current code, KVM could miss a TLB flush if\nL1 changes L2's VPID, then does a failed VM entry followed by a\nsuccessful one, as the failed VM entry would update last_vpid but not\nactually flush the TLB. Servicing local TLB flushes on failed VM entries\nmakes sure that the TLB is always flushed when last_vpid is updated.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-89932": {
                 "cve_id": "CVE-2026-89932",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -86105,11 +86144,37 @@
                     }
                 ]
             },
+            "CVE-2026-89965": {
+                "cve_id": "CVE-2026-89965",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvdimm/btt: reject an arena whose nfree is below the lane count\n\nThe BTT info block's nfree field, the number of reserve free blocks, is\nread from the medium without validation.  btt_freelist_init() and\nbtt_rtt_init() size the per-lane freelist[] and rtt[] arrays by nfree,\nbut the I/O path indexes them by the lane from nd_region_acquire_lane(),\nwhich is bounded by nd_region->num_lanes (ND_MAX_LANES), not by nfree.\nA crafted or foreign arena whose nfree is below the lane count makes\nfreelist[lane]/rtt[lane] run past the allocation: an out-of-bounds write.\n\nbtt.rst documents the nlanes = min(nfree, num_cpus) invariant, which the\ncode does not currently honor: num_lanes is ND_MAX_LANES regardless of\nnfree.  Reject an arena whose nfree is below num_lanes at discovery,\nbefore the per-lane arrays are allocated, enforcing that invariant.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-89982": {
                 "cve_id": "CVE-2026-89982",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: mux: Fix channel node leak on adapter add failure\n\ni2c_mux_add_adapter() takes a reference to the Device Tree channel node\nbefore registering the new adapter. If adapter registration fails, the\nerror path frees the private data without dropping that reference.\n\nRelease the channel node before freeing the private data.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-90011": {
+                "cve_id": "CVE-2026-90011",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: iscsi: Reserve a terminator byte for the login payload\n\niscsi_target_check_login_request() rejects a login PDU whose\nDataSegmentLength exceeds MAX_KEY_VALUE_PAIRS, but the test is '>' and\nlogin->req_buf is allocated with exactly MAX_KEY_VALUE_PAIRS\nbytes. Since iscsit_get_login_rx() receives payload_length + padding\nbytes, where\n\n\tpadding = ((-payload_length) & 3);\n\nany payload_length from 8189 to 8192 fills the whole 8192 byte\nbuffer. The write stays in bounds, but no byte is left for a NUL\nterminator.\n\nThe buffer is subsequently consumed as a C string. In the CHAP path\nchap_check_algorithm() calls kstrdup(a_str), and extract_param() calls\nstrstr(in_buf, pattern) followed by strlen_semi(), none of which take a\nlength. convert_null_to_semi() additionally rewrites every embedded NUL\nto ';', so even a payload made of well formed NUL separated key=value\nrecords is left without a terminator. These walk past the end of the\nobject into adjacent slab memory. It is reachable by an unauthenticated\ninitiator against a portal configured for CHAP; when authentication is\nnot required iscsi_login_zero_tsih_s2() rewrites AuthMethod to None and\nthe CHAP path is never entered.\n\nAllocate one extra byte. kzalloc() zeroes it and nothing ever writes to\nit, as every writer copies to offset 0 for at most MAX_KEY_VALUE_PAIRS\nbytes, so the buffer is always terminated.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -87215,6 +87280,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-fc: unmap cmd_iu DMA on rsp_iu mapping failure in init_request\n\n__nvme_fc_init_request() maps cmd_iu and then rsp_iu for DMA. If the\nrsp_iu mapping fails, the original code only recorded the error and fell\nthrough: it left the already-mapped cmd_iu unmapped and still marked the\nop as FCPOP_STATE_IDLE before returning. Since blk-mq does not call\n.exit_request() when .init_request() fails, the cmd_iu mapping is leaked\nfor every op whose rsp_iu mapping fails.\n\nJump to an error path on rsp_iu mapping failure that unmaps cmd_iu and\nreturns the error without marking the op idle, so it stays in the\nFCPOP_STATE_UNINIT state set by the initial memset().",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-90414": {
+                "cve_id": "CVE-2026-90414",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: reject PDUs declaring more data than was received\n\nisert_recv_done() hands each received PDU to the opcode handlers without\never looking at wc->byte_len, the number of bytes the HCA actually placed\nin the receive descriptor. The handlers then copy that many bytes - the\ndata-segment length the initiator declared in the BHS\n(ntoh24(hdr->dlength), via the derived unsol_data_len / imm_data_len) -\nout of the fixed-size descriptor:\n\n  isert_handle_iscsi_dataout():\n        sg_copy_from_buffer(sg_start, sg_nents, isert_get_data(rx_desc),\n                            unsol_data_len);\n  isert_handle_scsi_cmd():\n        sg_copy_from_buffer(cmd->se_cmd.t_data_sg, sg_nents,\n                            isert_get_data(rx_desc), imm_data_len);\n\nBecause the declared length is never checked against wc->byte_len, an\ninitiator can declare a data segment larger than the bytes it actually\nsent (and larger than the descriptor) and cause an out-of-bounds read of\nthe receive buffer.\n\nNothing upstream of isert closes this door:\n\n  - __iscsit_check_dataout_hdr() bounds the inbound payload against\n    conn_ops->MaxXmitDataSegmentLength (MXDSL) - a transmit parameter,\n    used here for the inbound check.\n  - iscsi_set_connection_parameters() sets\n    ops->MaxXmitDataSegmentLength = ops->TargetRecvDataSegmentLength;\n    and TARGETRECVDATASEGMENTLENGTH is absent from the min()-clamp list in\n    iscsi_check_acceptor_state(), so the value the initiator declares is\n    adopted verbatim (type range 512..16777215). The initiator effectively\n    raises its own ceiling.\n  - isert never clamps the negotiated value to its own fixed receive\n    descriptor (ISER_RX_SIZE, 9216 bytes), so the target core's bound and\n    the descriptor size are unrelated.\n\nThe imm_data_len == data_len path is more than an over-read: it aliases\nthe receive descriptor via sg_set_buf() and passes it to the backend as\nthe data source for the SCSI WRITE, so an over-declared length causes heap\ncontents past the descriptor to be written through the backend to the\nbacking store. The backend is the victim of the oversized scatterlist\nisert hands it, not the cause; no read-back of the written bytes was\ndemonstrated.\n\nTrigger: after login completes (full feature phase), an initiator that has\ndeclared a large TargetRecvDataSegmentLength and a FirstBurstLength that\npermits unsolicited/immediate data sends a PDU whose declared data-segment\nlength exceeds what was received. With KASAN:\n\n  BUG: KASAN: slab-out-of-bounds in sg_copy_buffer+0x150/0x1c0\n  Read of size 4096 at addr ffff888109720800 by task kworker/1:0H/25\n  Workqueue: ib-comp-wq ib_cq_poll_work\n  Call Trace:\n   sg_copy_buffer+0x150/0x1c0\n   isert_recv_done+0xba6/0x2390\n   __ib_process_cq+0xe1/0x390\n   ib_cq_poll_work+0x46/0x150\n\nisert_recv_done+0xba6 resolves to isert_handle_iscsi_dataout()\n(ib_isert.c:1160), inlined through isert_rx_opcode().\n\nValidate wc->byte_len against the framing in isert_recv_done() before the\nPDU reaches any handler, and reinstate the connection if it is short.\nBecause the test compares without subtracting the header length, it also\nrejects PDUs shorter than the iSER and iSCSI headers, which would otherwise\nbe parsed out of stale descriptor contents. The login handler rejects PDUs\nshorter than ISER_HEADERS_LEN (commit 29e7b925ae6d (\"IB/isert: Reject login\nPDUs shorter than ISER_HEADERS_LEN\")) but does not bound the declared\nlength either; that is fixed in the next patch. The data handlers had no\nlength check at all.\n\nisert reads the data segment from a fixed offset: isert_get_data()\nreturns the iSER header plus ISER_HEADERS_LEN and makes no adjustment for\nan AHS.  The bytes the handlers touch are therefore exactly\n[ISER_HEADERS_LEN, ISER_HEADERS_LEN + dlength), and comparing that sum\nagainst wc->byte_len bounds precisely the region that is read.  An AHS\nterm would only make the test stricter without bounding anything furth\n---truncated---",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -170030,7 +170108,7 @@
                 "cve_id": "CVE-2025-68325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_cake: Fix incorrect qlen reduction in cake_drop\n\nIn cake_drop(), qdisc_tree_reduce_backlog() is used to update the qlen\nand backlog of the qdisc hierarchy. Its caller, cake_enqueue(), assumes\nthat the parent qdisc will enqueue the current packet. However, this\nassumption breaks when cake_enqueue() returns NET_XMIT_CN: the parent\nqdisc stops enqueuing current packet, leaving the tree qlen/backlog\naccounting inconsistent. This mismatch can lead to a NULL dereference\n(e.g., when the parent Qdisc is qfq_qdisc).\n\nThis patch computes the qlen/backlog delta in a more robust way by\nobserving the difference before and after the series of cake_drop()\ncalls, and then compensates the qdisc tree accounting if cake_enqueue()\nreturns NET_XMIT_CN.\n\nTo ensure correct compensation when ACK thinning is enabled, a new\nvariable is introduced to keep qlen unchanged.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -192229,7 +192307,7 @@
                 "cve_id": "CVE-2026-64593",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: do not trim a device which is not writeable\n\n[BUG]\nThere is a bug report that btrfs/242 can randomly fail with the\nfollowing NULL pointer dereference:\n\n  run fstests btrfs/242 at 2026-06-01 10:25:08\n  BTRFS: device fsid d4d7f234-487c-4787-88e4-47a8b68c9874 devid 1 transid 9 /dev/sdc (8:32) scanned by mount (122609)\n  BTRFS info (device sdc): first mount of filesystem d4d7f234-487c-4787-88e4-47a8b68c9874\n  BTRFS info (device sdc): using crc32c checksum algorithm\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS warning (device sdc): devid 2 uuid fbe72d72-3272-482d-80fb-ab88ed398192 is missing\n  BTRFS info (device sdc): allowing degraded mounts\n  BTRFS info (device sdc): turning on async discard\n  BTRFS info (device sdc): enabling free space tree\n  Unable to handle kernel NULL pointer dereference at virtual address 0000000000000018\n  user pgtable: 4k pages, 48-bit VAs, pgdp=000000013fd6b000\n  CPU: 4 UID: 0 PID: 122625 Comm: fstrim Not tainted 7.0.10-2-default #1 PREEMPT(full) openSUSE Tumbleweed e9a5f6b24978fba3bf015a992f865837fdfff3dd\n  Hardware name: QEMU KVM Virtual Machine, BIOS edk2-20250812-19.fc42 08/12/2025\n  pstate: 01400005 (nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)\n  pc : btrfs_trim_fs+0x34c/0xa00 [btrfs]\n  lr : btrfs_trim_fs+0x1f0/0xa00 [btrfs]\n  Call trace:\n   btrfs_trim_fs+0x34c/0xa00 [btrfs f02c1d570ceea621c69d302ba75dd61868083840] (P)\n   btrfs_ioctl_fitrim+0xe8/0x178 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   btrfs_ioctl+0xdd4/0x2bd8 [btrfs f02c1d570ceea621c69d302ba75dd61868083840]\n   __arm64_sys_ioctl+0xac/0x108\n   invoke_syscall.constprop.0+0x5c/0xd0\n   el0_svc_common.constprop.0+0x40/0xf0\n   do_el0_svc+0x24/0x40\n   el0_svc+0x40/0x1d0\n   el0t_64_sync_handler+0xa0/0xe8\n   el0t_64_sync+0x1b0/0x1b8\n  Code: 17ffff83 f94017e0 f9002be0 f9402ea0 (f9400c00)\n  ---[ end trace 0000000000000000  ]---\n\nAlso the reporter is very kind to test the following ASSERT() added to\nbtrfs_trim_free_extents_throttle():\n\n\tASSERT(device->bdev,\n\t       \"devid=%llu path=%s dev_state=0x%lx\\n\",\n\t       device->devid, btrfs_dev_name(device), device->dev_state);\n\nAnd it shows the following output:\n\n  assertion failed: device->bdev, in extent-tree.c:6630 (devid=2 path=/dev/sdd dev_state=0x82)\n\nWhich means the device->bdev is NULL, and the dev_state is\nBTRFS_DEV_STATE_IN_FS_METADATA | BTRFS_DEV_STATE_ITEM_FOUND, without\nBTRFS_DEV_STATE_WRITEABLE flag set.\n\n[CAUSE]\nThe pc points to the following call chain:\n\n  btrfs_trim_fs()\n  |- btrfs_trim_free_extents()\n     |- btrfs_trim_free_extents_throttle()\n        |- bdev_max_discard_sectors(device->bdev)\n\nSo the NULL pointer dereference is caused by device->bdev being NULL.\n\nThis looks impossible by a quick glance, as just before calling\nbtrfs_trim_free_extents_throttle(), we have skipped any device that has\nBTRFS_DEV_STATE_MISSING flag set.\n\nHowever in this particular case, there is a window where the missing\ndevice is later re-scanned, causing btrfs to remove the\nBTRFS_DEV_STATE_MISSING flag:\n\n  btrfs_control_ioctl()\n  |- btrfs_scan_one_device()\n     |- device_list_add()\n        |- rcu_assign_pointer(device->name, name);\n        |  This updates the missing device's path to the new good path.\n        |\n        |- clear_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state)\n           This removes the BTRFS_DEV_STATE_MISSING flag.\n\nThis allows the missing device to re-appear and clear the\nBTRFS_DEV_STATE_MISSING flag.  However the device still does not have\nthe BTRFS_DEV_STATE_WRITEABLE flag set, nor is its bdev pointer updated.\n\nThe bdev pointer remains NULL, triggering the crash later.\n\n[FIX]\nThis is a big de-synchronization between BTRFS_DEV_STATE_MISSING and\ndevice->bdev pointer, and shows a gap in btrfs's re-appearing-device\nhandling.\n\nThe proper handling of re-appearing device will need quite some extra\nwork, which is out of the context of this small\n---truncated---",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -192271,7 +192349,7 @@
                 "cve_id": "CVE-2026-64604",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: VMX: Grab vmcs12 on CR8 interception update iff vCPU is in guest mode\n\nWhen updating CR8 intercepts, get vmcs12 if and only if the vCPU is in\nguest mode so that a future change can have update CR8 intercepts during\nvCPU creation, without running afoul of get_vmcs12()'s lockdep assertion.\n\n  ------------[ cut here ]------------\n  debug_locks && !(lock_is_held(&(&vcpu->mutex)->dep_map) || !refcount_read(&vcpu->kvm->users_count))\n  WARNING: arch/x86/kvm/vmx/nested.h:61 at get_vmcs12 arch/x86/kvm/vmx/nested.h:60 [inline], CPU#0: syz.2.19/5879\n  WARNING: arch/x86/kvm/vmx/nested.h:61 at vmx_update_cr8_intercept+0x3de/0x4e0 arch/x86/kvm/vmx/vmx.c:6879, CPU#0: syz.2.19/5879\n  Modules linked in:\n  CPU: 0 UID: 0 PID: 5879 Comm: syz.2.19 Not tainted syzkaller #0 PREEMPT(full)\n  Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2-debian-1.16.2-1 04/01/2014\n  RIP: 0010:get_vmcs12 arch/x86/kvm/vmx/nested.h:60 [inline]\n  RIP: 0010:vmx_update_cr8_intercept+0x3de/0x4e0 arch/x86/kvm/vmx/vmx.c:6879\n  Call Trace:\n   <TASK>\n   apic_update_ppr arch/x86/kvm/lapic.c:984 [inline]\n   kvm_lapic_reset+0x1c24/0x2980 arch/x86/kvm/lapic.c:3023\n   kvm_vcpu_reset+0x44c/0x1bf0 arch/x86/kvm/x86.c:12986\n   kvm_arch_vcpu_create+0x746/0x8b0 arch/x86/kvm/x86.c:12847\n   kvm_vm_ioctl_create_vcpu+0x428/0x930 virt/kvm/kvm_main.c:4201\n   kvm_vm_ioctl+0x893/0xd50 virt/kvm/kvm_main.c:5159\n   vfs_ioctl fs/ioctl.c:51 [inline]\n   __do_sys_ioctl fs/ioctl.c:597 [inline]\n   __se_sys_ioctl+0xfc/0x170 fs/ioctl.c:583\n   do_syscall_x64 arch/x86/entry/syscall_64.c:63 [inline]\n   do_syscall_64+0x174/0x580 arch/x86/entry/syscall_64.c:94\n   entry_SYSCALL_64_after_hwframe+0x77/0x7f\n   </TASK>\n\nNo functional change intended.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -205490,7 +205568,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -205601,7 +205679,7 @@
                 "cve_id": "CVE-2026-80793",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: reject undersized MTUs in ip_do_fragment()\n\nip_do_fragment() subtracts the IPv4 header length from the effective\nMTU and passes the resulting payload MTU to ip_frag_next().\n\nIf the effective MTU is smaller than hlen + 8, ip_frag_next() rounds\nthe fragment payload length down to zero. The fragmentation state then\nnever makes forward progress: state->left, state->ptr and state->offset\nstay unchanged while ip_do_fragment() keeps allocating and transmitting\nheader-only fragments until the softlockup detector fires.\n\nThis is reproducible with a route installed using \"mtu lock 20\", but it\nis also reproducible without route MTU lock, for example by forwarding a\npacket to a device whose MTU is 20.\n\nFix it in ip_do_fragment() by rejecting mtu < hlen + 8 with -EMSGSIZE,\nmatching the existing IPv6 fragmentation check.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -205615,7 +205693,7 @@
                 "cve_id": "CVE-2026-80805",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: validate attr entry pointer before field access\n\nxfs_attr3_leaf_verify_entry() accesses lentry/rentry fields (namelen,\nvaluelen) before checking if the entry pointer itself is within bounds.\nIf nameidx is crafted to point near the end of the buffer, these field\naccesses can read out-of-bounds before the bounds check at\nname_end > buf_end is performed.\n\nAdd explicit bounds checks for entry pointers before accessing their\nfields. Use offsetof() to check that the start of the flexible array\nmember (nameval/name) is within bounds, which ensures all preceding\nfields are safe to access.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -205727,7 +205805,7 @@
                 "cve_id": "CVE-2026-80827",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: option: fix slab OOB read in interrupt URB callback\n\nThe interrupt URB buffer is allocated in setup_port_interrupt_in() based\non the endpoint's wMaxPacketSize:\n\n    buffer_size = usb_endpoint_maxp(epd);\n    port->interrupt_in_buffer = kmalloc(buffer_size, GFP_KERNEL);\n\nWhen a USB device declares wMaxPacketSize = 8 on its interrupt IN\nendpoint, the buffer is allocated from kmalloc-8 cache (exactly\n8 bytes).\n\nIf the device sends a short packet (actual_length < wMaxPacketSize),\nthe URB completes with status == 0 and the callback proceeds to read:\n\n    data[sizeof(struct usb_ctrlrequest)]\n\nwhich evaluates to data[8], accessing 1 byte beyond the allocated 8-byte\nbuffer. This results in a slab out-of-bounds read.\n\nFix this by adding the missing bounds check: first verify that the\nactual length is large enough to contain the struct usb_ctrlrequest\nheader before accessing req_pkt->bRequestType and req_pkt->bRequest,\nand then verify that there is an additional byte for the modem signal\nstate before reading data[sizeof(struct usb_ctrlrequest)] inside the\nconditional.  Use sizeof(*req_pkt) instead of sizeof(struct\nusb_ctrlrequest) for consistency.\n\n[ johan: use dev_err(); split signals declaration and initialisation ]",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -206054,7 +206132,7 @@
                 "cve_id": "CVE-2026-80906",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: packet: fix wrong transport_header when sending VLAN-tagged frame\n\nIn packet_parse_headers(), when processing a VLAN-tagged frame,\nskb_set_network_header() is called to advance network_header past the\nVLAN tag to the inner protocol header. skb_probe_transport_header() is\nthen called with skb->protocol still set to the outer VLAN EtherType\n(e.g. ETH_P_8021Q), while nhoff (derived from skb_network_offset())\nalready points past the VLAN tag to the inner protocol header.\n\nIn __skb_flow_dissect(), proto is initialized to ETH_P_8021Q and nhoff\npoints past the VLAN tag. When the dissector hits case ETH_P_8021Q, it\nreads a struct vlan_hdr at nhoff via __skb_header_pointer(), but that\noffset contains the inner protocol header (e.g. an IP header). The bytes\nare misinterpreted as a VLAN header, yielding a garbage encapsulated\nEtherType that matches no known protocol. The dissector returns false,\nso skb_probe_transport_header() never calls skb_set_transport_header(),\nleaving transport_header at its uninitialized sentinel value (~0U).\n\nMove skb_probe_transport_header() to before skb_set_network_header(). At\nthe time skb_probe_transport_header() is called, network_header still\npoints to the VLAN header, so nhoff correctly points to the VLAN header.\nThe flow dissector can then parse the VLAN header, extract the inner\nEtherType, and advance nhoff to the inner protocol header, allowing\ntransport_header to be set correctly.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -206124,7 +206202,7 @@
                 "cve_id": "CVE-2026-80917",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: host-generic: Fix NULL pointer dereference on 32-bit CAM systems\n\nOn 32-bit systems the config space is too large to ioremap in one go, so\npci_ecam_create() maps each bus segment separately and relies on the\n->add_bus callback (pci_ecam_add_bus) to populate the per-bus mapping in\ncfg->winp[]. pci_ecam_map_bus() then uses that mapping as the base for\nevery config access.\n\nThe generic ECAM ops (pci_generic_ecam_ops) already provide the ->add_bus\nand ->remove_bus callbacks, but the CAM (legacy) ops in pci-host-generic.c\ndo not. As a result, on a 32-bit host using \"pci-host-cam-generic\" the\nper-bus mapping is never set up and the first config read dereferences a\nNULL base, crashing during bus enumeration:\n\n Unable to handle kernel NULL pointer dereference at virtual address 00000800\n Oops [#1]\n CPU: 0 PID: 1 Comm: swapper Not tainted 6.9.7+ #43\n Hardware name: Digilent Nexys-Video-A7 RV32 (DT)\n epc : pci_generic_config_read+0x40/0xb0\n  ra : pci_generic_config_read+0x2c/0xb0\n [<c038db9c>] pci_generic_config_read+0x40/0xb0\n [<c038da04>] pci_bus_read_config_dword+0x50/0xb0\n [<c0391e94>] pci_bus_generic_read_dev_vendor_id+0x3c/0x1ec\n [<c039245c>] pci_scan_single_device+0xa4/0x11c\n [<c0392570>] pci_scan_slot+0x9c/0x23c\n [<c039388c>] pci_scan_child_bus_extend+0x58/0x2f4\n [<c0393db0>] pci_scan_root_bus_bridge+0x64/0xe8\n [<c0393e54>] pci_host_probe+0x20/0xc8\n [<c03bc6f4>] pci_host_common_probe+0x144/0x1e4\n\nFix this by giving the CAM ops the same ->add_bus/->remove_bus callbacks.\nSince pci_ecam_add_bus() and pci_ecam_remove_bus() are static to ecam.c,\nmove the CAM ops definition there as pci_generic_cam_ops (mirroring\npci_generic_ecam_ops) and export it for pci-host-generic.c to reference.\n\n[mani: removed timestamp from log]",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -206138,7 +206216,7 @@
                 "cve_id": "CVE-2026-80918",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix number/pointer type confusion on long items\n\nWhen fetch_item() is called by hid_scan_report() on an item with\nHID_ITEM_TAG_LONG, it stores a pointer to the item data in\nitem->data.longdata instead of storing a value directly in\nitem->data.{u8/u16/u32}.\n\nWhen item_udata() or item_sdata() encounters such an item, it incorrectly\nassumes that the item is in short format, and therefore returns the lower\npart of a kernel pointer reinterpreted as a number.\n\nWhen a HID device is connected whose descriptor contains a\nHID_GLOBAL_ITEM_TAG_REPORT_SIZE encoded in long format with size=4, this\ncauses the lower half of a kernel pointer to be printed into dmesg as a\nnumber, like this:\n\n    hid (null): invalid report_size 107953555\n\nTo fix it, let item_udata() and item_sdata() verify that the item is in\nshort format.\n\nNote that this bug only affects hid_scan_report(), while the main parsing\npass hid_parse_collections() will always bail out when encountering a long\nitem.\n\nSidenote: There are currently no users of data.longdata; maybe we should\njust remove any parsing of long-format descriptors as a follow-up.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -209076,6 +209154,32 @@
                     }
                 ]
             },
+            "CVE-2026-89783": {
+                "cve_id": "CVE-2026-89783",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm6: fix out-of-bounds write in xfrm6_input_addr() when secpath is full\n\nThe depth check in xfrm6_input_addr() is off by one:\n\n  if (1 + sp->len == XFRM_MAX_DEPTH)\n          goto drop;\n  ...\n  sp->xvec[sp->len++] = x;\n\nxfrm_input() can leave sp->len == XFRM_MAX_DEPTH, and the transport-mode\nreceive path re-enters IPv6 input via xfrm_trans_reinject() with that\nsecpath preserved. If the inner packet carries a destination-options HAO\noption or a type-2 routing header, xfrm6_input_addr() is called with\nsp->len == XFRM_MAX_DEPTH; the check (1 + 6 == 6) is false, so\nsp->xvec[sp->len++] writes one slot past the 6-element xvec[]. The write\nstays within the sec_path allocation (invisible to KASAN); UBSAN_BOUNDS\nflags it and panics under panic_on_warn.\n\nUse \"sp->len >= XFRM_MAX_DEPTH\", matching xfrm_input(). This also\nrestores one chain level the old check rejected at sp->len == 5.\n\n  UBSAN: array-index-out-of-bounds in net/ipv6/xfrm6_input.c:309:10\n  index 6 is out of range for type 'xfrm_state *[6]'",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-89786": {
+                "cve_id": "CVE-2026-89786",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix out-of-bounds read in ext4_read_inline_dir()\n\next4_read_inline_dir() can read a dirent header past the end of its inline\nbuffer, triggering a slab-out-of-bounds read during getdents64():\n\n  BUG: KASAN: slab-out-of-bounds in __ext4_check_dir_entry\n  Read of size 2 at addr ffff88800f3dd23c by task exploit/148\n   ...\n   __ext4_check_dir_entry\n   ext4_read_inline_dir\n   iterate_dir\n\nThe dirent payload lives in a buffer of exactly inline_size bytes:\n\n\tdir_buf = kmalloc(inline_size, GFP_NOFS);\n\nbut iteration runs in a position space extra_offset bytes larger\n(extra_size = extra_offset + inline_size) so the synthetic \".\" and \"..\"\nland at their block-dir offsets. A dirent is formed at \"dir_buf + pos -\nextra_offset\", yet the ext4_check_dir_entry() length argument uses the\nlarger extra_size. A position whose dirent header would extend past\nextra_size is therefore accepted, and the rescan loop's rec_len probe and\next4_check_dir_entry() dereference de->rec_len before the entry is rejected.\n\nReject a position whose minimum-size dirent header would not fit within\nextra_size before forming de, in both the rescan and main loops, and pass\ninline_size rather than extra_size to ext4_check_dir_entry() so the length\ncheck matches the physical buffer.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-89815": {
                 "cve_id": "CVE-2026-89815",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -209180,6 +209284,19 @@
                     }
                 ]
             },
+            "CVE-2026-89930": {
+                "cve_id": "CVE-2026-89930",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: nVMX: Service local TLB flushes on failed nested VM-Enter\n\nKVM services local TLB flushes on \"full\" nested VM-Exits (through\n__nested_vmx_vmexit()), but not if a nested VM-Enter fails (e.g. due to\nfailed VMCS checks in nested_vmx_enter_non_root_mode()).\n\nHowever, it is possible that KVM had queued TLB flushes that need to be\nperformed, even if the nested VM-Enter was not successful. For example,\nif VPID is disabled for L2 (via nested_vmx_transition_tlb_flush(), or if\nvia the MSR load lists, as the SDM says:\n\n  If any MSR is being loaded in such a way that would architecturally\n  require a TLB flush, the TLBs are updated so that, after VM entry, the\n  logical processor will not use any translations that were cached before\n  the transition.\n\nThe SDM is unclear about when the TLB flush should occur, and whether or\nnot a failed VM entry would flush the TLB, so it is safer to always\ndo the TLB flush in this case.\n\nMore concretely, KVM also updates the last VPID L1 used for L2 in\nnested_vmx_transition_tlb_flush() (i.e. last_vpid), even if the VM entry\nultimately fails. With the current code, KVM could miss a TLB flush if\nL1 changes L2's VPID, then does a failed VM entry followed by a\nsuccessful one, as the failed VM entry would update last_vpid but not\nactually flush the TLB. Servicing local TLB flushes on failed VM entries\nmakes sure that the TLB is always flushed when last_vpid is updated.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-89932": {
                 "cve_id": "CVE-2026-89932",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -209198,6 +209315,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nASoC: hdac_hda: Fix hlink refcount leak on component registration failure\n\nhdac_hda_dev_probe() gets the HDA link with snd_hdac_ext_bus_link_get()\nbefore registering the ASoC component. If component registration fails,\nthe function returns without dropping the link reference.\n\nAlways call snd_hdac_ext_bus_link_put() after the registration attempt so\nthe reference taken during probe is balanced on both success and failure.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-89965": {
+                "cve_id": "CVE-2026-89965",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvdimm/btt: reject an arena whose nfree is below the lane count\n\nThe BTT info block's nfree field, the number of reserve free blocks, is\nread from the medium without validation.  btt_freelist_init() and\nbtt_rtt_init() size the per-lane freelist[] and rtt[] arrays by nfree,\nbut the I/O path indexes them by the lane from nd_region_acquire_lane(),\nwhich is bounded by nd_region->num_lanes (ND_MAX_LANES), not by nfree.\nA crafted or foreign arena whose nfree is below the lane count makes\nfreelist[lane]/rtt[lane] run past the allocation: an out-of-bounds write.\n\nbtt.rst documents the nlanes = min(nfree, num_cpus) invariant, which the\ncode does not currently honor: num_lanes is ND_MAX_LANES regardless of\nnfree.  Reject an arena whose nfree is below num_lanes at discovery,\nbefore the per-lane arrays are allocated, enforcing that invariant.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -209237,6 +209367,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndma-buf: dma-heap: don't publish fd before copy_to_user() succeeds\n\nDMA_HEAP_IOCTL_ALLOC allocates a dma-buf and installs an fd into the\ncaller's fd table via dma_buf_fd() -> fd_install() before\ndma_heap_ioctl() copies the result back to userspace.  If the trailing\ncopy_to_user() fails, userspace never learns the fd number, but the\nfd (and the underlying dma-buf reference) are already visible to\nother threads in the same process and are leaked for the lifetime of\nthe process.\n\nThe obvious \"close it on the failure path\" fix is unsafe: once\nfd_install() has run, another thread can already dup() the fd, send\nit via SCM_RIGHTS, or close() it and let its number be reused, so a\nsubsequent close_fd() from the ioctl path can operate on an unrelated\nfile.  This was pointed out by Christian K\u00f6nig on v1 [1].\n\nRestructure the allocation path so that fd_install() is the last,\nunfailable step of a successful ioctl:\n\n  1. heap->ops->allocate()      creates the dma_buf.\n  2. get_unused_fd_flags()      reserves an fd number in the caller's\n                                fd table without publishing it, so\n                                no other thread can observe it.\n  3. copy_to_user()             delivers the fd number to userspace;\n                                on failure the fd is returned with\n                                put_unused_fd() and the dma_buf\n                                reference is dropped with\n                                dma_buf_put(), leaving no user-\n                                visible state behind.\n  4. dma_buf_fd_install()       publishes the fd and emits the\n                                trace_dma_buf_fd tracepoint -- from\n                                here on the ioctl cannot fail.\n\nA new dma_buf_fd_install() helper is introduced in dma-buf.c to wrap\nfd_install() together with the DMA_BUF_TRACE() call, preserving the\nexport tracing that dma_buf_fd() provides.  dma_heap_ioctl_allocate()\nis refactored to return the struct dma_buf * directly (returning\nERR_PTR on failure) so the caller holds the dmabuf reference across\nsteps 3 and 4.\n\nThe failure at step 3 is easily reachable from userspace: pass a\nstruct dma_heap_allocation_data that lives in a page whose protection\nis flipped to PROT_READ between copy_from_user() and copy_to_user()\n(e.g. via mprotect()).  Before this change each such ioctl leaks one\ndmabuf fd; after it, the fd table is unchanged on failure and only\n/dev/dma_heap/<name> remains open.\n\nNo UAPI or heap-driver interface change.\n\n[1] https://lore.kernel.org/dri-devel/175e98de-f414-47d7-81c1-c0fe0a8f7f62@amd.com/",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-90011": {
+                "cve_id": "CVE-2026-90011",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: iscsi: Reserve a terminator byte for the login payload\n\niscsi_target_check_login_request() rejects a login PDU whose\nDataSegmentLength exceeds MAX_KEY_VALUE_PAIRS, but the test is '>' and\nlogin->req_buf is allocated with exactly MAX_KEY_VALUE_PAIRS\nbytes. Since iscsit_get_login_rx() receives payload_length + padding\nbytes, where\n\n\tpadding = ((-payload_length) & 3);\n\nany payload_length from 8189 to 8192 fills the whole 8192 byte\nbuffer. The write stays in bounds, but no byte is left for a NUL\nterminator.\n\nThe buffer is subsequently consumed as a C string. In the CHAP path\nchap_check_algorithm() calls kstrdup(a_str), and extract_param() calls\nstrstr(in_buf, pattern) followed by strlen_semi(), none of which take a\nlength. convert_null_to_semi() additionally rewrites every embedded NUL\nto ';', so even a payload made of well formed NUL separated key=value\nrecords is left without a terminator. These walk past the end of the\nobject into adjacent slab memory. It is reachable by an unauthenticated\ninitiator against a portal configured for CHAP; when authentication is\nnot required iscsi_login_zero_tsih_s2() rewrites AuthMethod to None and\nthe CHAP path is never entered.\n\nAllocate one extra byte. kzalloc() zeroes it and nothing ever writes to\nit, as every writer copies to offset 0 for at most MAX_KEY_VALUE_PAIRS\nbytes, so the buffer is always terminated.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -211070,6 +211213,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-fc: unmap cmd_iu DMA on rsp_iu mapping failure in init_request\n\n__nvme_fc_init_request() maps cmd_iu and then rsp_iu for DMA. If the\nrsp_iu mapping fails, the original code only recorded the error and fell\nthrough: it left the already-mapped cmd_iu unmapped and still marked the\nop as FCPOP_STATE_IDLE before returning. Since blk-mq does not call\n.exit_request() when .init_request() fails, the cmd_iu mapping is leaked\nfor every op whose rsp_iu mapping fails.\n\nJump to an error path on rsp_iu mapping failure that unmaps cmd_iu and\nreturns the error without marking the op idle, so it stays in the\nFCPOP_STATE_UNINIT state set by the initial memset().",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-90414": {
+                "cve_id": "CVE-2026-90414",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: reject PDUs declaring more data than was received\n\nisert_recv_done() hands each received PDU to the opcode handlers without\never looking at wc->byte_len, the number of bytes the HCA actually placed\nin the receive descriptor. The handlers then copy that many bytes - the\ndata-segment length the initiator declared in the BHS\n(ntoh24(hdr->dlength), via the derived unsol_data_len / imm_data_len) -\nout of the fixed-size descriptor:\n\n  isert_handle_iscsi_dataout():\n        sg_copy_from_buffer(sg_start, sg_nents, isert_get_data(rx_desc),\n                            unsol_data_len);\n  isert_handle_scsi_cmd():\n        sg_copy_from_buffer(cmd->se_cmd.t_data_sg, sg_nents,\n                            isert_get_data(rx_desc), imm_data_len);\n\nBecause the declared length is never checked against wc->byte_len, an\ninitiator can declare a data segment larger than the bytes it actually\nsent (and larger than the descriptor) and cause an out-of-bounds read of\nthe receive buffer.\n\nNothing upstream of isert closes this door:\n\n  - __iscsit_check_dataout_hdr() bounds the inbound payload against\n    conn_ops->MaxXmitDataSegmentLength (MXDSL) - a transmit parameter,\n    used here for the inbound check.\n  - iscsi_set_connection_parameters() sets\n    ops->MaxXmitDataSegmentLength = ops->TargetRecvDataSegmentLength;\n    and TARGETRECVDATASEGMENTLENGTH is absent from the min()-clamp list in\n    iscsi_check_acceptor_state(), so the value the initiator declares is\n    adopted verbatim (type range 512..16777215). The initiator effectively\n    raises its own ceiling.\n  - isert never clamps the negotiated value to its own fixed receive\n    descriptor (ISER_RX_SIZE, 9216 bytes), so the target core's bound and\n    the descriptor size are unrelated.\n\nThe imm_data_len == data_len path is more than an over-read: it aliases\nthe receive descriptor via sg_set_buf() and passes it to the backend as\nthe data source for the SCSI WRITE, so an over-declared length causes heap\ncontents past the descriptor to be written through the backend to the\nbacking store. The backend is the victim of the oversized scatterlist\nisert hands it, not the cause; no read-back of the written bytes was\ndemonstrated.\n\nTrigger: after login completes (full feature phase), an initiator that has\ndeclared a large TargetRecvDataSegmentLength and a FirstBurstLength that\npermits unsolicited/immediate data sends a PDU whose declared data-segment\nlength exceeds what was received. With KASAN:\n\n  BUG: KASAN: slab-out-of-bounds in sg_copy_buffer+0x150/0x1c0\n  Read of size 4096 at addr ffff888109720800 by task kworker/1:0H/25\n  Workqueue: ib-comp-wq ib_cq_poll_work\n  Call Trace:\n   sg_copy_buffer+0x150/0x1c0\n   isert_recv_done+0xba6/0x2390\n   __ib_process_cq+0xe1/0x390\n   ib_cq_poll_work+0x46/0x150\n\nisert_recv_done+0xba6 resolves to isert_handle_iscsi_dataout()\n(ib_isert.c:1160), inlined through isert_rx_opcode().\n\nValidate wc->byte_len against the framing in isert_recv_done() before the\nPDU reaches any handler, and reinstate the connection if it is short.\nBecause the test compares without subtracting the header length, it also\nrejects PDUs shorter than the iSER and iSCSI headers, which would otherwise\nbe parsed out of stale descriptor contents. The login handler rejects PDUs\nshorter than ISER_HEADERS_LEN (commit 29e7b925ae6d (\"IB/isert: Reject login\nPDUs shorter than ISER_HEADERS_LEN\")) but does not bound the declared\nlength either; that is fixed in the next patch. The data handlers had no\nlength check at all.\n\nisert reads the data segment from a fixed offset: isert_get_data()\nreturns the iSER header plus ISER_HEADERS_LEN and makes no adjustment for\nan AHS.  The bytes the handlers touch are therefore exactly\n[ISER_HEADERS_LEN, ISER_HEADERS_LEN + dlength), and comparing that sum\nagainst wc->byte_len bounds precisely the region that is read.  An AHS\nterm would only make the test stricter without bounding anything furth\n---truncated---",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -265905,6 +266061,32 @@
                     }
                 ]
             },
+            "CVE-2026-89783": {
+                "cve_id": "CVE-2026-89783",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm6: fix out-of-bounds write in xfrm6_input_addr() when secpath is full\n\nThe depth check in xfrm6_input_addr() is off by one:\n\n  if (1 + sp->len == XFRM_MAX_DEPTH)\n          goto drop;\n  ...\n  sp->xvec[sp->len++] = x;\n\nxfrm_input() can leave sp->len == XFRM_MAX_DEPTH, and the transport-mode\nreceive path re-enters IPv6 input via xfrm_trans_reinject() with that\nsecpath preserved. If the inner packet carries a destination-options HAO\noption or a type-2 routing header, xfrm6_input_addr() is called with\nsp->len == XFRM_MAX_DEPTH; the check (1 + 6 == 6) is false, so\nsp->xvec[sp->len++] writes one slot past the 6-element xvec[]. The write\nstays within the sec_path allocation (invisible to KASAN); UBSAN_BOUNDS\nflags it and panics under panic_on_warn.\n\nUse \"sp->len >= XFRM_MAX_DEPTH\", matching xfrm_input(). This also\nrestores one chain level the old check rejected at sp->len == 5.\n\n  UBSAN: array-index-out-of-bounds in net/ipv6/xfrm6_input.c:309:10\n  index 6 is out of range for type 'xfrm_state *[6]'",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el7"
+                    }
+                ]
+            },
+            "CVE-2026-89786": {
+                "cve_id": "CVE-2026-89786",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: fix out-of-bounds read in ext4_read_inline_dir()\n\next4_read_inline_dir() can read a dirent header past the end of its inline\nbuffer, triggering a slab-out-of-bounds read during getdents64():\n\n  BUG: KASAN: slab-out-of-bounds in __ext4_check_dir_entry\n  Read of size 2 at addr ffff88800f3dd23c by task exploit/148\n   ...\n   __ext4_check_dir_entry\n   ext4_read_inline_dir\n   iterate_dir\n\nThe dirent payload lives in a buffer of exactly inline_size bytes:\n\n\tdir_buf = kmalloc(inline_size, GFP_NOFS);\n\nbut iteration runs in a position space extra_offset bytes larger\n(extra_size = extra_offset + inline_size) so the synthetic \".\" and \"..\"\nland at their block-dir offsets. A dirent is formed at \"dir_buf + pos -\nextra_offset\", yet the ext4_check_dir_entry() length argument uses the\nlarger extra_size. A position whose dirent header would extend past\nextra_size is therefore accepted, and the rescan loop's rec_len probe and\next4_check_dir_entry() dereference de->rec_len before the entry is rejected.\n\nReject a position whose minimum-size dirent header would not fit within\nextra_size before forming de, in both the rescan and main loops, and pass\ninline_size rather than extra_size to ext4_check_dir_entry() so the length\ncheck matches the physical buffer.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el7"
+                    }
+                ]
+            },
             "CVE-2026-89816": {
                 "cve_id": "CVE-2026-89816",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -265923,6 +266105,32 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix BSG job leak on validate flash image error path\n\nqla28xx_validate_flash_image() returns QLA_SUCCESS (0) unconditionally,\ntelling the FC BSG transport (fc_bsg_host_dispatch()) that the driver\nowns and will complete the request. But bsg_job_done() is guarded by \"if\n(!rval)\", so on the error path (rval == -EINVAL) neither the driver nor\nthe transport completes the job. The request dangles until it times out,\nleaking block layer resources.\n\nCommit c2c68225b145 (\"scsi: qla2xxx: Fix bsg_done() causing double\nfree\") added the \"if (!rval)\" guard to a batch of BSG handlers. That is\ncorrect for handlers that also return the error code (the transport then\ncompletes the job once via fail_host_msg), but this function returns\nQLA_SUCCESS unconditionally, so the guard turned a correct single\ncompletion into a leak.\n\nAlways call bsg_job_done(): bsg_reply->result is DID_OK and the error is\nreported in vendor_rsp[0], and since the function returns 0 the\ntransport will not complete the job a second time.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el7"
+                    }
+                ]
+            },
+            "CVE-2026-89965": {
+                "cve_id": "CVE-2026-89965",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvdimm/btt: reject an arena whose nfree is below the lane count\n\nThe BTT info block's nfree field, the number of reserve free blocks, is\nread from the medium without validation.  btt_freelist_init() and\nbtt_rtt_init() size the per-lane freelist[] and rtt[] arrays by nfree,\nbut the I/O path indexes them by the lane from nd_region_acquire_lane(),\nwhich is bounded by nd_region->num_lanes (ND_MAX_LANES), not by nfree.\nA crafted or foreign arena whose nfree is below the lane count makes\nfreelist[lane]/rtt[lane] run past the allocation: an out-of-bounds write.\n\nbtt.rst documents the nlanes = min(nfree, num_cpus) invariant, which the\ncode does not currently honor: num_lanes is ND_MAX_LANES regardless of\nnfree.  Reject an arena whose nfree is below num_lanes at discovery,\nbefore the per-lane arrays are allocated, enforcing that invariant.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el7"
+                    }
+                ]
+            },
+            "CVE-2026-90011": {
+                "cve_id": "CVE-2026-90011",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: iscsi: Reserve a terminator byte for the login payload\n\niscsi_target_check_login_request() rejects a login PDU whose\nDataSegmentLength exceeds MAX_KEY_VALUE_PAIRS, but the test is '>' and\nlogin->req_buf is allocated with exactly MAX_KEY_VALUE_PAIRS\nbytes. Since iscsit_get_login_rx() receives payload_length + padding\nbytes, where\n\n\tpadding = ((-payload_length) & 3);\n\nany payload_length from 8189 to 8192 fills the whole 8192 byte\nbuffer. The write stays in bounds, but no byte is left for a NUL\nterminator.\n\nThe buffer is subsequently consumed as a C string. In the CHAP path\nchap_check_algorithm() calls kstrdup(a_str), and extract_param() calls\nstrstr(in_buf, pattern) followed by strlen_semi(), none of which take a\nlength. convert_null_to_semi() additionally rewrites every embedded NUL\nto ';', so even a payload made of well formed NUL separated key=value\nrecords is left without a terminator. These walk past the end of the\nobject into adjacent slab memory. It is reachable by an unauthenticated\ninitiator against a portal configured for CHAP; when authentication is\nnot required iscsi_login_zero_tsih_s2() rewrites AuthMethod to None and\nthe CHAP path is never entered.\n\nAllocate one extra byte. kzalloc() zeroes it and nothing ever writes to\nit, as every writer copies to offset 0 for at most MAX_KEY_VALUE_PAIRS\nbytes, so the buffer is always terminated.",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -266417,6 +266625,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvme-fc: unmap cmd_iu DMA on rsp_iu mapping failure in init_request\n\n__nvme_fc_init_request() maps cmd_iu and then rsp_iu for DMA. If the\nrsp_iu mapping fails, the original code only recorded the error and fell\nthrough: it left the already-mapped cmd_iu unmapped and still marked the\nop as FCPOP_STATE_IDLE before returning. Since blk-mq does not call\n.exit_request() when .init_request() fails, the cmd_iu mapping is leaked\nfor every op whose rsp_iu mapping fails.\n\nJump to an error path on rsp_iu mapping failure that unmaps cmd_iu and\nreturns the error without marking the op idle, so it stays in the\nFCPOP_STATE_UNINIT state set by the initial memset().",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el7"
+                    }
+                ]
+            },
+            "CVE-2026-90414": {
+                "cve_id": "CVE-2026-90414",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/isert: reject PDUs declaring more data than was received\n\nisert_recv_done() hands each received PDU to the opcode handlers without\never looking at wc->byte_len, the number of bytes the HCA actually placed\nin the receive descriptor. The handlers then copy that many bytes - the\ndata-segment length the initiator declared in the BHS\n(ntoh24(hdr->dlength), via the derived unsol_data_len / imm_data_len) -\nout of the fixed-size descriptor:\n\n  isert_handle_iscsi_dataout():\n        sg_copy_from_buffer(sg_start, sg_nents, isert_get_data(rx_desc),\n                            unsol_data_len);\n  isert_handle_scsi_cmd():\n        sg_copy_from_buffer(cmd->se_cmd.t_data_sg, sg_nents,\n                            isert_get_data(rx_desc), imm_data_len);\n\nBecause the declared length is never checked against wc->byte_len, an\ninitiator can declare a data segment larger than the bytes it actually\nsent (and larger than the descriptor) and cause an out-of-bounds read of\nthe receive buffer.\n\nNothing upstream of isert closes this door:\n\n  - __iscsit_check_dataout_hdr() bounds the inbound payload against\n    conn_ops->MaxXmitDataSegmentLength (MXDSL) - a transmit parameter,\n    used here for the inbound check.\n  - iscsi_set_connection_parameters() sets\n    ops->MaxXmitDataSegmentLength = ops->TargetRecvDataSegmentLength;\n    and TARGETRECVDATASEGMENTLENGTH is absent from the min()-clamp list in\n    iscsi_check_acceptor_state(), so the value the initiator declares is\n    adopted verbatim (type range 512..16777215). The initiator effectively\n    raises its own ceiling.\n  - isert never clamps the negotiated value to its own fixed receive\n    descriptor (ISER_RX_SIZE, 9216 bytes), so the target core's bound and\n    the descriptor size are unrelated.\n\nThe imm_data_len == data_len path is more than an over-read: it aliases\nthe receive descriptor via sg_set_buf() and passes it to the backend as\nthe data source for the SCSI WRITE, so an over-declared length causes heap\ncontents past the descriptor to be written through the backend to the\nbacking store. The backend is the victim of the oversized scatterlist\nisert hands it, not the cause; no read-back of the written bytes was\ndemonstrated.\n\nTrigger: after login completes (full feature phase), an initiator that has\ndeclared a large TargetRecvDataSegmentLength and a FirstBurstLength that\npermits unsolicited/immediate data sends a PDU whose declared data-segment\nlength exceeds what was received. With KASAN:\n\n  BUG: KASAN: slab-out-of-bounds in sg_copy_buffer+0x150/0x1c0\n  Read of size 4096 at addr ffff888109720800 by task kworker/1:0H/25\n  Workqueue: ib-comp-wq ib_cq_poll_work\n  Call Trace:\n   sg_copy_buffer+0x150/0x1c0\n   isert_recv_done+0xba6/0x2390\n   __ib_process_cq+0xe1/0x390\n   ib_cq_poll_work+0x46/0x150\n\nisert_recv_done+0xba6 resolves to isert_handle_iscsi_dataout()\n(ib_isert.c:1160), inlined through isert_rx_opcode().\n\nValidate wc->byte_len against the framing in isert_recv_done() before the\nPDU reaches any handler, and reinstate the connection if it is short.\nBecause the test compares without subtracting the header length, it also\nrejects PDUs shorter than the iSER and iSCSI headers, which would otherwise\nbe parsed out of stale descriptor contents. The login handler rejects PDUs\nshorter than ISER_HEADERS_LEN (commit 29e7b925ae6d (\"IB/isert: Reject login\nPDUs shorter than ISER_HEADERS_LEN\")) but does not bound the declared\nlength either; that is fixed in the next patch. The data handlers had no\nlength check at all.\n\nisert reads the data segment from a fixed offset: isert_get_data()\nreturns the iSER header plus ISER_HEADERS_LEN and makes no adjustment for\nan AHS.  The bytes the handlers touch are therefore exactly\n[ISER_HEADERS_LEN, ISER_HEADERS_LEN + dlength), and comparing that sum\nagainst wc->byte_len bounds precisely the region that is read.  An AHS\nterm would only make the test stricter without bounding anything furth\n---truncated---",
+                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
