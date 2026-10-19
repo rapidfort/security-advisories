@@ -54672,11 +54672,221 @@
                     }
                 ]
             },
-            "CVE-2026-98433": {
-                "cve_id": "CVE-2026-98433",
+            "CVE-2026-98440": {
+                "cve_id": "CVE-2026-98440",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: PPC: Book3S HV: fix secure device page leak on uv_page_in() failure\n\nIn kvmppc_svm_page_in(), if uv_page_in() fails after\nkvmppc_uvmem_get_page() has succeeded, the secure device page is never\nreleased.  kvmppc_uvmem_get_page() sets a bit in kvmppc_uvmem_bitmap,\nallocates a kvmppc_uvmem_page_pvt struct, marks the GFN as\nKVMPPC_GFN_UVMEM_PFN, and calls zone_device_page_init() which sets\nrefcount=1 and locks the page.  The subsequent goto out_finalize skips\nthe *mig.dst assignment, so migrate_vma_finalize() is a no-op for the\npage, and none of those resources are ever reclaimed.\n\nEach occurrence permanently consumes one entry from the firmware-bounded\nsecure memory pool (kvmppc_uvmem_bitmap), leaks pvt, and leaves the GFN\nmarked as secure \u2014 making it unusable for the lifetime of the VM.\n\nThe twin __kvmppc_svm_page_out() already handles the analogous uv_page_out()\nfailure correctly with unlock_page(dpage); __free_page(dpage).  Apply\nthe same pattern here: unlock_page() followed by put_page(), which\nchains through free_zone_device_folio() into kvmppc_uvmem_folio_free()\nto clear the bitmap bit, free pvt, and reset the GFN state.\n\nReachable whenever uv_page_in() returns an error (e.g. UV pool\nexhaustion) on any POWER9/10 + Ultravisor/PEF system.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: nv: Delay freeing of shadow S2 structures until VM destruction\n\nWe free the shadow S2 structures from kvm_arch_flush_shadow_all(), which\nis a Bad Idea(tm). Freeing the page tables is fair game (this is what\nthis callback is for), but freeing the container that could still be\nreferenced by another part of the system is not great.\n\nInstead, grow separate destructors that gets called when we tear the VM\ndown for good. From there, we can nuke both the individual MMUs as well\nas the global array that points to them, safe in the knowledge that the\nvcpus themselves have been destroyed already.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98441": {
+                "cve_id": "CVE-2026-98441",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: act_ct: avoid modifying shared unconfirmed ct entry\n\nIn a case where skb with an unconfirmed ct entry gets cloned, we may\nend up processing both again but with different sets of extensions.\n\nThe series of events:\n\n 1. The first clone wants to commit and runs the helpers wiring up\n    the extension pointer into the expectation list.\n 2. Then it looses the confirmation keeping the entry unconfirmed.\n 3. Second clone now wants to commit labels or run NAT and adds the\n    new extension for that breaking the pointer in the expectation\n    list causing UAF on the destruction path later.\n\nWhile this is possible to trigger, there should be no practical\nnetwork pipeline where we need to process both clones without\nmodifications in the same zone.  So, let's just reset the entry in\ncase for some reason we got an skb with a shared one.  This doesn't\naffect any known use cases, but avoids any potential problems with\nsharing and modification of the unconfirmed ct entry.\n\nUnlike openvswitch module, act_ct allows for NAT without commit.\nChanging that would be a uAPI break.  So, act_ct needs to reset on NAT\nregardless of the commit flag to avoid reallocation of the extension\nspace.  This, however, doesn't really change the picture for sensible\nnetworking cases as there should be no need to run the same packet\ntwice (before and after the clone) through conntrack without packet\nheader or zone changes and without commit.\n\nThe fixes tag points to the introduction of helpers, since that's the\nmain UAF trigger for the sharing.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98442": {
+                "cve_id": "CVE-2026-98442",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: act_ct: fix helper UAF due to extensions realloc\n\nWhile calling the helpers, a raw pointer to the extensions area is\nwired into expectations list:\n\n  -> nf_ct_helper()\n   -> helper->help()\n    -> nf_ct_expect_related_report()\n     -> nf_ct_expect_insert()\n      -> hlist_add_head_rcu(&exp->lnode, &master_help->expectations)\n\nIn case the connection is not confirmed yet, more extensions can be\nadded afterwards with *_ext_add() calls reallocating the extension\nspace and leaving the now invalid pointer in the expectations list\nthat is later accessed while removing the expectation.\n\nMake sure that helpers are called at the end after all the other\nextensions are already added.\n\nNote that the helper rejection now leaves the mark and labels set,\nbut that's not different from how the NAT was handled before or how\nthe mark and the labels were handled on confirmation failure.  And\nthere are no atomicity guarantees provided by the API anyway.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98443": {
+                "cve_id": "CVE-2026-98443",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix cursor and pointer handling when recovering iunlink buckets\n\nLOLLM pointed out a bug in xlog_recover_iunlink_bucket:\n\n1. We don't null out prev_ip after releasing it, which can lead to UAF\n   problems if the inodegc flush call in the loop fails.\n\nat which point I noticed even more bugs:\n\n2. If the inodegc flush inside the loop fails, we also leak @ip.\n\n3. We set prev_agino to agino having already advanced agino, which\n   results in inodes with i_prev_unlinked set to itself.\n\n4. If we exit the bottom of the loop with prev_ip set, then prev_ip\n   aliases ip and we also set its i_prev_unlinked to itself.\n\nBugs 3 and 4 introduce loops into the unlinked list, though these loops\ndon't surface because we immediately flush each unlinked inode after\nloading it.\n\nFix all of these issues.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98444": {
+                "cve_id": "CVE-2026-98444",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: drop dquot flush lock when we can't find a buffer to flush\n\nLOLLM noticed that xfs_qm_flush_one fails to drop the dquot flush lock\nif it can't grab the buffer associated with the dquot.  Since there's no\nbuffer, nobody else is going to drop the dqflock, so we need to do it\nourselves.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98445": {
+                "cve_id": "CVE-2026-98445",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: don't let memory failures leak blocks and kill repairs\n\nLOLLM complains that a memory allocation failure in\nxrep_newbt_add_blocks results in online repair leaking blocks that were\npreviously allocated to write a new btree, but the problem is worse than\nthat -- a limitation of the codebase is that the callers cannot undo the\ntransaction /and/ return the error -- either you undo all changes and\ncommit the transaction, or you error out and the filesystem goes down.\n\nHowever, the new btree space reservation object isn't that big (~48\nbytes).  Let's just do a NOFAIL allocation and the problem goes away.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98501": {
+                "cve_id": "CVE-2026-98501",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: alps: fix use-after-free on input2 registration failure\n\nalps_input_configured() stores data->input2 before calling\ninput_register_device().  If registration fails, input_free_device()\nfrees the input device but data->input2 still points to the freed memory.\nalps_input_configured() calls hid_hw_open() before allocating input2, so\nURBs are already active and raw_event can fire during the failure window.\nA U1_SP_ABSOLUTE_REPORT_ID report arriving then causes u1_raw_event()\nto dereference the freed data->input2 -> use-after-free.\n\nFix by only storing input2 into drvdata after successful registration\nand adding a NULL guard in the raw_event path.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98502": {
+                "cve_id": "CVE-2026-98502",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: alps: unregister DualPoint Stick input device on remove\n\nalps_input_configured() allocates a second input device (\"DualPoint\nStick\") with input_allocate_device() and registers it, but the\nalps_driver struct has no .remove handler and input2 is not tracked in\nhdev->inputs.  The default remove path (hid_hw_stop -> hidinput_disconnect)\nonly iterates hdev->inputs, so input2 is never unregistered and leaks\non every device removal.\n\nAdd a .remove handler that stops the device first (preventing URB\ncallbacks from touching input2 during teardown) and then unregisters\ninput2.",
                 "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98503": {
+                "cve_id": "CVE-2026-98503",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\npacket: use ubuf_info completion for TX_RING packets\n\ntpacket_snd sends skbs with frags pointing into its ring slots. Slots\nare released when skb->destructor is called.\n\nA call to skb_orphan calls skb->destructor before the skb is freed.\nThis can cause the slot to be reused while still linked into the skb.\n\nSwitch to standard zerocopy completion (ubuf_info) so the slot is only\nreleased once all references to the payload are freed or copied.\nRestore skb->destructor to standard sock_wfree.\n\nThe ubuf_info completion callback can be called with a NULL skb, but\nonly from net_zcopy_put and related API, used by zerocopy implementations\nthat hold their own reference on the uarg, such as MSG_ZEROCOPY. This\nuarg is only ever completed from skb_zcopy_clear, so skb is always set.\n\nTo prevent userspace from aliasing in-flight state on shared ring\nslots, allocate tpacket_uarg per packet, rather than per slot. This\nadds a small allocation to the transmit path. Use standard kmalloc to\nallow backporting to stable kernels.\n\nThe uarg holds an sk_wmem_alloc reference, rather than an sk_refcnt\nreference. packet_free_tx_ring waits on sk_wmem_alloc before freeing\nthe ring pages. Always allocate vec->deferred for tx_ring so page-backed\nrings also wait on sk_wmem_alloc when skb_copy_ubufs drops page refs\nbefore calling tpacket_ubuf_complete.\n\nDrop the tx_ring.pg_vec test that tpacket_destruct_skb performed before\naccessing the slot. The sk_wmem_alloc reference now guarantees that the\nslot is valid. The test is also not sufficient by itself, as it reads\npg_vec without pg_vec_lock, so it can race with packet_set_ring.\n\nAs a result a slot is released when its payload is copied, which can\nbe before transmission (e.g., in skb_orphan_frags_rx). If copied\nbefore skb_tx_timestamp() is called, no slot timestamp is recorded,\nsimilar to when skb_orphan() was called early in the datapath before\nthis patch.\n\nRevert the now unused previous skb_zcopy_.._nouarg infra.\n\nDepends on commit 992cc9f94ca9 (\"net/packet: defer vmalloc TX_RING\nfree until skbs finish\").",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98505": {
+                "cve_id": "CVE-2026-98505",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/damon/vaddr: avoid hw-driven pte updates during damon_hugetlb_mkold()\n\ndamon_hugetlb_mkold() reads the page table entry into a local variable,\nunsets the accessed bit in the variable, and updates the page table entry\nwith the updated variable value.  If hardware updates the same page table\nentry in parallel, the hw updates could be lost.  For example,\nhardware-updated dirty bits might be lost.\n\nAvoid the parallel updates by clearing the page table entry when reading\nit together, using huge_ptep_get_and_clear().  If a parallel write to the\nmemory is made after the clearing, the hw will see the page table entry is\ncleared, trigger page fault and wait until it is handled.  The page fault\nhandling will wait for damon_hugetlb_mkold() due to the page table lock.\n\nBecause hugetlbfs is an in-memory file system and hugetlb pages cannot be\nreclaimed, no critical issue is expected to my best knowledge.  But\ndefinitely this is a nasty bug that should be fixed sooner rather than\nlater.\n\nThe issue was discovered [1] by Sashiko.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98506": {
+                "cve_id": "CVE-2026-98506",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/hugetlb: do not dissolve gigantic pages without runtime support\n\ndissolve_free_hugetlb_folio() doesn't check\nhstate_is_gigantic_no_runtime(h) though remove_hugetlb_folio()/\nupdate_and_free_hugetlb_folio() silently bail for such folios, so it frees\na still-listed folio and, on vmemmap restore failure, the\nadd_hugetlb_folio() rollback corrupts the free list.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98507": {
+                "cve_id": "CVE-2026-98507",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/rmap: fix missing barrier between anon_vma init and vma->anon_vma publish\n\nOn arm64 server, we find that a task trying to grab the anon_vma lock\ntriggers hungtask.\n\nINFO: task main:2354726 blocked for more than 120 seconds.\n      Tainted: G            E     5.10.0-0021.aarch64 #1\n\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\" disables this message.\ntask:main            state:D stack:    0 pid:2354726 ppid:2350673 flags:0x00000a01\nCall trace:\n __switch_to+0x7c/0xbc\n __schedule+0x3b4/0x8a0\n schedule+0x50/0xe0\n rwsem_down_write_slowpath+0x3cc/0x6cc\n down_write+0x60/0x260\n __anon_vma_prepare+0x6c/0x210\n do_anonymous_page+0x258/0x660\n handle_pte_fault+0x188/0x214\n __handle_mm_fault+0x1b0/0x380\n handle_mm_fault+0xf4/0x284\n do_page_fault+0x19c/0x494\n do_translation_fault+0xcc/0xf8\n do_mem_abort+0x48/0xac\n el0_da+0x44/0x80\n el0_sync_handler+0x88/0xb4\n el0_sync+0x160/0x180\n\nAfter analyzing the vmcore, we found the anon_vma->root->rwsem.count is\n-1.  There is another anon_vma whose anon_vma->root->rwsem.count is 1, the\nanon_vma->root->rwsem.owner shows the lock is held, but the stack of the\ntask shows the task doesn't hold the anon_vma lock.\n\nAfter adding more debugging info, we found __anon_vma_prepare() reuses\nanon_vma and triggers the UAF of anon_vma->root due to missing memory\nbarrier, leading to locking and unlocking two different anon_vma->root,\nthus leading to an anon_vma will never be unlocked, and another anon_vma\ncouldn't be locked anymore.\n\nThis race requires two adjacent VMAs that are not merged but are\nanon_vma-compatible (e.g., they differ in VMA_ACCESS_FLAGS that can be\nchanged by mprotect()).  Two threads fault on each VMA concurrently, both\ncalling __anon_vma_prepare() with only mmap_lock held for reading.\n\n    THREAD A                             THREAD B\n__anon_vma_prepare                __anon_vma_prepare\n find_mergeable_anon_vma() -> NULL\n anon_vma = anon_vma_alloc();\n   anon_vma->root = anon_vma;\n // the two stores may be reordered\n vma->anon_vma = anon_vma;\n                                   // finds A's anon_vma\n                                   anon_vma = find_mergeable_anon_vma(vma);\n                                   anon_vma_lock_write(anon_vma);\n                                     // may still see the old root\n                                     down_write(&anon_vma->root->rwsem);\n                                   anon_vma_unlock_write(anon_vma);\n                                     // see the new root, never unlock old\n                                     up_write(&anon_vma->root->rwsem);\n\nthread A triggers page fault and calls __anon_vma_prepare() to prepare\nanon_vma for the faulting vma.  __anon_vma_prepare() allocates and\ninitializes a new anon_vma, and then publishes it to the vma with a plain\nstore.  anon_vma_prepare() only requires the mmap_lock to be held for\nreading, so two threads can fault on adjacent VMAs at the same time. \nWhile thread A publishes a new anon_vma, thread B could find the anon_vma\nvia find_mergeable_anon_vma() and then locks anon_vma->root->rwsem.\n\nThe store to anon_vma->root in anon_vma_alloc() and the store to\nvma->anon_vma can be reordered.  The anon_vma_lock_write() and spin_lock()\nonly provide acquire semantics, which do not prevent prior stores from\nbeing reordered after them.  The release semantics of the corresponding\nspin_unlock() and anon_vma_unlock_write() come too late, the store to\nvma->anon_vma is already published before they take effect.  As a result,\nthread B can observe the following order:\n\n    vma->anon_vma = anon_vma;\n    anon_vma->root = anon_vma;\n\nThe anon_vma slab is SLAB_TYPESAFE_BY_RCU, so a newly allocated anon_vma\nmay reuse memory from a previously freed one.  The constructor\n(anon_vma_ctor) does not reset anon_vma->root, and __put_anon_vma()\ndoesn't clear it either, so the old root value persists until\nanon_vma_alloc() overwrites it.  If that store isn't v\n---truncated---",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98508": {
+                "cve_id": "CVE-2026-98508",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/virtio: fix NULL pointer dereference on fence allocation failure\n\nvirtio_gpu_fence_alloc() can fail due to memory pressure and return NULL,\nbut its caller like virtio_gpu_init_submit() never checks it. Later,\nvirtio_gpu_init_submit() passes the NULL fence to\nvirtio_gpu_fence_event_create(), which unconditionally dereferences it.\n\nFound when fuzzing the virtio driver with Syzkaller:\n\n\tOops: general protection fault, probably for non-canonical address 0xdffffc0000000012: 0000 [#1] SMP KASAN NOPTI\n\tKASAN: null-ptr-deref in range [0x0000000000000090-0x0000000000000097]\n\tCPU: 1 UID: 0 PID: 9991 Comm: syz.0.121 Not tainted 7.2.0 #4 PREEMPT(full)\n\tHardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org 04/01/2014\n\tRIP: 0010:virtio_gpu_fence_event_create drivers/gpu/drm/virtio/virtgpu_submit.c:295 [inline]\n\tRIP: 0010:virtio_gpu_init_submit drivers/gpu/drm/virtio/virtgpu_submit.c:398 [inline]\n\tRIP: 0010:virtio_gpu_execbuffer_ioctl+0xc78/0x1aa0 drivers/gpu/drm/virtio/virtgpu_submit.c:505\n\tCode: 85 ed 0f 85 21 09 00 00 e8 05 5a c9 fb 48 8b 44 24 10 48 8d b8 90 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 9a 0d 00 00 48 8b 44 24 10 4c 89 b0 90 00 00 00\n\tRSP: 0018:ffffc900039dfad0 EFLAGS: 00010216\n\tRAX: dffffc0000000000 RBX: ffffc900039dfdd8 RCX: ffffffff85f6fd3d\n\tRDX: 0000000000000012 RSI: ffffffff85f6fd4b RDI: 0000000000000090\n\tRBP: 0000000000000000 R0virtio_gpu_virgl_process_cmd: ctrl 0x102, error 0x1203\n\tR10: 0000000000000000 R11: 0000000000000000 R12: ffff8880132c4000\n\tR13: 0000000000000000 R14: ffff888073b6c700 R15: 000000000000003b\n\tFS:  00007fab480b96c0(0000) GS:ffff8880eb6e9000(0000) knlGS:0000000000000000\n\tCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n\tCR2: 00007effbf5e55a8 CR3: 0000000048d19000 CR4: 0000000000350ef0\n\tCall Trace:\n\t<TASK>\n\tdrm_ioctl_kernel+0x1f4/0x3e0 drivers/gpu/drm/drm_ioctl.c:817\n\tdrm_ioctl+0x5f4/0xc70 drivers/gpu/drm/drm_ioctl.c:914\n\tvfs_ioctl fs/ioctl.c:51 [inline]\n\t__do_sys_ioctl fs/ioctl.c:597 [inline]\n\t__se_sys_ioctl fs/ioctl.c:583 [inline]\n\t__x64_sys_ioctl+0x18e/0x210 fs/ioctl.c:583\n\tdo_syscall_x64 arch/x86/entry/syscall_64.c:63 [inline]\n\tdo_syscall_64+0x116/0x800 arch/x86/entry/syscall_64.c:94\n\tentry_SYSCALL_64_after_hwframe+0x77/0x7f\n\tRIP: 0033:0x7fab471a82bd\n\tCode: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48\n\tRSP: 002b:00007fab480b9018 EFLAGS: 00000246 ORIG_RAX: 0000000000000010\n\tRAX: ffffffffffffffda RBX: 00007fab47435fa0 RCX: 00007fab471a82bd\n\tRDX: 00002000000000c0 RSI: 00000000c0406442 RDI: 0000000000000003\n\tRBP: 00007fab480b9080 R08: 0000000000000000 R09: 0000000000000000\n\tR10: 0000000000000000 R11: 0000000000000246 R12: 0000000000000001\n\tR13: 00007fab47436038 R14: 00007fab47435fa0 R15: 00007ffe85ab0740\n\t</TASK>\n\tModules linked in:\n\t---[ end trace 0000000000000000 ]---\n\tRIP: 0010:virtio_gpu_fence_event_create drivers/gpu/drm/virtio/virtgpu_submit.c:295 [inline]\n\tRIP: 0010:virtio_gpu_init_submit drivers/gpu/drm/virtio/virtgpu_submit.c:398 [inline]\n\tRIP: 0010:virtio_gpu_execbuffer_ioctl+0xc78/0x1aa0 drivers/gpu/drm/virtio/virtgpu_submit.c:505\n\tCode: 85 ed 0f 85 21 09 00 00 e8 05 5a c9 fb 48 8b 44 24 10 48 8d b8 90 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 9a 0d 00 00 48 8b 44 24 10 4c 89 b0 90 00 00 00\n\tRSP: 0018:ffffc900039dfad0 EFLAGS: 00010216\n\tRAX: dffffc0000000000 RBX: ffffc900039dfdd8 RCX: ffffffff85f6fd3d\n\tRDX: 0000000000000012 RSI: ffffffff85f6fd4b RDI: 0000000000000090\n\tRBP: 0000000000000000 R08: 0000000000000005 R09: 0000000000000000\n\tR10: 0000000000000000 R11: 0000000000000000 R12: ffff8880132c4000\n\tR13: 0000000000000000 R14: ffff888073b6c700 R15: 000000000000003b\n\tFS:  00007fab480b96c0(0000) GS:ffff888098ae9000(0000) knlGS:00000000\n---truncated---",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98509": {
+                "cve_id": "CVE-2026-98509",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/virtio: fix memory leak of fence event on execbuffer failure\n\nvirtio_gpu_execbuffer_ioctl() reserves a DRM event with\ndrm_event_reserve_init() when VIRTGPU_EXECBUF_RING_IDX selects a ring that\nuserspace has enabled polling for. virtio_gpu_init_submit() does this\nbefore the BO handles, the command buffer, the syncobj arrays and the\nin-fence are processed, so every later error path runs with the event\nalready pending, including plain argument validation failures such as an\ninvalid bo_handle or an in-syncobj that carries no fence.\n\nOn those paths, virtio_gpu_cleanup_submit() drops the out-fence without\ncancelling the event. The fence is freed without ever having been emitted,\ntaking the only driver-side pointer to the event with it. Closing the DRM\nfile does not help. drm_events_release() unlinks pending events but\ndeliberately leaves the freeing to the driver's later drm_send_event(),\nwhich never runs for an orphaned event, so the allocation is leaked\npermanently.\n\nFound when fuzzing the virtio driver with Syzkaller:\n\n\tBUG: memory leak\n\tunreferenced object 0xffff88802c176e80 (size 96):\n\tcomm \"syz.1.367\", pid 10561, jiffies 4294960122\n\thex dump (first 32 bytes):\n\t\t00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n\t\tc8 6e 17 2c 80 88 ff ff 00 00 00 00 00 00 00 00  .n.,............\n\tbacktrace (crc e1973c6b):\n\t\tkmemleak_alloc_recursive include/linux/kmemleak.h:44 [inline]\n\t\tslab_post_alloc_hook mm/slub.c:4597 [inline]\n\t\tslab_alloc_node mm/slub.c:4917 [inline]\n\t\t__kmalloc_cache_noprof+0x49d/0x6f0 mm/slub.c:5485\n\t\t_kmalloc_noprof include/linux/slab.h:988 [inline]\n\t\t_kzalloc_noprof include/linux/slab.h:1309 [inline]\n\t\tvirtio_gpu_fence_event_create drivers/gpu/drm/virtio/virtgpu_submit.c:282 [inline]\n\t\tvirtio_gpu_init_submit drivers/gpu/drm/virtio/virtgpu_submit.c:398 [inline]\n\t\tvirtio_gpu_execbuffer_ioctl+0xbbf/0x1aa0 drivers/gpu/drm/virtio/virtgpu_submit.c:505\n\t\tdrm_ioctl_kernel+0x1f4/0x3e0 drivers/gpu/drm/drm_ioctl.c:817\n\t\tdrm_ioctl+0x5f4/0xc70 drivers/gpu/drm/drm_ioctl.c:914\n\t\tvfs_ioctl fs/ioctl.c:51 [inline]\n\t\t__do_sys_ioctl fs/ioctl.c:597 [inline]\n\t\t__se_sys_ioctl fs/ioctl.c:583 [inline]\n\t\t__x64_sys_ioctl+0x18e/0x210 fs/ioctl.c:583\n\t\tdo_syscall_x64 arch/x86/entry/syscall_64.c:63 [inline]\n\t\tdo_syscall_64+0x116/0x800 arch/x86/entry/syscall_64.c:94\n\t\tentry_SYSCALL_64_after_hwframe+0x77/0x7f\n\nFix by cancelling and freeing the DRM event on the execbuffer error path\nbefore dropping the fence. Clear the fence's event pointer after\ncancellation so it does not retain a dangling pointer.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98510": {
+                "cve_id": "CVE-2026-98510",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/xe/vm: nuke PTs only after unlinking contested VMAs\n\nIn xe_vm_close_and_put(), external-BO VMAs are queued on the contested\nlist for deferred destruction via xe_vma_destroy_unlocked(). However,\nxe_vm_pt_destroy() was previously invoked before processing contested\nVMAs, destroying vm->pt_root while those VMAs were still linked to their\nrespective buffer objects (vm_bo->list.gpuva).\n\nIf a concurrent thread evicts one of those shared buffer objects,\nxe_bo_trigger_rebind() holding only bo->resv walks the BO's VMAs and, in\nfault mode, calls xe_vm_invalidate_vma() -> xe_pt_zap_ptes(). Because\nvm->pt_root[tile->id] is already NULL, dereferencing pt->level causes a\nNULL ptr deref.\n\nFix this by deferring xe_vm_free_scratch() and xe_vm_pt_destroy() until\nafter all contested VMAs have been unlinked and destroyed.\n\nUser is reporting hitting a NULL ptr deref in xe_pt_zap_ptes(), which\ncould be explained by this race.\n\n(cherry picked from commit c2863648959489767f08892fd6e90577d2ea0b6a)",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98511": {
+                "cve_id": "CVE-2026-98511",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/nouveau: don't bump pin count on failed re-pin in nouveau_bo_pin_locked()\n\nnouveau_bo_pin_locked() checks whether an already pinned BO is in a\nmemory domain compatible with a new pin request. When the domains are\nincompatible, it sets -EBUSY but still calls ttm_bo_pin() before\nreturning.\n\nCallers treat a failed nouveau_bo_pin() as not having acquired a new pin,\nso the extra pin count is never decreased by a matching unpin.\nThis triggers the warning in ttm_bo_release():\n\n\tWARN_ON_ONCE(bo->pin_count);\n\nFound when fuzzing the nouveau driver with a modified Syzkaller:\n\n\tWARNING: drivers/gpu/drm/ttm/ttm_bo.c:256 at ttm_bo_release+0x827/0x9e0 drivers/gpu/drm/ttm/ttm_bo.c:256, CPU#1: syz.3.24/2212\n\tModules linked in:\n\tCPU: 1 UID: 0 PID: 2212 Comm: syz.3.24 Not tainted 7.2.0 #24 PREEMPT(lazy)\n\tnouveau 0000:01:00.0: gsp:msg fn:103 len:0x40/0x20 res:0x19 resp:0x19\n\tHardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n\tRIP: 0010:ttm_bo_release+0x827/0x9e0 drivers/gpu/drm/ttm/ttm_bo.c:256\n\tCode: 02 00 0f 85 51 01 00 00 48 8b 7b 08 e8 d2 20 01 00 e9 80 fd ff ff e8 d8 15 c0 fe 90 0f 0b 90 e9 e1 f8 ff ff e8 ca 15 c0 fe 90 <0f> 0b 90 e9 a4 f8 ff ff e8 bc 15 c0 fe be 03 00 00 00 4c 89 e7 e8\n\tmsg: 00000000: 05 00 d0 c1 04 00 f0 f1 01 30 00 00 2d 90 00 00  .........0..-...\n\tRSP: 0018:ffffc9000f5cf710 EFLAGS: 00010293\n\tRAX: 0000000000000000 RBX: ffff888018e5d2a8 RCX: ffffffff82bb1b36\n\tRDX: ffff888017b68000 RSI: 0000000000000004 RDI: ffff888018e5d2a8\n\tmsg: 00000010: 19 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................\n\tRBP: ffff88801261c720 R08: 0000000000000001 R09: ffffed10031cba55\n\tR10: ffff888018e5d2ab R11: 00000000000000f3 R12: ffff888018e5d290\n\tR13: ffff888018e5d2d4 R14: ffff88801b219c18 R15: dffffc0000000000\n\tFS:  0000000000000000(0000) GS:ffff8880e0f6f000(0000) knlGS:0000000000000000\n\tCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n\tCR2: 0000001b31223ffc CR3: 0000000028e00005 CR4: 0000000000770ef0\n\tPKRU: 80000000\n\tCall Trace:\n\t<TASK>\n\tkref_put include/linux/kref.h:65 [inline]\n\tttm_bo_put drivers/gpu/drm/ttm/ttm_bo.c:325 [inline]\n\tttm_bo_fini+0x55/0x80 drivers/gpu/drm/ttm/ttm_bo.c:330\n\tnouveau_gem_object_del+0xb2/0x1b0 drivers/gpu/drm/nouveau/nouveau_gem.c:90\n\tdrm_gem_object_free+0x5f/0x90 drivers/gpu/drm/drm_gem.c:1165\n\tkref_put include/linux/kref.h:65 [inline]\n\t__drm_gem_object_put include/drm/drm_gem.h:562 [inline]\n\tdrm_gem_object_put include/drm/drm_gem.h:575 [inline]\n\tnouveau_abi16_chan_fini.constprop.0+0x44f/0x5a0 drivers/gpu/drm/nouveau/nouveau_abi16.c:195\n\tnouveau 0000:01:00.0: syz.2.23[2209]: Unknown handle 0x00000000\n\tnouveau_abi16_fini+0x1d0/0x340 drivers/gpu/drm/nouveau/nouveau_abi16.c:225\n\tnouveau_drm_postclose+0x18b/0x3e0 drivers/gpu/drm/nouveau/nouveau_drm.c:1284\n\tnouveau 0000:01:00.0: syz.2.23[2209]: validate_init\n\tdrm_file_free.part.0+0x6d6/0xb60 drivers/gpu/drm/drm_file.c:267\n\tdrm_file_free drivers/gpu/drm/drm_file.c:237 [inline]\n\tdrm_close_helper.isra.0+0x11a/0x160 drivers/gpu/drm/drm_file.c:290\n\tdrm_release+0x1ab/0x330 drivers/gpu/drm/drm_file.c:438\n\t__fput+0x39c/0xa60 fs/file_table.c:512\n\tnouveau 0000:01:00.0: syz.2.23[2209]: validate: -2\n\ttask_work_run+0x15a/0x230 kernel/task_work.c:233\n\texit_task_work include/linux/task_work.h:40 [inline]\n\tdo_exit+0x82b/0x25a0 kernel/exit.c:1009\n\tdo_group_exit+0xc2/0x280 kernel/exit.c:1152\n\tget_signal+0x1d6e/0x1f30 kernel/signal.c:3046\n\tarch_do_signal_or_restart+0x7d/0x6e0 arch/x86/kernel/signal.c:337\n\t__exit_to_user_mode_loop kernel/entry/common.c:66 [inline]\n\texit_to_user_mode_loop+0xdf/0x440 kernel/entry/common.c:101\n\t__exit_to_user_mode_prepare include/linux/irq-entry-common.h:207 [inline]\n\tsyscall_exit_to_user_mode_prepare include/linux/irq-entry-common.h:230 [inline]\n\tsyscall_exit_to_user_mode include/linux/entry-common.h:318 [inline]\n\tdo_syscall_64+0x4f8/0x690 arch/x86/entry/syscall_64.c:100\n\tentry_SYSCALL_64_after_hwframe+0x77/0x7f\n\tRI\n---truncated---",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
