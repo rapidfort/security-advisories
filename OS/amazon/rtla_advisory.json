@@ -28814,20 +28814,6 @@
                     }
                 ]
             },
-            "CVE-2026-64024": {
-                "cve_id": "CVE-2026-64024",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: fix stale per-CPU tcp_tw_isn leak enabling ISN prediction\n\nBlamed commit moved the TIME_WAIT-derived ISN from the skb control\nblock to a per-CPU variable, assuming the value would always be consumed\nby tcp_conn_request() for the same packet that wrote it. That assumption\nis violated by multiple drop paths between the producer\n(__this_cpu_write(tcp_tw_isn, isn) in tcp_v{4,6}_rcv()) and the consumer\n(tcp_conn_request()):\n\n - min_ttl / min_hopcount check\n - xfrm policy check\n - tcp_inbound_hash() MD5/AO mismatch\n - tcp_filter() eBPF/SO_ATTACH_FILTER drop\n - th->syn && th->fin discard in tcp_rcv_state_process() TCP_LISTEN\n - psp_sk_rx_policy_check() in tcp_v{4,6}_do_rcv()\n - tcp_checksum_complete() in tcp_v{4,6}_do_rcv()\n - tcp_v{4,6}_cookie_check() returning NULL\n\nWhen a packet is dropped on any of these paths, tcp_tw_isn is left set.\n\nThe next SYN processed on the same CPU then consumes the non zero value in\ntcp_conn_request(), receiving a potentially predictable ISN.\n\nThis patch moves back tcp_tw_isn to skb->cb[], getting rid of the per-cpu\nvariable.\n\nNote that tcp_v{4,6}_fill_cb() do not set it.\n\nVery litle impact on overall code size/complexity:\n\n$ scripts/bloat-o-meter -t vmlinux.old vmlinux.new\nadd/remove: 0/0 grow/shrink: 2/1 up/down: 8/-15 (-7)\nFunction                                     old     new   delta\ntcp_v6_rcv                                  3038    3042      +4\ntcp_v4_rcv                                  3035    3039      +4\ntcp_conn_request                            2938    2923     -15\nTotal: Before=24436060, After=24436053, chg -0.00%",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-64025": {
                 "cve_id": "CVE-2026-64025",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -29112,20 +29098,6 @@
                 "cve_id": "CVE-2026-64112",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrbd: eliminate a race in lock_dwork draining on unmap\n\nGiven how rbd_lock_add_request() and rbd_img_exclusive_lock() are\nwritten, lock_dwork may be (re)queued more than it's actually needed:\nfor example in case a new I/O request comes in while we are in the\nmiddle of rbd_acquire_lock() on behalf of another I/O request.  This is\nexpected and with rbd_release_lock() preemptively canceling lock_dwork\nis benign under normal operation.\n\nA more problematic example is maybe_kick_acquire():\n\n    if (have_requests || delayed_work_pending(&rbd_dev->lock_dwork)) {\n            dout(\"%s rbd_dev %p kicking lock_dwork\\n\", __func__, rbd_dev);\n            mod_delayed_work(rbd_dev->task_wq, &rbd_dev->lock_dwork, 0);\n    }\n\nIt's not unrealistic for lock_dwork to get canceled right after\ndelayed_work_pending() returns true and for mod_delayed_work() to\nrequeue it right there anyway.  This is a classic TOCTOU race.\n\nWhen it comes to unmapping the image, there is an implicit assumption\nof no self-initiated exclusive lock activity past the point of return\nfrom rbd_dev_image_unlock() which unlocks the lock if it happens to be\nheld.  This unlock is assumed to be final and lock_dwork (as well as\nall other exclusive lock tasks, really) isn't expected to get queued\nagain.  However, lock_dwork is canceled only in cancel_tasks_sync()\n(i.e. later in the unmap sequence) and on top of that the cancellation\ncan get in effect nullified by maybe_kick_acquire().  This may result\nin rbd_acquire_lock() executing after rbd_dev_device_release() and\nrbd_dev_image_release() run and free and/or reset a bunch of things.\nOne of the possible failure modes then is a violated\n\n    rbd_assert(rbd_image_format_valid(rbd_dev->image_format));\n\nin rbd_dev_header_info() which is called via rbd_dev_refresh() from\nrbd_post_acquire_action().\n\nRedo exclusive lock task draining to provide saner semantics and try\nto meet the assumptions around rbd_dev_image_unlock().",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-64114": {
-                "cve_id": "CVE-2026-64114",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: raw: reject IP_HDRINCL packets with ihl < 5\n\nraw_send_hdrinc() validates that the caller-supplied IPv4 header\nfits within the message length:\n\n    iphlen = iph->ihl * 4;\n    err = -EINVAL;\n    if (iphlen > length)\n        goto error_free;\n\n    if (iphlen >= sizeof(*iph)) {\n        /* fix up saddr, tot_len, id, csum, transport_header */\n    }\n\nIt does not, however, reject ihl < 5.  For such a packet the\n\"if (iphlen >= sizeof(*iph))\" branch is skipped, leaving the\ncrafted iphdr untouched, but the packet is still handed to\n__ip_local_out() and onward.  Downstream consumers that read\niph->ihl assume a sane value: net/ipv4/ah4.c:ah_output() in\nparticular subtracts sizeof(struct iphdr) from top_iph->ihl * 4\nand passes the (signed-int-negative, then cast to size_t)\nresult to memcpy(), producing an OOB access of length close to\nSIZE_MAX and a host kernel panic.\n\nAn IPv4 header with ihl < 5 is malformed by definition (RFC 791:\n\"Internet Header Length is the length of the internet header in\n32 bit words ... Note that the minimum value for a correct header\nis 5.\").  The kernel should not be willing to inject such a\npacket into its own output path.\n\nReject \"iphlen < sizeof(*iph)\" alongside the existing\n\"iphlen > length\" check.  This matches the principle that locally\nconstructed packets that re-enter the IP stack must pass the same\nbasic sanity tests that a foreign packet would be subjected to.\n\nOnce this lands, the \"if (iphlen >= sizeof(*iph))\" wrapper around\nthe fixup branch becomes redundant; left in place to keep the\npatch minimal and backport-friendly.  A follow-up can unwrap it.\n\nNote that commit 86f4c90a1c5c (\"ipv4, ipv6: ensure raw socket\nmessage is big enough to hold an IP header\") ensures the message\nbuffer is large enough to hold an iphdr, but does not constrain\nthe self-reported iph->ihl.\n\nReachability: the malformed packet source is any caller with\nCAP_NET_RAW, including an unprivileged process in a user+net\nnamespace on a kernel with CONFIG_USER_NS=y.  The reproduced AH\ncrash also requires a matching xfrm AH policy on the outgoing\nroute; a container granted CAP_NET_ADMIN can install that state\nand policy in its netns.  Loopback bypasses xfrm_output, so the\ntrigger uses a real netdev.\n\nReproduced on UML + KASAN: kernel-mode fault at addr 0x0 with\nmemcpy_orig at the crash site.  Same shape reproduces inside a\nrootless Docker container with --cap-add NET_ADMIN on a stock\ndistro kernel.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -31647,20 +31619,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: fix fils_discovery double free on alloc failure\n\nieee80211_set_fils_discovery() calls kfree_rcu() on the old template\nbefore allocating the replacement. If the kzalloc() then fails, it\nreturns -ENOMEM while link->u.ap.fils_discovery still points at the\nobject already queued for freeing. A later update or AP teardown\n(ieee80211_stop_ap()) re-queues that same rcu_head; the second free is\ncaught by KASAN when the RCU sheaf is processed in softirq:\n\n  BUG: KASAN: double-free in rcu_free_sheaf (mm/slub.c:5850)\n  Free of addr ffff88800c065280 by task swapper/0/0\n   ...\n   __rcu_free_sheaf_prepare (mm/slub.c:2634 mm/slub.c:2940)\n   rcu_free_sheaf (mm/slub.c:5850)\n   rcu_core (kernel/rcu/tree.c:2617 kernel/rcu/tree.c:2869)\n   handle_softirqs (kernel/softirq.c:622)\n  The buggy address belongs to the cache kmalloc-96 of size 96\n\nQueue the old object for kfree_rcu() only after the new one is published,\nmatching ieee80211_set_probe_resp() and ieee80211_set_s1g_short_beacon().",
                 "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-64572": {
-                "cve_id": "CVE-2026-64572",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: fib: free fib_alias with kfree_rcu() on insert error path\n\nfib_table_insert() publishes new_fa into the leaf's fa_list with\nfib_insert_alias() before calling the fib entry notifiers. When a\nnotifier fails, the error path removes new_fa with fib_remove_alias()\n(hlist_del_rcu) and frees it right away with kmem_cache_free().\n\nfib_table_lookup() walks that list under rcu_read_lock() only, so a\nconcurrent lookup that already reached new_fa keeps reading it after the\nfree:\n\n BUG: KASAN: slab-use-after-free in fib_table_lookup (net/ipv4/fib_trie.c:1601)\n Read of size 1 at addr ffff88810676d4eb by task exploit/297\n Call Trace:\n  fib_table_lookup (net/ipv4/fib_trie.c:1601)\n  ip_route_output_key_hash_rcu (net/ipv4/route.c:2814)\n  ip_route_output_key_hash (net/ipv4/route.c:2705)\n  __ip4_datagram_connect (net/ipv4/datagram.c:49)\n  udp_connect (net/ipv4/udp.c:2144)\n  __sys_connect (net/socket.c:2167)\n  __x64_sys_connect (net/socket.c:2173)\n  do_syscall_64\n  entry_SYSCALL_64_after_hwframe\n which belongs to the cache ip_fib_alias of size 56\n\nTriggering the error path needs CAP_NET_ADMIN and a registered fib\nnotifier that can reject a route; a netdevsim device whose IPv4 FIB\nresource is exhausted is enough.\n\nFree new_fa with alias_free_mem_rcu(), as fib_table_delete() already\ndoes for a fib_alias removed from the trie.",
-                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -51289,20 +51247,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nspi: core: Abort active target transfer on controller suspend\n\nWhen an SPI controller operating in target mode has a transfer in\nprogress at the time of system suspend, the suspend path proceeds\nwithout aborting the ongoing transfer. This can leave the hardware in\nan inconsistent state, potentially causing the system to hang or fail\nto resume cleanly.\n\nFix this by invoking the controller's target_abort callback from\nspi_controller_suspend() when the controller is in target mode and the\ncallback is registered. This ensures any active target transfer is\ncleanly terminated before the controller is suspended.",
                 "severity": "LOW",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-93817": {
-                "cve_id": "CVE-2026-93817",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Fix addr_filter_ranges lifetime\n\nLee Jia Jie reported that since event::addr_filter_ranges is used\nunder RCU, it should be RCU freed.",
-                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
