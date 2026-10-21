@@ -58270,6 +58270,48 @@
                     }
                 ]
             },
+            "CVE-2026-98610": {
+                "cve_id": "CVE-2026-98610",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_hfsc: bound the classify inner-filter walk with a drift budget\n\nhfsc_classify() applies the \"filter may only point downwards\" level check\nonly when the filter result carries no bound class. A filter created with\na flowid gets res.class set once at bind time, so the check never runs for\nit during classification. hfsc_adjust_levels() can later raise a class's\nlevel without revalidating existing bindings, leaving two binds that were\neach legal at bind time pointing at each other; the classify walk then\nbounces between two interior classes forever with the qdisc lock held and\nBH disabled \u2014 a soft lockup from a single packet. The stuck walk trips\nthe watchdog:\n\n  watchdog: BUG: soft lockup - CPU#3 stuck for 13s! [ping:444]\n  RIP: 0010:u32_classify+0x542/0x17f0\n  ...\n  tcf_classify+0x66/0xa0\n  hfsc_enqueue+0x166/0xdf0\n\nBound the traversal with a budget of non-descending hops, the only way a\nconfigured walk can move without descending the class tree once levels\ndrift after bind time. The budget is cumulative over the whole walk and\nis deliberately not reset on a descending hop: a chain that alternates a\ndescent with a lateral hop would return the budget every lap and never\ntrip. Descending hops never decrement it, so legitimately deep trees are\nunaffected and a terminating lateral chain still classifies normally.\nDrop the packet with a rate-limited warning once the budget is exhausted,\nmirroring the merged HTB fix.\n\nThis is a follow-up to commit 729c4896ab82 (\"net/sched: sch_htb: limit\nhtb_classify inner-class filter hops\"), which bounded the same classify\nloop on the HTB side but left the HFSC walk unbounded.\n\nConditions to recreate the bug:\n- CONFIG_NET_SCHED, CONFIG_NET_SCH_HFSC, CONFIG_NET_CLS_U32,\n  CONFIG_LOCKUP_DETECTOR.\n- Build a cycle with two legal-at-bind-time flowid binds and a level\n  drift: class X 1:1 (child of root) with leaf child 1:10; class Y 1:2\n  (sibling of X) with children 1:20 and 1:200; root u32 filter flowid\n  1:1; filter on X flowid 1:2 (legal when Y is a leaf); after Y's level\n  rises to 2, filter on Y flowid 1:1 (legal then). Send one packet (ping\n  on the device). Unfixed kernel: classify spins with the qdisc lock\n  held; with softlockup_panic=1 it panics.\n- Reachable from unprivileged user via unshare -Urn (CAP_NET_ADMIN).",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98612": {
+                "cve_id": "CVE-2026-98612",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: usb: catc: bound the RX packet length in catc_rx_done()\n\ncatc_rx_done() walks a multi-packet URB, reading a two-byte length from\neach packet header. Its bound, pkt_len > urb->actual_length, ignores the\nheader offset and compares against the whole transfer rather than the\nbytes left from pkt_start, so a crafted packet header makes\nskb_copy_to_linear_data() read past the buffer.\n\nA length below ETH_HLEN is also accepted, including zero, and\neth_type_trans() then reads a MAC header from the uninitialised tailroom\nof a shorter skb. The is_f5u011 branch takes its length straight from\nthe transfer, so a zero-length URB reaches the same path.\n\nTrack the bytes remaining from the current packet, and reject a header\nthat does not fit, a length past what is left, and a length below an\nEthernet header.\n\nA transfer shorter than an Ethernet header, including a zero-length one,\npreviously became a runt skb passed to netif_rx() and counted as\nreceived; it is now counted in rx_length_errors and ends the walk.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98613": {
+                "cve_id": "CVE-2026-98613",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Bound ownership depth through local kptrs and graph roots\n\nProgram-allocated objects can own other local objects through referenced\nkptrs. bpf_obj_free_fields() follows those pointers through\n__bpf_obj_drop_impl() synchronously, before the object storage is freed\nthrough RCU. A self-referential local kptr type therefore permits arbitrarily\ndeep object chains, and dropping the head can exhaust the kernel stack.\nLong acyclic type chains have the same problem.\n\nbtf_check_and_fixup_fields() still assumes referenced kptrs only point to\nkernel types and checks ownership through list and rbtree roots only. Its\nexisting rule is sufficient for graph-only cycles: the target of each graph\nedge must contain a node, so every type in a cycle has both a root and a\nnode. The rule rejects such a type owning another root, breaking every\ncycle. It also limits graph-only chains to three types, or two if the first\ntype contains a node, and conservatively rejects longer acyclic chains.\nThe missing local-kptr edges, rather than a missed graph-only cycle, are the\nbug introduced by support for bpf_kptr_xchg() into local kptrs.\n\nReplace that restriction with one bounded ownership walk covering graph\nroots and local referenced kptrs. Run it after all BTF records have been\nfixed up, reject cycles and paths deeper than eight record-bearing types,\nand cache each type's suffix depth while checking it against the remaining\nbudget. This also permits the longer acyclic graph-only layouts rejected\nby the old rule; update their existing BTF tests accordingly.\n\nKeep the bound independent of MAX_CALL_FRAMES because recursive destruction\ncan run below a BPF call chain. A plain local pointee without special-field\nmetadata adds only a final non-recursing drop. Non-owning kptrs and\nkernel-BTF kptrs do not recurse through local records and remain outside the\nwalk. Include local percpu-kptr edges too, although allocation of percpu\nobjects with special fields is currently forbidden, so that relaxing that\nrestriction cannot bypass the ownership bound.\n\nbtf_check_and_fixup_fields() continues to initialize graph_root.value_rec,\nincluding for separately allocated map records. The ownership relationships\nbelong to immutable program BTF and only need validation at BTF load time.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99999": {
                 "cve_id": "CVE-2026-99999",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
