@@ -6,7 +6,7 @@ RapidFort provides **validated, research-backed security advisory data** for all
 - Integrate **per-package advisory data** seamlessly into their scanning workflow
 - **Eliminate false positives** by excluding vulnerabilities that do not apply to RapidFort Curated Images
 
-The repository contains a structured JSON database of per-package CVE advisories covering **Alpine Linux**, **Ubuntu**, **Debian**, **Red Hat**, **Oracle Linux**, **AlmaLinux**, and **Rocky Linux** distributions.
+The repository contains a structured JSON database of per-package CVE advisories covering **Alpine Linux**, **Ubuntu**, **Debian**, **Red Hat**, **Oracle Linux**, **AlmaLinux**, **Rocky Linux**, and **Amazon Linux** distributions.
 
 ---
 
@@ -20,7 +20,8 @@ OS/
 ├── redhat/    # Red Hat advisory files
 ├── oracle/    # Oracle Linux advisory files
 ├── alma/      # AlmaLinux advisory files
-└── rocky/     # Rocky Linux advisory files
+├── rocky/     # Rocky Linux advisory files
+└── amazon/    # Amazon Linux advisory files
 ```
 
 Each advisory file covers a single package and follows the naming convention:
@@ -39,6 +40,7 @@ OS/redhat/zlib_advisory.json
 OS/oracle/glibc_advisory.json
 OS/alma/ImageMagick-libs_advisory.json
 OS/rocky/openssl-libs_advisory.json
+OS/amazon/curl_advisory.json
 ```
 
 ### Package Name Granularity
@@ -49,7 +51,7 @@ The package name used in the filename differs by package format:
 |---|---|---|---|
 | apk | Alpine Linux | Source package | `openssl_advisory.json` (not `libcrypto3`) |
 | dpkg | Ubuntu, Debian | Source package | `glibc_advisory.json` (not `libc6`) |
-| rpm | Red Hat, Oracle Linux, AlmaLinux, Rocky Linux | Binary package | `openssl_advisory.json` **and** `openssl-libs_advisory.json` |
+| rpm | Red Hat, Oracle Linux, AlmaLinux, Rocky Linux, Amazon Linux | Binary package | `openssl_advisory.json` **and** `openssl-libs_advisory.json` |
 
 Package names prefixed with `rf-` (e.g. `rf-python3`, `rf-chromium`) are RapidFort-rebuilt packages.
 
@@ -68,6 +70,7 @@ Package names prefixed with `rf-` (e.g. `rf-python3`, `rf-chromium`) are RapidFo
 | **Oracle Linux** | 6, 7, 8, 9, 10 | rpm |
 | **AlmaLinux** | 8, 9, 10 | rpm |
 | **Rocky Linux** | 8, 9, 10 | rpm |
+| **Amazon Linux** | 2023 | rpm |
 
 ### Stream Identifiers
 
@@ -76,6 +79,7 @@ Advisory events for every distribution **except Alpine Linux** include an `ident
 | Prefix | Stream | Examples |
 |---|---|---|
 | `el` | RHEL / CentOS / Oracle Linux / AlmaLinux / Rocky Linux | `el6`, `el7`, `el8`, `el9`, `el10` |
+| `amzn` | Amazon Linux | `amzn2023` |
 | `fc` | Fedora | `fc39`, `fc40`, `fc41`, `fc42`, `fc43` |
 | `ubuntu` | Ubuntu archive | `ubuntu` |
 | `debian` | Debian archive | `debian` |
@@ -91,6 +95,7 @@ Which identifiers appear depends on the distribution:
 | Red Hat | `el5`–`el10`, `fc18`–`fc46`, `rf` |
 | Oracle Linux | `el2`, `el4`–`el10`, `fc3`–`fc46`, `rf` |
 | AlmaLinux, Rocky Linux | `el8`, `el9`, `el10`, `fc18`–`fc46`, `rf` |
+| Amazon Linux | `amzn2023`, `fc41`–`fc45`, `rf` |
 
 ---
 
@@ -159,6 +164,7 @@ Each advisory file is a JSON object with the following structure:
 | Oracle Linux | `"6"`, `"7"`, `"8"`, `"9"`, `"10"` | Major release number |
 | AlmaLinux | `"8"`, `"9"`, `"10"` | Major release number |
 | Rocky Linux | `"8"`, `"9"`, `"10"` | Major release number |
+| Amazon Linux | `"2023"` | Release year |
 
 ---
 
@@ -166,7 +172,7 @@ Each advisory file is a JSON object with the following structure:
 
 ### Step 1: Identify the OS and Release
 
-Determine the operating system and release version of the target system being scanned (e.g. Alpine 3.21, Ubuntu 22.04, Debian 12, Red Hat 9, Oracle Linux 9, AlmaLinux 9, Rocky Linux 9).
+Determine the operating system and release version of the target system being scanned (e.g. Alpine 3.21, Ubuntu 22.04, Debian 12, Red Hat 9, Oracle Linux 9, AlmaLinux 9, Rocky Linux 9, Amazon Linux 2023).
 
 ### Step 2: Locate the Advisory File
 
@@ -186,6 +192,7 @@ OS/redhat/yelp_advisory.json
 OS/oracle/glibc_advisory.json
 OS/alma/389-ds-base-libs_advisory.json
 OS/rocky/chromium-common_advisory.json
+OS/amazon/openssl-libs_advisory.json
 ```
 
 For rpm-based distributions, use the binary package name — see [Package Name Granularity](#package-name-granularity).
@@ -234,6 +241,7 @@ For every distribution except Alpine, events may include an `identifier` field. 
 
 - On RHEL 9, evaluate only events with `identifier = "el9"`
 - On Oracle Linux 9, AlmaLinux 9, or Rocky Linux 9, evaluate only events with `identifier = "el9"`
+- On Amazon Linux 2023, evaluate only events with `identifier = "amzn2023"`
 - On Fedora 41, evaluate only events with `identifier = "fc41"`
 - On Ubuntu, evaluate only events with `identifier = "ubuntu"` for archive packages, or `identifier = "rf"` for RapidFort-rebuilt packages
 - On Debian, evaluate only events with `identifier = "debian"` for archive packages, or `identifier = "rf"` for RapidFort-rebuilt packages
@@ -296,6 +304,7 @@ Version strings are OS-specific. Consumers must use the appropriate version comp
 | Oracle Linux | `{epoch}:{version}-{release}.{dist}` | `2:1.2.11-40.el9` |
 | AlmaLinux | `{epoch}:{version}-{release}.{dist}` | `1:2.3.3op2-39.el9_8` |
 | Rocky Linux | `{epoch}:{version}-{release}.{dist}` | `0:4.10.0-110.el9_8.2` |
+| Amazon Linux | `{epoch}:{version}-{release}.{dist}` | `1:3.0.8-1.amzn2023.0.1` |
 
 **Notes:**
 - The epoch prefix (e.g. `1:`, `2:`) is significant for version ordering and must not be ignored.
