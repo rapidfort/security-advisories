@@ -1003,10 +1003,36 @@
                     }
                 ]
             },
+            "CVE-2026-64266": {
+                "cve_id": "CVE-2026-64266",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: re-lock request before returning from fuse_ref_folio()\n\nfuse_ref_folio() unlocks the request but does not re-lock it before\nreturning. fuse_chan_abort() can end the request and the async end\ncallback (eg fuse_writepage_free()) can free the args while the\nsubsequent copy chain logic after fuse_ref_folio() accesses them,\nleading to use-after-free issues.\n\nFix this by locking the request in fuse_ref_folio() before returning.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-64496": {
                 "cve_id": "CVE-2026-64496",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\niio: event: Fix event FIFO reset race\n\n`iio_event_getfd()` creates the event file descriptor with\n`anon_inode_getfd()`, which allocates a new fd, creates the anonymous\nfile and installs it in the process fd table before returning to the\ncaller.\n\nThe IIO code resets the event FIFO after `anon_inode_getfd()` has returned,\nbut before `IIO_GET_EVENT_FD_IOCTL` has copied the fd number to userspace.\nBut since fd tables are shared between threads, another thread can guess\nthe newly allocated fd number and issue a `read()` on it as soon as the fd\nhas been installed.\n\nThis means the `kfifo_to_user()` in `iio_event_chrdev_read()` can run in\nparallel with the `kfifo_reset_out()` in `iio_event_getfd()`.\n\nThe kfifo documentation says that `kfifo_reset_out()` is only safe when it\nis called from the reader thread and there is only one concurrent reader.\nOtherwise it is dangerous and must be handled in the same way as\n`kfifo_reset()`.\n\nIf that happens, `kfifo_to_user()` can advance the FIFO `out` index based\non state from before the reset, after the reset has already moved the `out`\nindex to the current `in` index. That can leave the FIFO with an `out`\nindex past the `in` index. A later `read()` can then see an underflowed\nFIFO length and copy more data than the event FIFO buffer contains. This\ncan result in an out-of-bounds read and leak adjacent kernel memory to\nuserspace.\n\nMove the FIFO reset before `anon_inode_getfd()`. At that point the event fd is\nmarked busy, but the new fd has not been installed yet, so userspace cannot\naccess it while the FIFO is reset.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-68202": {
+                "cve_id": "CVE-2026-68202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -1055,6 +1081,19 @@
                     }
                 ]
             },
+            "CVE-2026-80536": {
+                "cve_id": "CVE-2026-80536",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: bounds-check buffer log item's dirty bitmap\n\nxlog_recover_do_reg_buffer() replays each dirty region described by a\nbuffer log item's bitmap into the buffer read for that item:\n\n\tmemcpy(xfs_buf_offset(bp, (uint)bit << XFS_BLF_SHIFT),\n\t\titem->ri_buf[i].iov_base,\n\t\tnbits << XFS_BLF_SHIFT);\n\nThe destination offset (bit/nbits, from the logged dirty bitmap) and the\nbuffer size (from the logged blf_len) are both attacker-controlled and\notherwise unrelated, yet the only thing bounding the copy is an ASSERT(),\nwhich compiles away on production kernels. A crafted image logging a\nsmall blf_len together with a bitmap bit past the end of that buffer\ndrives the memcpy() past the buffer's allocation, corrupting adjacent\nkernel heap during mount-time log recovery. This is reachable by anyone\nwho can get a crafted image mounted -- the malicious-filesystem threat\nmodel XFS already guards against elsewhere.\n\nTurn the ASSERT() into a real XFS_IS_CORRUPT() check that aborts recovery\nof the buffer with -EFSCORRUPTED, consistent with the validate-and-fail\nidiom already used in xlog_recover_do_inode_buffer() and\nxfs_dquot_item_recover.c. xlog_recover_do_reg_buffer() therefore becomes\nSTATIC int and its three callers propagate the error.\n\nFound and confirmed with KASAN on a CONFIG_XFS_DEBUG=n build: the crafted\nimage trips a slab-out-of-bounds write before this change and fails\nrecovery cleanly with -EFSCORRUPTED after it.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-89479": {
                 "cve_id": "CVE-2026-89479",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -1073,6 +1112,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject a tree connect response whose byte count is too small\n\nCIFSTCon() bounds its strnlen() over the byte area with the server's\nByteCount minus two, which for ByteCount 0 or 1 goes negative as an int\nand converts to a huge size_t.  The later subtraction wraps the __u16\nbytes_left, and that is what bounds cifs_strndup_from_utf16(): a bound of\nup to 65535 against a ~16 KB cifs_req_poolp object runs off the end of the\nslab object, and the bytes reach userspace through tcon->nativeFileSystem\nin /proc/fs/cifs/DebugData.\n\nReject a byte area too small for what the parser consumes.  Two bytes is\nthe least it can consume, and no conformant response carries fewer.  The\nnew trace point is the 129th smb_eio_trace entry, which __mode(byte)\ncannot represent, so the attribute goes with it.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-89777": {
+                "cve_id": "CVE-2026-89777",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -53055,19 +53107,6 @@
                     }
                 ]
             },
-            "CVE-2026-64266": {
-                "cve_id": "CVE-2026-64266",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: re-lock request before returning from fuse_ref_folio()\n\nfuse_ref_folio() unlocks the request but does not re-lock it before\nreturning. fuse_chan_abort() can end the request and the async end\ncallback (eg fuse_writepage_free()) can free the args while the\nsubsequent copy chain logic after fuse_ref_folio() accesses them,\nleading to use-after-free issues.\n\nFix this by locking the request in fuse_ref_folio() before returning.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-64275": {
                 "cve_id": "CVE-2026-64275",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -55686,19 +55725,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mwifiex: fix NULL dereference when the AP has HT-cap but no HT-oper\n\nmwifiex_tdls_add_ht_oper() gates its follow-the-AP-bandwidth path on\nbss_desc->bcn_ht_cap being present, but then dereferences a different\npointer, bss_desc->bcn_ht_oper:\n\n\tif (ISSUPP_CHANWIDTH40(priv->adapter->hw_dot_11n_dev_cap) &&\n\t    bss_desc->bcn_ht_cap &&\n\t    ISALLOWED_CHANWIDTH40(bss_desc->bcn_ht_oper->ht_param))\n\nbcn_ht_cap and bcn_ht_oper are populated independently while parsing the\nassociated AP's beacon in mwifiex_update_bss_desc_with_ie(): an AP that\nadvertises an HT Capabilities element but no HT Operation element leaves\nbcn_ht_cap non-NULL and bcn_ht_oper NULL. Setting up a TDLS link to a\npeer while associated to such an AP then dereferences the NULL\nbcn_ht_oper and crashes the kernel. Every other bcn_ht_oper user in the\ndriver NULL-checks it first.\n\nGuard on the pointer that is actually dereferenced.\n\nFound by 0sec automated security-research tooling (https://0sec.ai).",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-68202": {
-                "cve_id": "CVE-2026-68202",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -64443,19 +64469,6 @@
                     }
                 ]
             },
-            "CVE-2026-80536": {
-                "cve_id": "CVE-2026-80536",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: bounds-check buffer log item's dirty bitmap\n\nxlog_recover_do_reg_buffer() replays each dirty region described by a\nbuffer log item's bitmap into the buffer read for that item:\n\n\tmemcpy(xfs_buf_offset(bp, (uint)bit << XFS_BLF_SHIFT),\n\t\titem->ri_buf[i].iov_base,\n\t\tnbits << XFS_BLF_SHIFT);\n\nThe destination offset (bit/nbits, from the logged dirty bitmap) and the\nbuffer size (from the logged blf_len) are both attacker-controlled and\notherwise unrelated, yet the only thing bounding the copy is an ASSERT(),\nwhich compiles away on production kernels. A crafted image logging a\nsmall blf_len together with a bitmap bit past the end of that buffer\ndrives the memcpy() past the buffer's allocation, corrupting adjacent\nkernel heap during mount-time log recovery. This is reachable by anyone\nwho can get a crafted image mounted -- the malicious-filesystem threat\nmodel XFS already guards against elsewhere.\n\nTurn the ASSERT() into a real XFS_IS_CORRUPT() check that aborts recovery\nof the buffer with -EFSCORRUPTED, consistent with the validate-and-fail\nidiom already used in xlog_recover_do_inode_buffer() and\nxfs_dquot_item_recover.c. xlog_recover_do_reg_buffer() therefore becomes\nSTATIC int and its three callers propagate the error.\n\nFound and confirmed with KASAN on a CONFIG_XFS_DEBUG=n build: the crafted\nimage trips a slab-out-of-bounds write before this change and fails\nrecovery cleanly with -EFSCORRUPTED after it.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-80539": {
                 "cve_id": "CVE-2026-80539",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -69102,19 +69115,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs: fix user path of nested backing files\n\nbacking_file_open() derives the path to be stored in the new backing\nfile from user_file->f_path.  This is incorrect when user_file itself\nis a backing file, which is the case for nested stacking filesystems,\ne.g. overlayfs mounts where the lowerdir of one overlayfs is the merged\ndirectory of another.  Since commit def3ae83da02 (\"fs: store real path\ninstead of fake path in backing file f_path\") the f_path of a backing\nfile holds the real path of the intermediate layer, not the path that\nthe user opened.\n\nCommit 924577e4f6ca (\"ovl: Fix nested backing file paths\") fixed this\nfor such configurations by passing file_user_path() from\novl_open_realfile().  However, commit 6af36aeb147a (\"lsm: add\nbacking_file LSM hooks\") changed the first argument of\nbacking_file_open() from the user path back to the user file and\nderived the path from user_file->f_path again, silently re-introducing\nthe problem.\n\nAs a result, files mapped through a nested overlayfs show the wrong\npath in /proc/<pid>/maps and in perf/ftrace mmap records.  For example,\nwith two nested overlayfs mounts:\n\n  mkdir -p /ovl/{lower,upper,work,merged} /ovl/nested\n  echo hello > /ovl/lower/foo\n  mount -t overlay overlay \\\n\t-o lowerdir=/ovl/lower,upperdir=/ovl/upper,workdir=/ovl/work \\\n\t/ovl/merged\n  # at least two lowerdirs are needed when upperdir is nonexistent\n  mount -t overlay overlay \\\n\t-o lowerdir=/ovl/merged:/ovl/lower /ovl/nested\n\nmapping /ovl/nested/foo shows a disconnected path instead of the user\npath:\n\n  # readlink /proc/self/fd/3\n  /ovl/nested/foo\n  # grep foo /proc/self/maps\n  7f6e2c100000-7f6e2c101000 r--s 00000000 00:24 15813027 /foo\n\nThe bogus path is derived from the f_path of the intermediate backing\nfile, whose mount is a private clone that d_path() cannot resolve.\n\nFix this by using file_user_path(), which returns the outermost\nuser-visible path for backing files and falls back to\n&user_file->f_path for regular files.  This restores the behavior of\ncommit 924577e4f6ca (\"ovl: Fix nested backing file paths\") for\noverlayfs and also fixes the same problem for the other\nbacking_file_open() callers, fuse passthrough and erofs ishare, when\ntheir user file is itself a backing file.\n\nbacking_tmpfile_open() has the same pattern but is not affected: it is\nonly called by ovl_create_tmpfile() for the upper layer, and another\noverlayfs is rejected as upperdir by the DCACHE_OP_REAL check in\novl_mount_dir_check(), so its user_file can never be a backing file.",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-89777": {
-                "cve_id": "CVE-2026-89777",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -81088,6 +81088,32 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: set info->band for 802.3 encap offload frames\n\nUnlike the 802.11 TX paths, ieee80211_8023_xmit() does not set\ninfo->band from the channel context on non-MLD interfaces. It stays at\n0, so ieee80211_get_tx_rates() uses the wrong band for these frames.\n\nSet it the same way as ieee80211_build_hdr(): drop the frame if there is\nno channel context, and leave the band at 0 on MLD interfaces.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98704": {
+                "cve_id": "CVE-2026-98704",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: keep fallback association elements alive\n\nAssociating to a non-transmitted MBSSID profile reads freed memory while\ndetermining the operating channel and applying HT capabilities.\n\nWhen an association response omits WMM, HT, or VHT information,\nieee80211_assoc_config_link() parses the cached BSS IEs and copies the\nmissing element pointers out of that fallback parse. For a\nnon-transmitted MBSSID profile those pointers refer to merged-profile\nstorage owned by the parse object, and the fallback block frees that\nobject at its end. The copied pointers are used afterwards to determine\nthe operating channel, configure bandwidth, and apply HT capabilities.\n\nKeep the fallback parse result alive until association setup finishes.\n\n[reorder variable declaration]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98705": {
+                "cve_id": "CVE-2026-98705",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: account proxy paths against the mesh path limit\n\nProxy-path churn can drive the interface path counter negative and let\nlater mesh path additions exceed MESH_MAX_MPATHS.\n\nmesh_path_free_rcu() decrements the interface mpaths counter for entries\nfrom both the mesh and proxy path tables, but mpp_path_add() never\nreserves a slot in that counter. Removing or expiring a proxy path\ntherefore returns a slot that was never charged.\n\nmesh_path_add() uses the same counter to enforce MESH_MAX_MPATHS, so once\nit falls below the number of installed paths the limit no longer holds.\n\nReserve the shared quota before allocating a proxy path and release it on\nevery unsuccessful addition. Mesh and proxy paths now share one\n1024-entry budget, so mpp_path_add() can return -ENOSPC at that limit.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -127188,6 +127214,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: set info->band for 802.3 encap offload frames\n\nUnlike the 802.11 TX paths, ieee80211_8023_xmit() does not set\ninfo->band from the channel context on non-MLD interfaces. It stays at\n0, so ieee80211_get_tx_rates() uses the wrong band for these frames.\n\nSet it the same way as ieee80211_build_hdr(): drop the frame if there is\nno channel context, and leave the band at 0 on MLD interfaces.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98705": {
+                "cve_id": "CVE-2026-98705",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: account proxy paths against the mesh path limit\n\nProxy-path churn can drive the interface path counter negative and let\nlater mesh path additions exceed MESH_MAX_MPATHS.\n\nmesh_path_free_rcu() decrements the interface mpaths counter for entries\nfrom both the mesh and proxy path tables, but mpp_path_add() never\nreserves a slot in that counter. Removing or expiring a proxy path\ntherefore returns a slot that was never charged.\n\nmesh_path_add() uses the same counter to enforce MESH_MAX_MPATHS, so once\nit falls below the number of installed paths the limit no longer holds.\n\nReserve the shared quota before allocating a proxy path and release it on\nevery unsuccessful addition. Mesh and proxy paths now share one\n1024-entry budget, so mpp_path_add() can return -ENOSPC at that limit.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
