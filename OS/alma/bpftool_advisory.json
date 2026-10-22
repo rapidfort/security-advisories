@@ -80991,6 +80991,110 @@
                         "identifier": "el9"
                     }
                 ]
+            },
+            "CVE-2026-98692": {
+                "cve_id": "CVE-2026-98692",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nthunderbolt: Make the DP tunnel activation callback mandatory\n\ntb_tunnel_alloc_dp() takes an optional callback which is run from\ndprx_work once the DPRX capabilities read has completed. Without that\ncallback tb_dp_dprx_start() reads the capabilities synchronously and\nnever queues the work. It however always takes a tunnel reference which\nis only dropped by dprx_work itself or by tb_dp_dprx_stop() when\ncancel_delayed_work() actually canceled that work. That reference is\nthus leaked for every tunnel without a callback.\n\nThe only tunnels without one are those from tb_tunnel_discover_dp(),\nwhich are activated again when restoring from hibernation.\nPass the callback to tb_tunnel_discover_dp() as well and drop the\nsynchronous path such that the DPRX capabilities are always read from\ndprx_work. Hibernation restore then also no longer blocks for up to 12\nseconds while waiting for that read to complete.\n\nAlso fix up the KUnit tests.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98693": {
+                "cve_id": "CVE-2026-98693",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nthunderbolt: Hold a router reference for each allocated HopID\n\ntb_stop() drops the reference to all DP tunnels but does not deactivate\nthem, thus nothing cancels a dprx_work still in flight (which holds its\nown tunnel reference) and the tunnel can outlive tb_switch_remove(). The\nHopID releases in tb_path_free() then operate on freed IDAs and trigger\nwarnings like\n\n  ida_free called for id=8 which is not allocated.\n\nThis can be triggered by unbinding the driver while a DP tunnel is still\nwaiting for the DPRX capabilities read to finish. On the Apple NHI\nunplugging the cable runs into just that reliably because the read can\nnever finish right now and because the unplug powers down the entire\nUSB4 complex and removes the NHI device.\n\nTake a router reference whenever an input or output HopID is allocated\nand drop it again after the HopID is released. This keeps the ports and\ntheir HopID IDAs alive for as long as they are used.\n\nThe KUnit tests allocate routers without ever registering their devices\nso initialize the embedded struct device there as well and drop its\ninitial reference when the test is finished.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98694": {
+                "cve_id": "CVE-2026-98694",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nthunderbolt: Fix KASAN reported use-after-free when request is canceled\n\nAlan reported that when doing stress testing sometimes KASAN notices\nuse-after-free during control channel operation (stripped down keeping\nthe relevant parts):\n\n BUG: KASAN: slab-use-after-free in tb_cfg_request_sync+0x240/0x250 [thunderbolt]\n Read of size 24 at addr ffff88811067f290 by task kworker/u40:2/1760\n  <TASK>\n  tb_cfg_request_sync+0x240/0x250 [thunderbolt]\n  tb_cfg_read_raw+0x367/0x510 [thunderbolt]\n  tb_cfg_read+0xec/0x240 [thunderbolt]\n  tb_port_get_link_generation+0x258/0x420 [thunderbolt]\n  tb_usb3_consumed_bandwidth+0x1c1/0x2c0 [thunderbolt]\n  tb_tunnel_consumed_bandwidth+0xfd/0x910 [thunderbolt]\n  tb_available_bandwidth+0x5f2/0xeb0 [thunderbolt]\n  tb_recalc_estimated_bandwidth+0x2a0/0x1bc0 [thunderbolt]\n  tb_handle_dp_bandwidth_request+0x1897/0x5e20 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n  </TASK>\n\n Allocated by task 1760:\n  __kmalloc_cache_noprof+0x1ee/0x550\n  tb_cfg_read_raw+0x1d3/0x510 [thunderbolt]\n  tb_cfg_read+0xec/0x240 [thunderbolt]\n  tb_port_get_link_generation+0x258/0x420 [thunderbolt]\n  tb_usb3_consumed_bandwidth+0x1c1/0x2c0 [thunderbolt]\n  tb_tunnel_consumed_bandwidth+0xfd/0x910 [thunderbolt]\n  tb_available_bandwidth+0x5f2/0xeb0 [thunderbolt]\n  tb_recalc_estimated_bandwidth+0x2a0/0x1bc0 [thunderbolt]\n  tb_handle_dp_bandwidth_request+0x1897/0x5e20 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n\n Freed by task 926:\n  kfree+0x18f/0x4a0\n  tb_cfg_request_put+0xb7/0xe0 [thunderbolt]\n  tb_cfg_request_work+0x82/0x120 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n\n Second to last potentially related work creation:\n  __queue_work+0x575/0xd00\n  queue_work_on+0x77/0x80\n  tb_cfg_request_cancel+0xc7/0x260 [thunderbolt]\n  tb_cfg_request_sync+0x1f6/0x250 [thunderbolt]\n  tb_cfg_read_raw+0x367/0x510 [thunderbolt]\n  tb_cfg_read+0xec/0x240 [thunderbolt]\n  tb_port_get_link_generation+0x258/0x420 [thunderbolt]\n  tb_usb3_consumed_bandwidth+0x1c1/0x2c0 [thunderbolt]\n  tb_tunnel_consumed_bandwidth+0xfd/0x910 [thunderbolt]\n  tb_available_bandwidth+0x5f2/0xeb0 [thunderbolt]\n  tb_recalc_estimated_bandwidth+0x2a0/0x1bc0 [thunderbolt]\n  tb_handle_dp_bandwidth_request+0x1897/0x5e20 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n\nThe last stack trace is helpful because it shows that we are cancelling\na request and looking at tb_cfg_request_cancel() what might happen is\nthat tb_cfg_request_work() completes right before tb_cfg_request_cancel()\nstarts and because of this it will call schedule_work() queueing the\nsame work to run again. However, it is already removed from the\nrequest_queue and reference count is dropped so when\ntb_cfg_request_work() triggers again it will access memory that is\nalready released.\n\nFix this so that we first make sure a cancelled request is not handed\naway from tb_cfg_request_find() or scheduled to run. Then instead of\nrelying on the worker to clean up the request we will do it in\ntb_cfg_request_cancel() after the work is canceled from running. Make\ntb_cfg_request_dequeue() release the request only if it was actually\nremoved from the queue.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98695": {
+                "cve_id": "CVE-2026-98695",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: fix ioctl hangup race\n\nThe tty ioctls can race with hangup and end up calling into a tty driver\nfor a device that is already gone or powered down.\n\nSerialise the callbacks using the tty port mutex and add the missing\nchecks to make sure the port has not been hung up before accessing port\ndriver data or hardware.\n\nThis specifically avoids dereferencing a NULL-pointer if a device is\ndisconnected during lengthy break signalling.\n\nNote that TIOCGICOUNT and TIOCMIWAIT do not access port driver data or\nhardware and are therefore not affected by the race.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98696": {
+                "cve_id": "CVE-2026-98696",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: fix driver deregistration order\n\nUSB serial driver modules register one driver for the USB bus and one or\nmore drivers for the ports on the USB serial bus.\n\nWhen unloading a driver module, the USB driver must be deregistered\nbefore the USB serial bus drivers so that I/O is stopped before\nunbinding the ports to avoid use-after-free in completion handlers\naccessing port data.\n\nNote that the \"new_id\" attributes must first be removed to prevent new\nids from being added and triggering a probe of the USB driver after it\nhas been deregistered.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98697": {
+                "cve_id": "CVE-2026-98697",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: fix dynamic id driver deregistration race\n\nOnly free the dynamic ids after having deregistered the driver and\nremoved the \"new_id\" attribute to avoid leaking any id added by a racing\nwrite to the attribute.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98698": {
+                "cve_id": "CVE-2026-98698",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: handle empty FILS association request payload\n\nfils_encrypt_assoc_req() accepts a (Re)Association Request frame whose\nlast element is the FILS Session element.  crypt_len is then zero and\naes_siv_encrypt() is called with an empty plaintext.\n\nkmemdup() returns ZERO_SIZE_PTR for a zero-length allocation, so the\nunconditional sg_init_one() puts an invalid page into the scatterlist.\nWith CONFIG_DEBUG_SG this triggers a kernel BUG in sg_set_buf();\nwithout the debug check the bogus page is handed to the crypto backend.\n\nAES-SIV is defined for empty plaintext and the S2V result is then the\ncomplete output, so handle this case before the CTR step, which has\nnothing to encrypt.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98700": {
+                "cve_id": "CVE-2026-98700",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: set info->band for 802.3 encap offload frames\n\nUnlike the 802.11 TX paths, ieee80211_8023_xmit() does not set\ninfo->band from the channel context on non-MLD interfaces. It stays at\n0, so ieee80211_get_tx_rates() uses the wrong band for these frames.\n\nSet it the same way as ieee80211_build_hdr(): drop the frame if there is\nno channel context, and leave the band at 0 on MLD interfaces.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
             }
         },
         "8": {
@@ -127014,10 +127118,75 @@
                     }
                 ]
             },
-            "CVE-2026-98691": {
-                "cve_id": "CVE-2026-98691",
+            "CVE-2026-98694": {
+                "cve_id": "CVE-2026-98694",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nthunderbolt: Tear down inactive DP tunnels when the domain is stopped\n\ntb_stop() only tears down DMA tunnels so a DP tunnel that is still\nwaiting for dprx_work to complete keeps that work queued while the\nrouters are removed and the control channel is stopped. The work only\nstops once the DPRX timeout has passed and because it requeues itself\nuntil then the flush_workqueue() in tb_domain_remove() won't wait for its\nfinal run. The callback then runs against a domain that is already torn\ndown. A reference to that domain is kept so the completion waiting for\nthat domain to disappear in unbind will block until the timeout is\neventually reached.\n\nTear down DP tunnels that are not active yet as well which also cancels\nthat work. Tunnels for displays that are already alive are untouched and\nkeep working.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nthunderbolt: Fix KASAN reported use-after-free when request is canceled\n\nAlan reported that when doing stress testing sometimes KASAN notices\nuse-after-free during control channel operation (stripped down keeping\nthe relevant parts):\n\n BUG: KASAN: slab-use-after-free in tb_cfg_request_sync+0x240/0x250 [thunderbolt]\n Read of size 24 at addr ffff88811067f290 by task kworker/u40:2/1760\n  <TASK>\n  tb_cfg_request_sync+0x240/0x250 [thunderbolt]\n  tb_cfg_read_raw+0x367/0x510 [thunderbolt]\n  tb_cfg_read+0xec/0x240 [thunderbolt]\n  tb_port_get_link_generation+0x258/0x420 [thunderbolt]\n  tb_usb3_consumed_bandwidth+0x1c1/0x2c0 [thunderbolt]\n  tb_tunnel_consumed_bandwidth+0xfd/0x910 [thunderbolt]\n  tb_available_bandwidth+0x5f2/0xeb0 [thunderbolt]\n  tb_recalc_estimated_bandwidth+0x2a0/0x1bc0 [thunderbolt]\n  tb_handle_dp_bandwidth_request+0x1897/0x5e20 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n  </TASK>\n\n Allocated by task 1760:\n  __kmalloc_cache_noprof+0x1ee/0x550\n  tb_cfg_read_raw+0x1d3/0x510 [thunderbolt]\n  tb_cfg_read+0xec/0x240 [thunderbolt]\n  tb_port_get_link_generation+0x258/0x420 [thunderbolt]\n  tb_usb3_consumed_bandwidth+0x1c1/0x2c0 [thunderbolt]\n  tb_tunnel_consumed_bandwidth+0xfd/0x910 [thunderbolt]\n  tb_available_bandwidth+0x5f2/0xeb0 [thunderbolt]\n  tb_recalc_estimated_bandwidth+0x2a0/0x1bc0 [thunderbolt]\n  tb_handle_dp_bandwidth_request+0x1897/0x5e20 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n\n Freed by task 926:\n  kfree+0x18f/0x4a0\n  tb_cfg_request_put+0xb7/0xe0 [thunderbolt]\n  tb_cfg_request_work+0x82/0x120 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n\n Second to last potentially related work creation:\n  __queue_work+0x575/0xd00\n  queue_work_on+0x77/0x80\n  tb_cfg_request_cancel+0xc7/0x260 [thunderbolt]\n  tb_cfg_request_sync+0x1f6/0x250 [thunderbolt]\n  tb_cfg_read_raw+0x367/0x510 [thunderbolt]\n  tb_cfg_read+0xec/0x240 [thunderbolt]\n  tb_port_get_link_generation+0x258/0x420 [thunderbolt]\n  tb_usb3_consumed_bandwidth+0x1c1/0x2c0 [thunderbolt]\n  tb_tunnel_consumed_bandwidth+0xfd/0x910 [thunderbolt]\n  tb_available_bandwidth+0x5f2/0xeb0 [thunderbolt]\n  tb_recalc_estimated_bandwidth+0x2a0/0x1bc0 [thunderbolt]\n  tb_handle_dp_bandwidth_request+0x1897/0x5e20 [thunderbolt]\n  process_one_work+0x675/0x1230\n  worker_thread+0x5e6/0xf70\n  kthread+0x365/0x470\n  ret_from_fork+0x54d/0x710\n  ret_from_fork_asm+0x1a/0x30\n\nThe last stack trace is helpful because it shows that we are cancelling\na request and looking at tb_cfg_request_cancel() what might happen is\nthat tb_cfg_request_work() completes right before tb_cfg_request_cancel()\nstarts and because of this it will call schedule_work() queueing the\nsame work to run again. However, it is already removed from the\nrequest_queue and reference count is dropped so when\ntb_cfg_request_work() triggers again it will access memory that is\nalready released.\n\nFix this so that we first make sure a cancelled request is not handed\naway from tb_cfg_request_find() or scheduled to run. Then instead of\nrelying on the worker to clean up the request we will do it in\ntb_cfg_request_cancel() after the work is canceled from running. Make\ntb_cfg_request_dequeue() release the request only if it was actually\nremoved from the queue.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98695": {
+                "cve_id": "CVE-2026-98695",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: fix ioctl hangup race\n\nThe tty ioctls can race with hangup and end up calling into a tty driver\nfor a device that is already gone or powered down.\n\nSerialise the callbacks using the tty port mutex and add the missing\nchecks to make sure the port has not been hung up before accessing port\ndriver data or hardware.\n\nThis specifically avoids dereferencing a NULL-pointer if a device is\ndisconnected during lengthy break signalling.\n\nNote that TIOCGICOUNT and TIOCMIWAIT do not access port driver data or\nhardware and are therefore not affected by the race.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98696": {
+                "cve_id": "CVE-2026-98696",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: fix driver deregistration order\n\nUSB serial driver modules register one driver for the USB bus and one or\nmore drivers for the ports on the USB serial bus.\n\nWhen unloading a driver module, the USB driver must be deregistered\nbefore the USB serial bus drivers so that I/O is stopped before\nunbinding the ports to avoid use-after-free in completion handlers\naccessing port data.\n\nNote that the \"new_id\" attributes must first be removed to prevent new\nids from being added and triggering a probe of the USB driver after it\nhas been deregistered.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98697": {
+                "cve_id": "CVE-2026-98697",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: fix dynamic id driver deregistration race\n\nOnly free the dynamic ids after having deregistered the driver and\nremoved the \"new_id\" attribute to avoid leaking any id added by a racing\nwrite to the attribute.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98698": {
+                "cve_id": "CVE-2026-98698",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: handle empty FILS association request payload\n\nfils_encrypt_assoc_req() accepts a (Re)Association Request frame whose\nlast element is the FILS Session element.  crypt_len is then zero and\naes_siv_encrypt() is called with an empty plaintext.\n\nkmemdup() returns ZERO_SIZE_PTR for a zero-length allocation, so the\nunconditional sg_init_one() puts an invalid page into the scatterlist.\nWith CONFIG_DEBUG_SG this triggers a kernel BUG in sg_set_buf();\nwithout the debug check the bogus page is handed to the crypto backend.\n\nAES-SIV is defined for empty plaintext and the S2V result is then the\ncomplete output, so handle this case before the CTR step, which has\nnothing to encrypt.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98700": {
+                "cve_id": "CVE-2026-98700",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mac80211: set info->band for 802.3 encap offload frames\n\nUnlike the 802.11 TX paths, ieee80211_8023_xmit() does not set\ninfo->band from the channel context on non-MLD interfaces. It stays at\n0, so ieee80211_get_tx_rates() uses the wrong band for these frames.\n\nSet it the same way as ieee80211_build_hdr(): drop the frame if there is\nno channel context, and leave the band at 0 on MLD interfaces.",
                 "severity": "LOW",
                 "status": "open",
                 "events": [
