@@ -50416,24 +50416,6 @@
                     }
                 ]
             },
-            "CVE-2026-68202": {
-                "cve_id": "CVE-2026-68202",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68206": {
                 "cve_id": "CVE-2026-68206",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -68295,24 +68277,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs: fix user path of nested backing files\n\nbacking_file_open() derives the path to be stored in the new backing\nfile from user_file->f_path.  This is incorrect when user_file itself\nis a backing file, which is the case for nested stacking filesystems,\ne.g. overlayfs mounts where the lowerdir of one overlayfs is the merged\ndirectory of another.  Since commit def3ae83da02 (\"fs: store real path\ninstead of fake path in backing file f_path\") the f_path of a backing\nfile holds the real path of the intermediate layer, not the path that\nthe user opened.\n\nCommit 924577e4f6ca (\"ovl: Fix nested backing file paths\") fixed this\nfor such configurations by passing file_user_path() from\novl_open_realfile().  However, commit 6af36aeb147a (\"lsm: add\nbacking_file LSM hooks\") changed the first argument of\nbacking_file_open() from the user path back to the user file and\nderived the path from user_file->f_path again, silently re-introducing\nthe problem.\n\nAs a result, files mapped through a nested overlayfs show the wrong\npath in /proc/<pid>/maps and in perf/ftrace mmap records.  For example,\nwith two nested overlayfs mounts:\n\n  mkdir -p /ovl/{lower,upper,work,merged} /ovl/nested\n  echo hello > /ovl/lower/foo\n  mount -t overlay overlay \\\n\t-o lowerdir=/ovl/lower,upperdir=/ovl/upper,workdir=/ovl/work \\\n\t/ovl/merged\n  # at least two lowerdirs are needed when upperdir is nonexistent\n  mount -t overlay overlay \\\n\t-o lowerdir=/ovl/merged:/ovl/lower /ovl/nested\n\nmapping /ovl/nested/foo shows a disconnected path instead of the user\npath:\n\n  # readlink /proc/self/fd/3\n  /ovl/nested/foo\n  # grep foo /proc/self/maps\n  7f6e2c100000-7f6e2c101000 r--s 00000000 00:24 15813027 /foo\n\nThe bogus path is derived from the f_path of the intermediate backing\nfile, whose mount is a private clone that d_path() cannot resolve.\n\nFix this by using file_user_path(), which returns the outermost\nuser-visible path for backing files and falls back to\n&user_file->f_path for regular files.  This restores the behavior of\ncommit 924577e4f6ca (\"ovl: Fix nested backing file paths\") for\noverlayfs and also fixes the same problem for the other\nbacking_file_open() callers, fuse passthrough and erofs ishare, when\ntheir user file is itself a backing file.\n\nbacking_tmpfile_open() has the same pattern but is not affected: it is\nonly called by ovl_create_tmpfile() for the upper layer, and another\noverlayfs is rejected as upperdir by the DCACHE_OP_REAL check in\novl_mount_dir_check(), so its user_file can never be a backing file.",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-89777": {
-                "cve_id": "CVE-2026-89777",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -108754,6 +108718,19 @@
                     }
                 ]
             },
+            "CVE-2026-68202": {
+                "cve_id": "CVE-2026-68202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-68245": {
                 "cve_id": "CVE-2026-68245",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -109216,6 +109193,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: gate nfs2 setacl by argp->mask\n\nThe NFSACL v2 SETACL path shares the decoder convention used by its\nv3 sibling: nfsaclsvc_decode_setaclargs() fills in argp->acl_access\nonly when NFS_ACL is set in the request mask and argp->acl_default\nonly when NFS_DFACL is set, leaving the other pointer NULL because\nthe argument buffer is zeroed up to pc_argzero before decode.\n\nnfsacld_proc_setacl() then hands both pointers to set_posix_acl()\nunconditionally. set_posix_acl(idmap, dentry, type, NULL) is the VFS\n\"remove this ACL type\" operation, so an omitted arm is\nindistinguishable from an explicit request to delete that ACL. A\nSETACL carrying only NFS_ACL silently strips the directory's default\nACL; mask=0 strips both.\n\nThis is the same defect just fixed in nfsd3_proc_setacl(); apply the\nsame remedy. Gate each set_posix_acl() call on its mask bit and\ninitialize error to 0 so that a request with neither bit set leaves\nthe on-disk ACLs untouched and returns success. The out_drop_lock\npath and the unconditional posix_acl_release() in\nnfsaclsvc_release_setacl() already tolerate the skipped arms.",
                 "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-89777": {
+                "cve_id": "CVE-2026-89777",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -159477,24 +159467,6 @@
                     }
                 ]
             },
-            "CVE-2026-68202": {
-                "cve_id": "CVE-2026-68202",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68206": {
                 "cve_id": "CVE-2026-68206",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -177356,24 +177328,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs: fix user path of nested backing files\n\nbacking_file_open() derives the path to be stored in the new backing\nfile from user_file->f_path.  This is incorrect when user_file itself\nis a backing file, which is the case for nested stacking filesystems,\ne.g. overlayfs mounts where the lowerdir of one overlayfs is the merged\ndirectory of another.  Since commit def3ae83da02 (\"fs: store real path\ninstead of fake path in backing file f_path\") the f_path of a backing\nfile holds the real path of the intermediate layer, not the path that\nthe user opened.\n\nCommit 924577e4f6ca (\"ovl: Fix nested backing file paths\") fixed this\nfor such configurations by passing file_user_path() from\novl_open_realfile().  However, commit 6af36aeb147a (\"lsm: add\nbacking_file LSM hooks\") changed the first argument of\nbacking_file_open() from the user path back to the user file and\nderived the path from user_file->f_path again, silently re-introducing\nthe problem.\n\nAs a result, files mapped through a nested overlayfs show the wrong\npath in /proc/<pid>/maps and in perf/ftrace mmap records.  For example,\nwith two nested overlayfs mounts:\n\n  mkdir -p /ovl/{lower,upper,work,merged} /ovl/nested\n  echo hello > /ovl/lower/foo\n  mount -t overlay overlay \\\n\t-o lowerdir=/ovl/lower,upperdir=/ovl/upper,workdir=/ovl/work \\\n\t/ovl/merged\n  # at least two lowerdirs are needed when upperdir is nonexistent\n  mount -t overlay overlay \\\n\t-o lowerdir=/ovl/merged:/ovl/lower /ovl/nested\n\nmapping /ovl/nested/foo shows a disconnected path instead of the user\npath:\n\n  # readlink /proc/self/fd/3\n  /ovl/nested/foo\n  # grep foo /proc/self/maps\n  7f6e2c100000-7f6e2c101000 r--s 00000000 00:24 15813027 /foo\n\nThe bogus path is derived from the f_path of the intermediate backing\nfile, whose mount is a private clone that d_path() cannot resolve.\n\nFix this by using file_user_path(), which returns the outermost\nuser-visible path for backing files and falls back to\n&user_file->f_path for regular files.  This restores the behavior of\ncommit 924577e4f6ca (\"ovl: Fix nested backing file paths\") for\noverlayfs and also fixes the same problem for the other\nbacking_file_open() callers, fuse passthrough and erofs ishare, when\ntheir user file is itself a backing file.\n\nbacking_tmpfile_open() has the same pattern but is not affected: it is\nonly called by ovl_create_tmpfile() for the upper layer, and another\noverlayfs is rejected as upperdir by the DCACHE_OP_REAL check in\novl_mount_dir_check(), so its user_file can never be a backing file.",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-89777": {
-                "cve_id": "CVE-2026-89777",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -200107,6 +200061,19 @@
                     }
                 ]
             },
+            "CVE-2026-68202": {
+                "cve_id": "CVE-2026-68202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-68205": {
                 "cve_id": "CVE-2026-68205",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -202724,6 +202691,19 @@
                 "cve_id": "CVE-2026-89771",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nring-buffer: Fix subbuf resize race with ring buffer readers\n\ntrace_buffer subbuf_size is read lockless in ring_buffer_read_page() and\nring_buffer_read_start(), while it can simultaneously be resized with\nring_buffer_subbuf_order_set().\n\nInstead of trace_buffer::subbuf_size, use bpage::order in\nring_buffer_read_start() and ring_buffer_read_page().\n\nIn ring_buffer_read_start(), even with resize_disabled, there is still a\npossibility of a race with a buffer modification. Hold the trace_buffer\nmutex to synchronise with any pending ring buffer order modification.\n\ntrace_buffer::subbuf_size is now actually useless, remove it. Also,\ncreate accessors rb_subbuf_capacity() and rb_page_capacity() which\nreturn the actual size available for storing events, while\nrb_subbuf_size() returns the actual subbuf page-size.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-89777": {
+                "cve_id": "CVE-2026-89777",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -206282,12 +206262,8 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ninet: frags: strip GSO state from fragments before reassembly\n\nA virtio_net_hdr (tun/tap, or AF_PACKET with PACKET_VNET_HDR) can mark\nan IPv4 or IPv6 fragment as GSO; nothing relates gso_type to frag_off.\ninet_frag_reasm_prepare()/inet_frag_reasm_finish() keep the first\nfragment's skb as the head of the reassembled datagram, including its\nshinfo->gso_size/gso_type/gso_segs, and chain the remaining fragments\non frag_list with whatever linear/paged layout they arrived with.\n\nAfter ip_defrag() (ip_local_deliver(), nf_defrag_ipv4, ...) the\nreassembled skb therefore still claims to be GSO (SKB_GSO_DODGY), and\nthe next software segmentation point - udp_rcv_segment() on local\ndelivery, validate_xmit_skb(), or the ip_finish_output_gso() slow\npath - hands it to skb_segment(). skb_segment()'s frag_list walk\nassumes GRO-shaped input and hits one of its BUG_ON()s. Two writes to\na tap by an unprivileged user in its own userns are enough:\n\n  kernel BUG at net/core/skbuff.c:4899!\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 0 UID: 1000 PID: 82 Comm: poc Not tainted 7.2.0-pentest+ #2\n  RIP: 0010:skb_segment+0x20ca/0x48b0\n  Call Trace:\n   <TASK>\n   __udp_gso_segment+0x29a/0x27d0\n   udp4_ufo_fragment+0x458/0x6c0\n   inet_gso_segment+0x429/0x1340\n   skb_mac_gso_segment+0x233/0x4f0\n   __skb_gso_segment+0x308/0x660\n   udp_queue_rcv_skb+0x440/0xad0\n   udp_unicast_rcv_skb+0xc7/0x2c0\n   udp_rcv+0x16ce/0x2260\n   ip_protocol_deliver_rcu+0x197/0x2d0\n   ip_local_deliver+0x430/0x690\n   ip_rcv+0x16f/0x1f0\n   __netif_receive_skb_one_core+0x15e/0x1c0\n   __netif_receive_skb+0x1e/0x110\n   netif_receive_skb+0xf6/0x5c0\n   tun_rx_batched.isra.0+0x3ab/0x790\n   tun_get_user+0x17c3/0x3550\n   tun_chr_write_iter+0xba/0x1b0\n   vfs_write+0x646/0x1130\n   </TASK>\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nThis runs with BH disabled, so it is a panic rather than an oops. The\nsame is reachable with CAP_NET_RAW in a netns where a defrag point\nprecedes a GSO point, and from a guest whose VMM forwards\nvirtio_net_hdr to a tap. The SKB_GSO_DODGY frag_list checks added by\ncommit 3dcbdb134f32 (\"net: gso: Fix skb_segment splat when splitting\ngso_size mangled skb having linear-headed frag_list\") and by\ncommit 9e4b7a99a03a (\"net: gso: fix panic on frag_list with mixed head\nalloc types\") do not cover it: page-backed heads skip them, and kmalloc\nheads skip them when gso_size == skb_headlen(head), which the sender\ncontrols.\n\nAn skb entering a frag queue is an IP fragment by definition and\ncannot legitimately carry GSO state: GRO does not merge fragments and\nthe stack segments before it fragments, so only untrusted sources are\naffected. This has been reachable since\ncommit f43798c27684 (\"tun: Allow GSO using virtio_net_hdr\"), the first\npath that let userspace attach GSO metadata to an IP fragment. Reset\nthe GSO fields of every fragment as it is queued, in\ninet_frag_queue_insert(), which IPv4, IPv6, nf_conntrack_reasm and\n6lowpan reassembly share; then neither the head nor the frag_list\nmembers of the reassembled skb carry them (the members matter too:\nthe ip_do_fragment()/ip6_fragment() fast paths send them out as they\nare). The head may remain CHECKSUM_PARTIAL; that is already accepted\non receive and resolved by skb_checksum_help() in\nip_do_fragment()/ip6_fragment() on forward.\n\nTested on top of net.git (dc4b95b8fee9), x86_64: the tap reproducer\nabove, two further IPv4 frag_list geometries that reach\nBUG_ON(i >= nfrags) and BUG_ON(!list_skb->head_frag), and an IPv6\nfragment-header variant (udp6_ufo_fragment()) each panic the unpatched\nkernel; with this patch all four datagrams are delivered intact and\nnothing is logged.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    },
                     {
                         "introduced": "6.17.1-300.fc43",
                         "identifier": "fc43",
@@ -244027,24 +244003,6 @@
                     }
                 ]
             },
-            "CVE-2026-68202": {
-                "cve_id": "CVE-2026-68202",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: close a re-opened queue timer in the destructor\n\nqueue_delete() closes the queue timer, then frees it. snd_seq_timer_close()\nclears q->timer->timeri. snd_use_lock_sync() then drains borrowers, and\nsnd_seq_timer_delete() frees q->timer.\n\nA borrower can re-open the timer inside that window. A SET_QUEUE_CLIENT\nthat took a queueptr() use_lock reference before the queue was unlinked\nruns snd_seq_timer_open() after the close. Open refuses re-open only while\ntimeri is set, and the close just cleared it, so it re-opens timeri.\n\nsnd_seq_timer_delete() does not close that instance. Its snd_seq_timer_stop()\nis a no-op, because running was cleared first. So it frees q->timer with the\ninstance still live. The queue is freed next.\n\nThe instance stays on the global timer with callback_data pointing at the\nfreed queue. A non-owner START on the unlocked queue arms it. The next tick\nderefs the freed queue in snd_seq_timer_interrupt().\n\nReachable by an unprivileged user with access to /dev/snd/seq. No CAP and\nno queue ownership required.\n\nClose any lingering instance in the destructor. There, ->timeri can no\nlonger change: the queue is unlinked and all use_lock borrowers have\ndrained, so no snd_seq_queue_use() can re-open it. Close it before clearing\nq->timer. snd_timer_close() waits for any in-flight snd_seq_timer_interrupt()\nto finish, and that callback still reads q->timer (via snd_seq_check_queue()),\nso q->timer must stay valid until it drains.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68206": {
                 "cve_id": "CVE-2026-68206",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -260200,24 +260158,6 @@
                 "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-89777": {
-                "cve_id": "CVE-2026-89777",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    },
                     {
                         "introduced": "6.17.1-300.fc43",
                         "identifier": "fc43",
