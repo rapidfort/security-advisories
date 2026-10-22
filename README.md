@@ -65,9 +65,9 @@ Package names prefixed with `rf-` (e.g. `rf-python3`, `rf-chromium`) are RapidFo
 |---|---|---|
 | **Alpine Linux** | 3.20, 3.21, 3.22, 3.23, 3.24 | apk |
 | **Ubuntu** | focal (20.04), jammy (22.04), noble (24.04) | dpkg |
-| **Debian** | bookworm (12), trixie (13), forky (14) | dpkg |
-| **Red Hat** | 5, 6, 7, 8, 9, 10 | rpm |
-| **Oracle Linux** | 6, 7, 8, 9, 10 | rpm |
+| **Debian** | bookworm (12), trixie (13) | dpkg |
+| **Red Hat** | 9, 10 | rpm |
+| **Oracle Linux** | 9, 10 | rpm |
 | **AlmaLinux** | 8, 9, 10 | rpm |
 | **Rocky Linux** | 8, 9, 10 | rpm |
 | **Amazon Linux** | 2023 | rpm |
@@ -78,9 +78,9 @@ Advisory events for every distribution **except Alpine Linux** include an `ident
 
 | Prefix | Stream | Examples |
 |---|---|---|
-| `el` | RHEL / CentOS / Oracle Linux / AlmaLinux / Rocky Linux | `el6`, `el7`, `el8`, `el9`, `el10` |
+| `el` | RHEL / CentOS / Oracle Linux / AlmaLinux / Rocky Linux | `el8`, `el9`, `el10` |
 | `amzn` | Amazon Linux | `amzn2023` |
-| `fc` | Fedora | `fc39`, `fc40`, `fc41`, `fc42`, `fc43` |
+| `fc` | Fedora | `fc41`, `fc42`, `fc43`, `fc44`, `fc45` |
 | `ubuntu` | Ubuntu archive | `ubuntu` |
 | `debian` | Debian archive | `debian` |
 | `rf` | RapidFort-rebuilt package | `rf` |
@@ -92,9 +92,8 @@ Which identifiers appear depends on the distribution:
 | Alpine Linux | *none — the field is absent* |
 | Ubuntu | `ubuntu`, `rf` |
 | Debian | `debian`, `rf` |
-| Red Hat | `el5`–`el10`, `fc18`–`fc46`, `rf` |
-| Oracle Linux | `el2`, `el4`–`el10`, `fc3`–`fc46`, `rf` |
-| AlmaLinux, Rocky Linux | `el8`, `el9`, `el10`, `fc18`–`fc46`, `rf` |
+| Red Hat, Oracle Linux | `el9`, `el10`, `fc41`–`fc45`, `rf` |
+| AlmaLinux, Rocky Linux | `el8`, `el9`, `el10`, `fc41`–`fc45`, `rf` |
 | Amazon Linux | `amzn2023`, `fc41`–`fc45`, `rf` |
 
 ---
@@ -159,9 +158,9 @@ Each advisory file is a JSON object with the following structure:
 |---|---|---|
 | Alpine | `"3.20"`, `"3.21"`, `"3.22"`, `"3.23"`, `"3.24"` | Alpine minor version |
 | Ubuntu | `"20.04"`, `"22.04"`, `"24.04"` | Ubuntu version number |
-| Debian | `"12"`, `"13"`, `"14"` | Major release number |
-| Red Hat | `"5"`, `"6"`, `"7"`, `"8"`, `"9"`, `"10"` | Major release number |
-| Oracle Linux | `"6"`, `"7"`, `"8"`, `"9"`, `"10"` | Major release number |
+| Debian | `"12"`, `"13"` | Major release number |
+| Red Hat | `"9"`, `"10"` | Major release number |
+| Oracle Linux | `"9"`, `"10"` | Major release number |
 | AlmaLinux | `"8"`, `"9"`, `"10"` | Major release number |
 | Rocky Linux | `"8"`, `"9"`, `"10"` | Major release number |
 | Amazon Linux | `"2023"` | Release year |
@@ -188,7 +187,7 @@ OS/{os_name}/{package_name}_advisory.json
 OS/ubuntu/openssl_advisory.json
 OS/debian/dovecot_advisory.json
 OS/alpine/busybox_advisory.json
-OS/redhat/yelp_advisory.json
+OS/redhat/vim-minimal_advisory.json
 OS/oracle/glibc_advisory.json
 OS/alma/389-ds-base-libs_advisory.json
 OS/rocky/chromium-common_advisory.json
@@ -249,7 +248,7 @@ For every distribution except Alpine, events may include an `identifier` field. 
 ```json
 {
   "events": [
-    { "introduced": "0", "identifier": "el7" },
+    { "introduced": "0", "identifier": "el10" },
     { "introduced": "2:40.3-2.el9", "fixed": "2:40.3-2.el9_6.1", "identifier": "el9" },
     { "introduced": "2:42.2-6.fc41", "fixed": "42.2-9.fc41", "identifier": "fc41" }
   ]
@@ -300,7 +299,7 @@ Version strings are OS-specific. Consumers must use the appropriate version comp
 | Alpine | `{version}-r{revision}` | `1.3.1-r1` |
 | Ubuntu | `{epoch}:{upstream}-{debian}{ubuntu}` | `1:1.2.11.dfsg-2ubuntu9.2` |
 | Debian | `{epoch}:{upstream}-{debian}` | `2:3.87.1-1+deb12u4` |
-| Red Hat | `{epoch}:{version}-{release}.{dist}` | `2:42.2-5.fc40` |
+| Red Hat | `{epoch}:{version}-{release}.{dist}` | `1:3.5.8-1.el9_8` |
 | Oracle Linux | `{epoch}:{version}-{release}.{dist}` | `2:1.2.11-40.el9` |
 | AlmaLinux | `{epoch}:{version}-{release}.{dist}` | `1:2.3.3op2-39.el9_8` |
 | Rocky Linux | `{epoch}:{version}-{release}.{dist}` | `0:4.10.0-110.el9_8.2` |
