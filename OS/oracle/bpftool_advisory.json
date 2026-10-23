@@ -77063,7 +77063,7 @@
                 "cve_id": "CVE-2025-40256",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: also call xfrm_state_delete_tunnel at destroy time for states that were never added\n\nIn commit b441cf3f8c4b (\"xfrm: delete x->tunnel as we delete x\"), I\nmissed the case where state creation fails between full\ninitialization (->init_state has been called) and being inserted on\nthe lists.\n\nIn this situation, ->init_state has been called, so for IPcomp\ntunnels, the fallback tunnel has been created and added onto the\nlists, but the user state never gets added, because we fail before\nthat. The user state doesn't go through __xfrm_state_delete, so we\ndon't call xfrm_state_delete_tunnel for those states, and we end up\nleaking the FB tunnel.\n\nThere are several codepaths affected by this: the add/update paths, in\nboth net/key and xfrm, and the migrate code (xfrm_migrate,\nxfrm_state_migrate). A \"proper\" rollback of the init_state work would\nprobably be doable in the add/update code, but for migrate it gets\nmore complicated as multiple states may be involved.\n\nAt some point, the new (not-inserted) state will be destroyed, so call\nxfrm_state_delete_tunnel during xfrm_state_gc_destroy. Most states\nwill have their fallback tunnel cleaned up during __xfrm_state_delete,\nwhich solves the issue that b441cf3f8c4b (and other patches before it)\naimed at. All states (including FB tunnels) will be removed from the\nlists once xfrm_state_fini has called flush_work(&xfrm_state_gc_work).",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -108755,7 +108755,7 @@
                 "cve_id": "CVE-2026-74346",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/irdma: Fix OOB read during CQ MR registration\n\nSashiko pointed out an unrelated bug during a previous patch:\nhttps://sashiko.dev/#/patchset/20260512183852.614045-1-jmoroni%40google.com\n\nThis change fixes the bug by eliminating the cqmr->split field which\nwas not being set properly and instead just checks the CQ resize\nfeature flag directly.\n\nThe cqmr->split field essentially tracks whether IRDMA_FEATURE_CQ_RESIZE\nis set, but it was not being set until CQ creation time, which is _after_\nCQ memory registration (the only other place where it is referenced).\n\nAs a result, it would always be false during MR registration and would\ntherefore cause irdma_handle_q_mem to populate cqmr->shadow even for GEN_2\nHW and beyond:\n\n    cqmr->shadow = (dma_addr_t)arr[req->cq_pages];\n\nThe issue is that for GEN_2 and beyond, req->cq_pages may be exactly equal\nto iwmr->page_cnt and therefore equal to the size of arr, which would cause\nan OOB read by one.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114185,7 +114185,7 @@
                 "cve_id": "CVE-2026-80757",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: reject a class permission count below its inherited common\n\nsecurity_get_permissions() maps an inherited common's permissions into\nan array sized by the class's own permissions.nprim, but class_read()\ntakes that nprim verbatim from the policy image and never checks that it\ncovers the common.  A class that inherits a common of N permissions while\ndeclaring a smaller nprim is accepted, and on load the common's\npermissions are written past the class-sized array -- an out-of-bounds\nheap write.\n\nReject a class whose permission count is below its inherited common's.\nWell-formed policies, where the class count already includes the\ninherited permissions, are unaffected.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114199,7 +114199,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114240,7 +114240,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114378,7 +114378,7 @@
                 "cve_id": "CVE-2026-80805",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: validate attr entry pointer before field access\n\nxfs_attr3_leaf_verify_entry() accesses lentry/rentry fields (namelen,\nvaluelen) before checking if the entry pointer itself is within bounds.\nIf nameidx is crafted to point near the end of the buffer, these field\naccesses can read out-of-bounds before the bounds check at\nname_end > buf_end is performed.\n\nAdd explicit bounds checks for entry pointers before accessing their\nfields. Use offsetof() to check that the start of the flexible array\nmember (nameval/name) is within bounds, which ensures all preceding\nfields are safe to access.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114392,7 +114392,7 @@
                 "cve_id": "CVE-2026-80806",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\next4: don't enable DAX on new encrypted files\n\nCurrently, when a new encrypted regular file is created, the call to\next4_set_inode_flags(inode, init=true) in __ext4_new_inode() is made\nbefore EXT4_INODE_ENCRYPT is set.  As a result, it can set S_DAX if the\nfilesystem is mounted with \"-o dax=always\".\n\nEXT4_INODE_ENCRYPT then actually gets set a bit later in\n__ext4_new_inode(), when it calls fscrypt_set_context() which calls\next4_set_context().  ext4_set_context() sets EXT4_INODE_ENCRYPT and\ncalls ext4_set_inode_flags(inode, init=false) to set S_ENCRYPTED too.\n\nThis was intended to clear S_DAX as well.  However, this was broken by\ncommit 043546e46dc7 (\"fs/ext4: Only change S_DAX on inode load\").  This\ncauses data written to the file to bypass encryption, also causing\nxfstests failures such as generic/548 (when \"-o dax=always\" is used).\n\nFix this by simplifying the flow by making __ext4_new_inode() set\nEXT4_INODE_ENCRYPT earlier.  This makes it take effect in\next4_set_inode_flags(inode, init=true), making S_DAX never be set.\n\nSimilarly, make EXT4_STATE_MAY_INLINE_DATA never be set in the first\nplace on new encrypted inodes.  Then it doesn't need to be cleared.\n\nAs a result of these simplifications, ext4_set_context() no longer needs\nto change inode flags or state when 'handle != NULL'.  Remove that too.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114597,7 +114597,7 @@
                 "cve_id": "CVE-2026-80830",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: Add lock to usb_wakeup_notification()\n\nAdd a spin lock to usb_wakeup notification to prevent a race condition\nwith dereferencing freed memory. This could be hit by the xHCI driver as\nit calls this function from an IRQ and could race with the\nhub_disconnect() function, which properly grabs this lock to protect the\nstate of the device.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114973,7 +114973,7 @@
                 "cve_id": "CVE-2026-80906",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: packet: fix wrong transport_header when sending VLAN-tagged frame\n\nIn packet_parse_headers(), when processing a VLAN-tagged frame,\nskb_set_network_header() is called to advance network_header past the\nVLAN tag to the inner protocol header. skb_probe_transport_header() is\nthen called with skb->protocol still set to the outer VLAN EtherType\n(e.g. ETH_P_8021Q), while nhoff (derived from skb_network_offset())\nalready points past the VLAN tag to the inner protocol header.\n\nIn __skb_flow_dissect(), proto is initialized to ETH_P_8021Q and nhoff\npoints past the VLAN tag. When the dissector hits case ETH_P_8021Q, it\nreads a struct vlan_hdr at nhoff via __skb_header_pointer(), but that\noffset contains the inner protocol header (e.g. an IP header). The bytes\nare misinterpreted as a VLAN header, yielding a garbage encapsulated\nEtherType that matches no known protocol. The dissector returns false,\nso skb_probe_transport_header() never calls skb_set_transport_header(),\nleaving transport_header at its uninitialized sentinel value (~0U).\n\nMove skb_probe_transport_header() to before skb_set_network_header(). At\nthe time skb_probe_transport_header() is called, network_header still\npoints to the VLAN header, so nhoff correctly points to the VLAN header.\nThe flow dissector can then parse the VLAN header, extract the inner\nEtherType, and advance nhoff to the inner protocol header, allowing\ntransport_header to be set correctly.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -115068,7 +115068,7 @@
                 "cve_id": "CVE-2026-80916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nkcov: fix data corruption and race conditions on PREEMPT_RT\n\nsyzbot is reporting KCOV state corruption on PREEMPT_RT kernels, for the\ntemporary storage used for saving/restoring remote KCOV state is currently\nallocated as the per-CPU area.\n\nOn PREEMPT_RT kernels, softirq handlers run as preemptible task threads\n(e.g., ksoftirqd). If a softirq context preempts a task running a remote\nKCOV session, it safely saves the task's state into the per-CPU area.\nHowever, if that softirq thread is subsequently preempted by a higher-\npriority softirq thread on the same CPU, the second softirq will overwrite\nthe same per-CPU area, permanently destroying the original task's KCOV\nstate.\n\nFix this data corruption by moving the temporary storage from the per-CPU\narea to the per-thread area. Since each softirq thread now owns its own\ntask context, nested softirq preemption no longer causes data overwrites.\n\nNote that while the temporary storage is now on a per-thread basis, the\nper-CPU kcov_percpu_data.lock must be retained, for we need to ensure that\nkcov_remote_start() and kcov_remote_stop() operate atomically without\nracing against asynchronous interrupts that manipulate the current task's\nKCOV state.\n\nIt is likely that GFP_KERNEL allocation by vmalloc_node() in kcov_init()\nhas already called panic() before returning NULL, for there will be no\nOOM-killable userspace processes when __init function of built-in module\nruns. But this patch also fixes crashing the kernel when vmalloc_node()\nin kcov_init() returned NULL, for kcov_init() left per-CPU irq_area == NULL\nbut kcov_remote_start() depends on per-CPU irq_area != NULL, resulting in\n\n  (1) doing vmalloc() in kcov_remote_start() despite !in_task() context\n\n  (2) out-of-array-bounds access if (1) succeeded but\n      kcov->remote_size < CONFIG_KCOV_IRQ_AREA_SIZE\n\n  (3) always leak memory allocated by (1), eventually killing all\n      OOM-killable userspace processes\n\nproblems.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -130529,6 +130529,32 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: clear both ep_in and ep_out for non-ep0 control endpoints\n\nIn usb_enable_endpoint(), non-zero control endpoints (where\nusb_endpoint_xfer_control(&ep->desc) is true) populate both\ndev->ep_in[epnum] and dev->ep_out[epnum] with the same struct\nusb_host_endpoint pointer.\n\nHowever, usb_disable_endpoint() only clears either dev->ep_out[epnum] or\ndev->ep_in[epnum] depending on the direction bit of epaddr when\nreset_hardware is set, leaving the opposite direction's array slot\npointing to the disabled/freed endpoint.\n\nClear both dev->ep_out[epnum] and dev->ep_in[epnum] when disabling a\nnon-ep0 control endpoint with reset_hardware set, and update the\nfunction kerneldoc accordingly.\n\nTested in QEMU against Linux 7.3.0-rc3 using dummy_hcd and raw-gadget to\nenumerate a USB device with a non-zero control endpoint\n(bEndpointAddress 0x01, bmAttributes USB_ENDPOINT_XFER_CONTROL),\nverifying that both dev->ep_in[1] and dev->ep_out[1] are cleared when\nthe interface is disabled.",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98767": {
+                "cve_id": "CVE-2026-98767",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: dwc3: gadget: fix IRQ storm on invalid event buffer count\n\nWhen dwc3_check_event_buf() reads a GEVNTCOUNT value exceeding the\nevent buffer length, commit 63ccd26cd1f6 (\"usb: dwc3: gadget: check\nthat event count does not exceed event buffer length\") returns IRQ_NONE\nwithout writing back GEVNTCOUNT. Since the DWC3 interrupt is\nlevel-triggered, the uncleared IRQ source keeps the line asserted,\ncausing a tight IRQ storm that accumulates 99,900 unhandled interrupts\nand triggers spurious.c:184 BUG -> kernel panic.\n\nThe resulting call stack:\n  __report_bad_irq+0xac/0xc8\n  note_interrupt+0x340/0x468\n  handle_irq_event+0xac/0xc0\n  handle_fasteoi_irq+0x120/0x228\n  gic_handle_irq+0x68/0x108\n  ...\n  kernel BUG at kernel/irq/spurious.c:184\n\nTo reproduce, write a bogus value exceeding the event buffer length\ndirectly to the GEVNTCOUNT register:\n\n  devmem <DWC3_BASE + 0xc40c> 4 0x1004\n\nWrite the bogus count back to GEVNTCOUNT to clear the IRQ source,\nconsistent with the stale event clearing pattern in\ndwc3_event_buffers_setup(), and schedule error recovery to\nreinitialize the controller.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98771": {
+                "cve_id": "CVE-2026-98771",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: storage: sierra_ms: reject short SWoC info transfers\n\nsierra_get_swoc_info() requests sizeof(struct swoc_info) (60) bytes\nfrom the device via usb_control_msg(), but its callers only treat a\nnegative return value as failure. A device that answers the\nvendor-specific GetSwocInfo request with a short IN transfer is\ntherefore accepted, leaving the tail of the freshly allocated\n(kmalloc(), non-zeroing) swoc_info buffer uninitialized.\n\ntruinst_show() subsequently prints swocInfo->rev, swocInfo->LinuxSKU\nand swocInfo->LinuxVer from that buffer into the world-readable\n(0444) \"truinst\" sysfs attribute. An emulated/malicious USB device\n(VID 0x1199, PID 0x0fff) can exploit this to disclose up to 5 bytes\nof stale kernel heap memory (kmalloc-64) to unprivileged userspace,\nonce per sysfs read, indefinitely. On kernels built without\ninit_on_alloc this leaks recently freed heap contents.\n\nOnly accept the transfer when the full structure was received.\nsierra_ms_init() already retries failed queries, so well-behaved\ndevices are unaffected.",
+                "severity": "LOW",
                 "status": "open",
                 "events": [
                     {
