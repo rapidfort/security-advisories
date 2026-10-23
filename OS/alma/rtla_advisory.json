@@ -78171,7 +78171,7 @@
                 "cve_id": "CVE-2026-98124",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: invalidate fscache for fallocate range operations\n\nsmb3_zero_range(), smb3_punch_hole(), smb3_insert_range(), and\nsmb3_collapse_range() modify file contents through server-side range\noperations. These operations discard the affected page cache, but leave\nthe FS-Cache cookie valid, so a later read may return data cached before\nthe range operation.\n\nFix this by invalidating FS-Cache after outstanding I/O has completed\nand before modifying the file on the server.\n\nRun the following as root on a CIFS mount with fsc enabled and an active\nCacheFiles backend:\n\n        bash -c '\n                MNT=/mnt/cifs\n                FILE=\"$MNT/repro\"\n\n                # Generate four 1 MiB random blocks: [A][B][C][D].\n                dd if=/dev/urandom of=/tmp/src bs=1M count=4 status=none\n\n                # Expected contents after zeroing B: [A][zero][C][D].\n                cp /tmp/src /tmp/expected\n                dd if=/dev/zero of=/tmp/expected bs=1M seek=1 count=1 \\\n                        conv=notrunc status=none\n                cp /tmp/src \"$FILE\"\n\n                # Populate FS-Cache, then discard the page cache.\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n                cat \"$FILE\" > /dev/null\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n\n                fallocate --zero-range -o 1M -l 1M \"$FILE\"\n\n                if cmp -s /tmp/expected \"$FILE\"; then\n                        echo \"readback: OK\"\n                else\n                        echo \"readback: STALE DATA\"\n                fi\n        '\n\nBefore this change, the readback differs from /tmp/expected:\n\n        readback: STALE DATA\n\nAfter this change, it matches:\n\n        readback: OK",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -78189,7 +78189,7 @@
                 "cve_id": "CVE-2026-98125",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: fix stale page cache in insert/collapse range\n\nsmb3_insert_range() and smb3_collapse_range() use\ntruncate_pagecache_range() to invalidate the affected page cache.\nHowever, if off or old_eof is not page-aligned, the boundary pages are\nonly partially zeroed and remain uptodate. As a result, the client may\nreturn stale data after a successful insert/collapse range operation.\n\nFor example, with 4K pages:\n\n    page 0          page 1          page 2\n    0------4K       4K------8K      8K------12K\n       ^                                ^\n    off=2K                       old_eof=10K\n\nPage 1 is removed from the page cache, while the boundary pages are\nonly partially zeroed. After COPYCHUNK moves the data on the server,\nthese cached pages may still return stale data.\n\nThis can be reproduced on a CIFS mount:\n\n    bash -c '\n            FILE=/mnt/scratch/repro\n\n            # Use a 6 KiB file so EOF is not page-aligned.\n            dd if=/dev/urandom of=/tmp/src bs=1K count=6 status=none\n\n            # Expected: a 4 KiB hole followed by the original data.\n            rm -f /tmp/expected\n            truncate -s 4K /tmp/expected\n            cat /tmp/src >> /tmp/expected\n\n            cp /tmp/src \"$FILE\"\n\n            # Prime the page cache before moving data on the server.\n            cat \"$FILE\" > /dev/null\n\n            fallocate --insert-range -o 0 -l 4K \"$FILE\"\n\n            if cmp -s /tmp/expected \"$FILE\"; then\n                    echo \"readback: OK\"\n            else\n                    echo \"readback: STALE DATA\"\n            fi\n    '\n\nFix this by writing back dirty data and discarding the page cache from\nthe start of the page containing off to EOF before moving data on the\nserver.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -78207,7 +78207,7 @@
                 "cve_id": "CVE-2026-98126",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for zero range\n\nWhen FALLOC_FL_ZERO_RANGE is used without FALLOC_FL_KEEP_SIZE,\nsmb3_zero_range() may extend EOF without checking RLIMIT_FSIZE, allowing\nthe file to grow beyond the caller's file-size limit.\n\nFix this by calling inode_newsize_ok() before sending the zero-range\nrequest when the operation would extend EOF.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t        FILE=/mnt/cifs/repro\n\n\t        trap \"\" SIGXFSZ\n\t        ulimit -f 3072\n\n\t        truncate -s 2M \"$FILE\"\n\t        fallocate --zero-range -o 0 -l 4M \"$FILE\"\n\t        echo \"fallocate rc=$?\"\n\t        stat -c \"file size=%s\" \"$FILE\"\n\t'\n\nBefore this change, the operation succeeds despite the 3 MiB limit:\n\n\tfallocate rc=0\n\tfile size=4194304\n\nAfter this change, fallocate fails and leaves the file at 2 MiB.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -78225,7 +78225,7 @@
                 "cve_id": "CVE-2026-98127",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for insert range\n\nsmb3_insert_range() does not check if the new file size\n(i_size + len) is valid. This allows FALLOC_FL_INSERT_RANGE to bypass\nRLIMIT_FSIZE, exceed s_maxbytes, or produce a size outside the loff_t\nrange.\n\nUse check_add_overflow() to calculate the new EOF. Validate it with\ninode_newsize_ok() before modifying the file.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t\tFILE=/mnt/cifs/repro\n\n\t\ttrap \"\" SIGXFSZ\n\t\tulimit -f 3072\t\t# RLIMIT_FSIZE = 3 MiB\n\n\t\t# A regular write is stopped at 3 MiB.\n\t\tdd if=/dev/zero of=\"$FILE\" bs=1M count=4 status=none\n\t\tstat -c \"size after write: %s\" \"$FILE\"\n\n\t\t# Insert 2 MiB into a 2 MiB file.\n\t\ttruncate -s 2M \"$FILE\"\n\t\tfallocate -i -o 0 -l 2M \"$FILE\"\n\t\tstat -c \"size after insert: %s\" \"$FILE\"\n\t'\n\nBefore this change, the regular write stops at the 3 MiB limit, but\ninsert range grows the file to 4 MiB:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tsize after insert: 4194304\n\nAfter this change, insert range also fails at the limit and leaves the\n2 MiB file unchanged:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tfallocate: fallocate failed: File too large\n\tsize after insert: 2097152",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -78243,7 +78243,7 @@
                 "cve_id": "CVE-2026-98128",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix target device refcount leak in mpi3mr_sas_port_add()\n\nmpi3mr_get_tgtdev_by_addr() increments the target device kref when it\nreturns a device. If a subsequent error triggers a goto out_fail after\nthe tgtdev reference is acquired, the reference is never released\nbecause the out_fail path does not call mpi3mr_tgtdev_put(). This\nprevents the target device structure from ever being freed.\n\nAdd a tgtdev put in the out_fail path, guarded by a NULL check since\ntgtdev is only acquired for SAS_END_DEVICE types and the same cleanup\npath is shared by earlier error cases where tgtdev is still NULL.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -78261,7 +78261,7 @@
                 "cve_id": "CVE-2026-98129",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix NULL pointer dereference in mpi3mr_sas_port_add()\n\nsas_port_alloc_num() can return NULL on memory allocation failure. The\nreturn value is passed directly to sas_port_add() without a NULL check,\nwhich causes a NULL pointer dereference.\n\nAdditionally, if sas_port_add() fails, the allocated port is not freed\nbefore jumping to out_fail, leaking the sas_port structure. Call\nsas_port_free() to properly release it.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -174267,7 +174267,7 @@
                 "cve_id": "CVE-2026-98124",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: invalidate fscache for fallocate range operations\n\nsmb3_zero_range(), smb3_punch_hole(), smb3_insert_range(), and\nsmb3_collapse_range() modify file contents through server-side range\noperations. These operations discard the affected page cache, but leave\nthe FS-Cache cookie valid, so a later read may return data cached before\nthe range operation.\n\nFix this by invalidating FS-Cache after outstanding I/O has completed\nand before modifying the file on the server.\n\nRun the following as root on a CIFS mount with fsc enabled and an active\nCacheFiles backend:\n\n        bash -c '\n                MNT=/mnt/cifs\n                FILE=\"$MNT/repro\"\n\n                # Generate four 1 MiB random blocks: [A][B][C][D].\n                dd if=/dev/urandom of=/tmp/src bs=1M count=4 status=none\n\n                # Expected contents after zeroing B: [A][zero][C][D].\n                cp /tmp/src /tmp/expected\n                dd if=/dev/zero of=/tmp/expected bs=1M seek=1 count=1 \\\n                        conv=notrunc status=none\n                cp /tmp/src \"$FILE\"\n\n                # Populate FS-Cache, then discard the page cache.\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n                cat \"$FILE\" > /dev/null\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n\n                fallocate --zero-range -o 1M -l 1M \"$FILE\"\n\n                if cmp -s /tmp/expected \"$FILE\"; then\n                        echo \"readback: OK\"\n                else\n                        echo \"readback: STALE DATA\"\n                fi\n        '\n\nBefore this change, the readback differs from /tmp/expected:\n\n        readback: STALE DATA\n\nAfter this change, it matches:\n\n        readback: OK",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -174285,7 +174285,7 @@
                 "cve_id": "CVE-2026-98125",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: fix stale page cache in insert/collapse range\n\nsmb3_insert_range() and smb3_collapse_range() use\ntruncate_pagecache_range() to invalidate the affected page cache.\nHowever, if off or old_eof is not page-aligned, the boundary pages are\nonly partially zeroed and remain uptodate. As a result, the client may\nreturn stale data after a successful insert/collapse range operation.\n\nFor example, with 4K pages:\n\n    page 0          page 1          page 2\n    0------4K       4K------8K      8K------12K\n       ^                                ^\n    off=2K                       old_eof=10K\n\nPage 1 is removed from the page cache, while the boundary pages are\nonly partially zeroed. After COPYCHUNK moves the data on the server,\nthese cached pages may still return stale data.\n\nThis can be reproduced on a CIFS mount:\n\n    bash -c '\n            FILE=/mnt/scratch/repro\n\n            # Use a 6 KiB file so EOF is not page-aligned.\n            dd if=/dev/urandom of=/tmp/src bs=1K count=6 status=none\n\n            # Expected: a 4 KiB hole followed by the original data.\n            rm -f /tmp/expected\n            truncate -s 4K /tmp/expected\n            cat /tmp/src >> /tmp/expected\n\n            cp /tmp/src \"$FILE\"\n\n            # Prime the page cache before moving data on the server.\n            cat \"$FILE\" > /dev/null\n\n            fallocate --insert-range -o 0 -l 4K \"$FILE\"\n\n            if cmp -s /tmp/expected \"$FILE\"; then\n                    echo \"readback: OK\"\n            else\n                    echo \"readback: STALE DATA\"\n            fi\n    '\n\nFix this by writing back dirty data and discarding the page cache from\nthe start of the page containing off to EOF before moving data on the\nserver.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -174303,7 +174303,7 @@
                 "cve_id": "CVE-2026-98126",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for zero range\n\nWhen FALLOC_FL_ZERO_RANGE is used without FALLOC_FL_KEEP_SIZE,\nsmb3_zero_range() may extend EOF without checking RLIMIT_FSIZE, allowing\nthe file to grow beyond the caller's file-size limit.\n\nFix this by calling inode_newsize_ok() before sending the zero-range\nrequest when the operation would extend EOF.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t        FILE=/mnt/cifs/repro\n\n\t        trap \"\" SIGXFSZ\n\t        ulimit -f 3072\n\n\t        truncate -s 2M \"$FILE\"\n\t        fallocate --zero-range -o 0 -l 4M \"$FILE\"\n\t        echo \"fallocate rc=$?\"\n\t        stat -c \"file size=%s\" \"$FILE\"\n\t'\n\nBefore this change, the operation succeeds despite the 3 MiB limit:\n\n\tfallocate rc=0\n\tfile size=4194304\n\nAfter this change, fallocate fails and leaves the file at 2 MiB.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -174321,7 +174321,7 @@
                 "cve_id": "CVE-2026-98127",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for insert range\n\nsmb3_insert_range() does not check if the new file size\n(i_size + len) is valid. This allows FALLOC_FL_INSERT_RANGE to bypass\nRLIMIT_FSIZE, exceed s_maxbytes, or produce a size outside the loff_t\nrange.\n\nUse check_add_overflow() to calculate the new EOF. Validate it with\ninode_newsize_ok() before modifying the file.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t\tFILE=/mnt/cifs/repro\n\n\t\ttrap \"\" SIGXFSZ\n\t\tulimit -f 3072\t\t# RLIMIT_FSIZE = 3 MiB\n\n\t\t# A regular write is stopped at 3 MiB.\n\t\tdd if=/dev/zero of=\"$FILE\" bs=1M count=4 status=none\n\t\tstat -c \"size after write: %s\" \"$FILE\"\n\n\t\t# Insert 2 MiB into a 2 MiB file.\n\t\ttruncate -s 2M \"$FILE\"\n\t\tfallocate -i -o 0 -l 2M \"$FILE\"\n\t\tstat -c \"size after insert: %s\" \"$FILE\"\n\t'\n\nBefore this change, the regular write stops at the 3 MiB limit, but\ninsert range grows the file to 4 MiB:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tsize after insert: 4194304\n\nAfter this change, insert range also fails at the limit and leaves the\n2 MiB file unchanged:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tfallocate: fallocate failed: File too large\n\tsize after insert: 2097152",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -174339,7 +174339,7 @@
                 "cve_id": "CVE-2026-98128",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix target device refcount leak in mpi3mr_sas_port_add()\n\nmpi3mr_get_tgtdev_by_addr() increments the target device kref when it\nreturns a device. If a subsequent error triggers a goto out_fail after\nthe tgtdev reference is acquired, the reference is never released\nbecause the out_fail path does not call mpi3mr_tgtdev_put(). This\nprevents the target device structure from ever being freed.\n\nAdd a tgtdev put in the out_fail path, guarded by a NULL check since\ntgtdev is only acquired for SAS_END_DEVICE types and the same cleanup\npath is shared by earlier error cases where tgtdev is still NULL.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -174357,7 +174357,7 @@
                 "cve_id": "CVE-2026-98129",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix NULL pointer dereference in mpi3mr_sas_port_add()\n\nsas_port_alloc_num() can return NULL on memory allocation failure. The\nreturn value is passed directly to sas_port_add() without a NULL check,\nwhich causes a NULL pointer dereference.\n\nAdditionally, if sas_port_add() fails, the allocated port is not freed\nbefore jumping to out_fail, leaking the sas_port structure. Call\nsas_port_free() to properly release it.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -261224,7 +261224,7 @@
                 "cve_id": "CVE-2026-98124",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: invalidate fscache for fallocate range operations\n\nsmb3_zero_range(), smb3_punch_hole(), smb3_insert_range(), and\nsmb3_collapse_range() modify file contents through server-side range\noperations. These operations discard the affected page cache, but leave\nthe FS-Cache cookie valid, so a later read may return data cached before\nthe range operation.\n\nFix this by invalidating FS-Cache after outstanding I/O has completed\nand before modifying the file on the server.\n\nRun the following as root on a CIFS mount with fsc enabled and an active\nCacheFiles backend:\n\n        bash -c '\n                MNT=/mnt/cifs\n                FILE=\"$MNT/repro\"\n\n                # Generate four 1 MiB random blocks: [A][B][C][D].\n                dd if=/dev/urandom of=/tmp/src bs=1M count=4 status=none\n\n                # Expected contents after zeroing B: [A][zero][C][D].\n                cp /tmp/src /tmp/expected\n                dd if=/dev/zero of=/tmp/expected bs=1M seek=1 count=1 \\\n                        conv=notrunc status=none\n                cp /tmp/src \"$FILE\"\n\n                # Populate FS-Cache, then discard the page cache.\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n                cat \"$FILE\" > /dev/null\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n\n                fallocate --zero-range -o 1M -l 1M \"$FILE\"\n\n                if cmp -s /tmp/expected \"$FILE\"; then\n                        echo \"readback: OK\"\n                else\n                        echo \"readback: STALE DATA\"\n                fi\n        '\n\nBefore this change, the readback differs from /tmp/expected:\n\n        readback: STALE DATA\n\nAfter this change, it matches:\n\n        readback: OK",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -261238,7 +261238,7 @@
                 "cve_id": "CVE-2026-98125",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: fix stale page cache in insert/collapse range\n\nsmb3_insert_range() and smb3_collapse_range() use\ntruncate_pagecache_range() to invalidate the affected page cache.\nHowever, if off or old_eof is not page-aligned, the boundary pages are\nonly partially zeroed and remain uptodate. As a result, the client may\nreturn stale data after a successful insert/collapse range operation.\n\nFor example, with 4K pages:\n\n    page 0          page 1          page 2\n    0------4K       4K------8K      8K------12K\n       ^                                ^\n    off=2K                       old_eof=10K\n\nPage 1 is removed from the page cache, while the boundary pages are\nonly partially zeroed. After COPYCHUNK moves the data on the server,\nthese cached pages may still return stale data.\n\nThis can be reproduced on a CIFS mount:\n\n    bash -c '\n            FILE=/mnt/scratch/repro\n\n            # Use a 6 KiB file so EOF is not page-aligned.\n            dd if=/dev/urandom of=/tmp/src bs=1K count=6 status=none\n\n            # Expected: a 4 KiB hole followed by the original data.\n            rm -f /tmp/expected\n            truncate -s 4K /tmp/expected\n            cat /tmp/src >> /tmp/expected\n\n            cp /tmp/src \"$FILE\"\n\n            # Prime the page cache before moving data on the server.\n            cat \"$FILE\" > /dev/null\n\n            fallocate --insert-range -o 0 -l 4K \"$FILE\"\n\n            if cmp -s /tmp/expected \"$FILE\"; then\n                    echo \"readback: OK\"\n            else\n                    echo \"readback: STALE DATA\"\n            fi\n    '\n\nFix this by writing back dirty data and discarding the page cache from\nthe start of the page containing off to EOF before moving data on the\nserver.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -261252,7 +261252,7 @@
                 "cve_id": "CVE-2026-98126",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for zero range\n\nWhen FALLOC_FL_ZERO_RANGE is used without FALLOC_FL_KEEP_SIZE,\nsmb3_zero_range() may extend EOF without checking RLIMIT_FSIZE, allowing\nthe file to grow beyond the caller's file-size limit.\n\nFix this by calling inode_newsize_ok() before sending the zero-range\nrequest when the operation would extend EOF.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t        FILE=/mnt/cifs/repro\n\n\t        trap \"\" SIGXFSZ\n\t        ulimit -f 3072\n\n\t        truncate -s 2M \"$FILE\"\n\t        fallocate --zero-range -o 0 -l 4M \"$FILE\"\n\t        echo \"fallocate rc=$?\"\n\t        stat -c \"file size=%s\" \"$FILE\"\n\t'\n\nBefore this change, the operation succeeds despite the 3 MiB limit:\n\n\tfallocate rc=0\n\tfile size=4194304\n\nAfter this change, fallocate fails and leaves the file at 2 MiB.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -261266,7 +261266,7 @@
                 "cve_id": "CVE-2026-98127",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for insert range\n\nsmb3_insert_range() does not check if the new file size\n(i_size + len) is valid. This allows FALLOC_FL_INSERT_RANGE to bypass\nRLIMIT_FSIZE, exceed s_maxbytes, or produce a size outside the loff_t\nrange.\n\nUse check_add_overflow() to calculate the new EOF. Validate it with\ninode_newsize_ok() before modifying the file.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t\tFILE=/mnt/cifs/repro\n\n\t\ttrap \"\" SIGXFSZ\n\t\tulimit -f 3072\t\t# RLIMIT_FSIZE = 3 MiB\n\n\t\t# A regular write is stopped at 3 MiB.\n\t\tdd if=/dev/zero of=\"$FILE\" bs=1M count=4 status=none\n\t\tstat -c \"size after write: %s\" \"$FILE\"\n\n\t\t# Insert 2 MiB into a 2 MiB file.\n\t\ttruncate -s 2M \"$FILE\"\n\t\tfallocate -i -o 0 -l 2M \"$FILE\"\n\t\tstat -c \"size after insert: %s\" \"$FILE\"\n\t'\n\nBefore this change, the regular write stops at the 3 MiB limit, but\ninsert range grows the file to 4 MiB:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tsize after insert: 4194304\n\nAfter this change, insert range also fails at the limit and leaves the\n2 MiB file unchanged:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tfallocate: fallocate failed: File too large\n\tsize after insert: 2097152",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -261280,7 +261280,7 @@
                 "cve_id": "CVE-2026-98128",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix target device refcount leak in mpi3mr_sas_port_add()\n\nmpi3mr_get_tgtdev_by_addr() increments the target device kref when it\nreturns a device. If a subsequent error triggers a goto out_fail after\nthe tgtdev reference is acquired, the reference is never released\nbecause the out_fail path does not call mpi3mr_tgtdev_put(). This\nprevents the target device structure from ever being freed.\n\nAdd a tgtdev put in the out_fail path, guarded by a NULL check since\ntgtdev is only acquired for SAS_END_DEVICE types and the same cleanup\npath is shared by earlier error cases where tgtdev is still NULL.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -261294,7 +261294,7 @@
                 "cve_id": "CVE-2026-98129",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix NULL pointer dereference in mpi3mr_sas_port_add()\n\nsas_port_alloc_num() can return NULL on memory allocation failure. The\nreturn value is passed directly to sas_port_add() without a NULL check,\nwhich causes a NULL pointer dereference.\n\nAdditionally, if sas_port_add() fails, the allocated port is not freed\nbefore jumping to out_fail, leaking the sas_port structure. Call\nsas_port_free() to properly release it.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {

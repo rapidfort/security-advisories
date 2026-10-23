@@ -108794,7 +108794,7 @@
                 "cve_id": "CVE-2026-74346",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/irdma: Fix OOB read during CQ MR registration\n\nSashiko pointed out an unrelated bug during a previous patch:\nhttps://sashiko.dev/#/patchset/20260512183852.614045-1-jmoroni%40google.com\n\nThis change fixes the bug by eliminating the cqmr->split field which\nwas not being set properly and instead just checks the CQ resize\nfeature flag directly.\n\nThe cqmr->split field essentially tracks whether IRDMA_FEATURE_CQ_RESIZE\nis set, but it was not being set until CQ creation time, which is _after_\nCQ memory registration (the only other place where it is referenced).\n\nAs a result, it would always be false during MR registration and would\ntherefore cause irdma_handle_q_mem to populate cqmr->shadow even for GEN_2\nHW and beyond:\n\n    cqmr->shadow = (dma_addr_t)arr[req->cq_pages];\n\nThe issue is that for GEN_2 and beyond, req->cq_pages may be exactly equal\nto iwmr->page_cnt and therefore equal to the size of arr, which would cause\nan OOB read by one.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114251,7 +114251,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -114292,7 +114292,7 @@
                 "cve_id": "CVE-2026-80781",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: core: fix OOB read of field->usage in hid_set_field()\n\nhid_set_field() hands field->usage + offset to hid_dump_input() before\nthe guard that bounds offset:\n\n\thid_dump_input(field->report->device, field->usage + offset, value);\n\n\tif (offset >= field->report_count) {\n\t\thid_err(...);\n\t\treturn -1;\n\t}\n\nUnder CONFIG_DEBUG_FS hid_dump_input() dereferences that pointer, with\nbuf = hid_resolv_usage(usage->hid, NULL).  The usage[] array is\nallocated inline with the hid_field in hid_register_field() and holds\nfield->maxusage entries, so an offset past it reads off the end of the\nkvzalloc()ed allocation and into a neighbouring object.  Had the guard\nrun first, offset < report_count <= maxusage would already have confined\nthe pointer to the array.\n\nA caller supplies such an offset today.  picolcd_fb_send_tile()\nvalidates only report->maxfield before issuing\nhid_set_field(report->field[0], 11 + i, ...) for i = 0..31, so its\noffsets are fixed at 11..42 and are never checked against the bound\nfield.  When the device registers that field with fewer usages, the\nframebuffer deferred-io work drives the read on every tile.  KASAN\nreports a 4-byte slab-out-of-bounds read in hid_dump_input() below\nhid_set_field(), and the same boot logs \"offset (1) exceeds\nreport_count (1)\" from the guard that runs only afterwards.\n\nMove the hid_dump_input() call below the guard.  Because\nfield->maxusage >= field->report_count, the guard then establishes that\nfield->usage + offset lies inside the array before it is dereferenced,\nfor every caller and without changing behaviour on the valid path.\n\nDiscovered by XBOW, triaged by Baul Lee <baul.lee@xbow.com>",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114513,7 +114513,7 @@
                 "cve_id": "CVE-2026-80814",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrndis_host: add overflow check in rndis_rx_fixup()\n\nAdd an overflow check to ensure that data_offset + data_len + 8 does not\nwrap, which would enable an OOB read of the USB data buffer.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -114607,7 +114607,7 @@
                 "cve_id": "CVE-2026-80827",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nUSB: serial: option: fix slab OOB read in interrupt URB callback\n\nThe interrupt URB buffer is allocated in setup_port_interrupt_in() based\non the endpoint's wMaxPacketSize:\n\n    buffer_size = usb_endpoint_maxp(epd);\n    port->interrupt_in_buffer = kmalloc(buffer_size, GFP_KERNEL);\n\nWhen a USB device declares wMaxPacketSize = 8 on its interrupt IN\nendpoint, the buffer is allocated from kmalloc-8 cache (exactly\n8 bytes).\n\nIf the device sends a short packet (actual_length < wMaxPacketSize),\nthe URB completes with status == 0 and the callback proceeds to read:\n\n    data[sizeof(struct usb_ctrlrequest)]\n\nwhich evaluates to data[8], accessing 1 byte beyond the allocated 8-byte\nbuffer. This results in a slab out-of-bounds read.\n\nFix this by adding the missing bounds check: first verify that the\nactual length is large enough to contain the struct usb_ctrlrequest\nheader before accessing req_pkt->bRequestType and req_pkt->bRequest,\nand then verify that there is an additional byte for the modem signal\nstate before reading data[sizeof(struct usb_ctrlrequest)] inside the\nconditional.  Use sizeof(*req_pkt) instead of sizeof(struct\nusb_ctrlrequest) for consistency.\n\n[ johan: use dev_err(); split signals declaration and initialisation ]",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -114649,7 +114649,7 @@
                 "cve_id": "CVE-2026-80830",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: Add lock to usb_wakeup_notification()\n\nAdd a spin lock to usb_wakeup notification to prevent a race condition\nwith dereferencing freed memory. This could be hit by the xHCI driver as\nit calls this function from an IRQ and could race with the\nhub_disconnect() function, which properly grabs this lock to protect the\nstate of the device.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114984,7 +114984,7 @@
                 "cve_id": "CVE-2026-80889",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: isotp: fix timer drain order, wakeup handling and tx_gen ordering\n\nThis patch is a follow-up to commit cf070fe33bfb (\"can: isotp: serialize\nTX state transitions under so->rx_lock\") which addresses following\nsashiko-bot findings:\n\n- isotp_sendmsg(): drain so->txfrtimer first so a stale callback can't\n  re-arm echotimer after the claim\n\n- isotp_release(): wake so->wait after forcing ISOTP_SHUTDOWN so a\n  sleeping sendmsg() claim isn't stranded\n\n- isotp_sendmsg(): have both wait_event_interruptible() calls in\n  isotp_sendmsg() also wake on ISOTP_SHUTDOWN and do not return claim to\n  IDLE to avoid corrupting a concurrent isotp_release() process.\n\n- isotp_sendmsg(): handle potential claim of a new transfer when\n  the wait_event_interruptible() call returns in CAN_ISOTP_WAIT_TX_DONE\n  mode. Don't touch timers and states of the new transfer if a new thread\n  incremented so->tx_gen before getting the lock at err_event_drop.\n\n- isotp_sendmsg(): handle a stuck can_send() and omit timer and state\n  changes if a new transfer was claimed. wait_tx_done() returns the error\n  recorded in so->tx_result[], tagged with the caller's own generation.\n\n- isotp_tx_timeout(): on a claimed timeout, record the ECOMM error for\n  the timed-out transfer's own generation in so->tx_result[]; sk->sk_err\n  is raised unconditionally, same as every other error path here.\n\n- isotp_tx_gen_done()/isotp_tx_timeout(): always read tx.state (acquire)\n  before tx_gen - the reverse order let a weakly ordered CPU pair a fresh\n  tx.state with a stale tx_gen/tx_result slot.\n\n- isotp_sendmsg(): wait_tx_done: drain sk_err via sock_error() once we\n  have read the result from so->tx_result[], so an already-reported error\n  doesn't stay latched for a later poll()/SO_ERROR.\n\nAlso align the remaining lock-free so->tx.state/rx.state/cfecho accesses\nand use skb->hash as unique loopback echo frame indicator.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -114998,7 +114998,7 @@
                 "cve_id": "CVE-2026-80890",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: reject stale cookies with mismatched verification tags\n\nsctp_unpack_cookie() skips cookie expiration checks whenever an\nassociation already exists.  This is broader than the exception in\nRFC 9260 Section 5.2.4.\n\nFor an existing association, Section 5.2.4 permits an expired State\nCookie only when both Verification Tags in the cookie match the current\nassociation.  Otherwise, the packet SHOULD be discarded and a Stale\nCookie ERROR MUST be sent.\n\nThe broad check lets an expired Action A restart cookie reach\nsctp_sf_do_dupcook_a().  In a runtime test with the default 60 second\ncookie lifetime, replaying such a cookie after 65 seconds returned a\nCOOKIE-ACK and restarted the association.\n\nCheck cookie expiration unless both Verification Tags match.  This\npreserves the Action D exception for a lost COOKIE ACK while rejecting\nexpired cookies in all other cases.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -125989,7 +125989,7 @@
                 "cve_id": "CVE-2026-98124",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: invalidate fscache for fallocate range operations\n\nsmb3_zero_range(), smb3_punch_hole(), smb3_insert_range(), and\nsmb3_collapse_range() modify file contents through server-side range\noperations. These operations discard the affected page cache, but leave\nthe FS-Cache cookie valid, so a later read may return data cached before\nthe range operation.\n\nFix this by invalidating FS-Cache after outstanding I/O has completed\nand before modifying the file on the server.\n\nRun the following as root on a CIFS mount with fsc enabled and an active\nCacheFiles backend:\n\n        bash -c '\n                MNT=/mnt/cifs\n                FILE=\"$MNT/repro\"\n\n                # Generate four 1 MiB random blocks: [A][B][C][D].\n                dd if=/dev/urandom of=/tmp/src bs=1M count=4 status=none\n\n                # Expected contents after zeroing B: [A][zero][C][D].\n                cp /tmp/src /tmp/expected\n                dd if=/dev/zero of=/tmp/expected bs=1M seek=1 count=1 \\\n                        conv=notrunc status=none\n                cp /tmp/src \"$FILE\"\n\n                # Populate FS-Cache, then discard the page cache.\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n                cat \"$FILE\" > /dev/null\n                sync\n                echo 1 > /proc/sys/vm/drop_caches\n\n                fallocate --zero-range -o 1M -l 1M \"$FILE\"\n\n                if cmp -s /tmp/expected \"$FILE\"; then\n                        echo \"readback: OK\"\n                else\n                        echo \"readback: STALE DATA\"\n                fi\n        '\n\nBefore this change, the readback differs from /tmp/expected:\n\n        readback: STALE DATA\n\nAfter this change, it matches:\n\n        readback: OK",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -126002,7 +126002,7 @@
                 "cve_id": "CVE-2026-98125",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: fix stale page cache in insert/collapse range\n\nsmb3_insert_range() and smb3_collapse_range() use\ntruncate_pagecache_range() to invalidate the affected page cache.\nHowever, if off or old_eof is not page-aligned, the boundary pages are\nonly partially zeroed and remain uptodate. As a result, the client may\nreturn stale data after a successful insert/collapse range operation.\n\nFor example, with 4K pages:\n\n    page 0          page 1          page 2\n    0------4K       4K------8K      8K------12K\n       ^                                ^\n    off=2K                       old_eof=10K\n\nPage 1 is removed from the page cache, while the boundary pages are\nonly partially zeroed. After COPYCHUNK moves the data on the server,\nthese cached pages may still return stale data.\n\nThis can be reproduced on a CIFS mount:\n\n    bash -c '\n            FILE=/mnt/scratch/repro\n\n            # Use a 6 KiB file so EOF is not page-aligned.\n            dd if=/dev/urandom of=/tmp/src bs=1K count=6 status=none\n\n            # Expected: a 4 KiB hole followed by the original data.\n            rm -f /tmp/expected\n            truncate -s 4K /tmp/expected\n            cat /tmp/src >> /tmp/expected\n\n            cp /tmp/src \"$FILE\"\n\n            # Prime the page cache before moving data on the server.\n            cat \"$FILE\" > /dev/null\n\n            fallocate --insert-range -o 0 -l 4K \"$FILE\"\n\n            if cmp -s /tmp/expected \"$FILE\"; then\n                    echo \"readback: OK\"\n            else\n                    echo \"readback: STALE DATA\"\n            fi\n    '\n\nFix this by writing back dirty data and discarding the page cache from\nthe start of the page containing off to EOF before moving data on the\nserver.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -126015,7 +126015,7 @@
                 "cve_id": "CVE-2026-98126",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for zero range\n\nWhen FALLOC_FL_ZERO_RANGE is used without FALLOC_FL_KEEP_SIZE,\nsmb3_zero_range() may extend EOF without checking RLIMIT_FSIZE, allowing\nthe file to grow beyond the caller's file-size limit.\n\nFix this by calling inode_newsize_ok() before sending the zero-range\nrequest when the operation would extend EOF.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t        FILE=/mnt/cifs/repro\n\n\t        trap \"\" SIGXFSZ\n\t        ulimit -f 3072\n\n\t        truncate -s 2M \"$FILE\"\n\t        fallocate --zero-range -o 0 -l 4M \"$FILE\"\n\t        echo \"fallocate rc=$?\"\n\t        stat -c \"file size=%s\" \"$FILE\"\n\t'\n\nBefore this change, the operation succeeds despite the 3 MiB limit:\n\n\tfallocate rc=0\n\tfile size=4194304\n\nAfter this change, fallocate fails and leaves the file at 2 MiB.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -126028,7 +126028,7 @@
                 "cve_id": "CVE-2026-98127",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb/client: validate new EOF for insert range\n\nsmb3_insert_range() does not check if the new file size\n(i_size + len) is valid. This allows FALLOC_FL_INSERT_RANGE to bypass\nRLIMIT_FSIZE, exceed s_maxbytes, or produce a size outside the loff_t\nrange.\n\nUse check_add_overflow() to calculate the new EOF. Validate it with\ninode_newsize_ok() before modifying the file.\n\nReproducer, using a file on a CIFS mount:\n\n\tbash -c '\n\t\tFILE=/mnt/cifs/repro\n\n\t\ttrap \"\" SIGXFSZ\n\t\tulimit -f 3072\t\t# RLIMIT_FSIZE = 3 MiB\n\n\t\t# A regular write is stopped at 3 MiB.\n\t\tdd if=/dev/zero of=\"$FILE\" bs=1M count=4 status=none\n\t\tstat -c \"size after write: %s\" \"$FILE\"\n\n\t\t# Insert 2 MiB into a 2 MiB file.\n\t\ttruncate -s 2M \"$FILE\"\n\t\tfallocate -i -o 0 -l 2M \"$FILE\"\n\t\tstat -c \"size after insert: %s\" \"$FILE\"\n\t'\n\nBefore this change, the regular write stops at the 3 MiB limit, but\ninsert range grows the file to 4 MiB:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tsize after insert: 4194304\n\nAfter this change, insert range also fails at the limit and leaves the\n2 MiB file unchanged:\n\n\tdd: error writing '/mnt/cifs/repro': File too large\n\tsize after write: 3145728\n\tfallocate: fallocate failed: File too large\n\tsize after insert: 2097152",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -126041,7 +126041,7 @@
                 "cve_id": "CVE-2026-98128",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix target device refcount leak in mpi3mr_sas_port_add()\n\nmpi3mr_get_tgtdev_by_addr() increments the target device kref when it\nreturns a device. If a subsequent error triggers a goto out_fail after\nthe tgtdev reference is acquired, the reference is never released\nbecause the out_fail path does not call mpi3mr_tgtdev_put(). This\nprevents the target device structure from ever being freed.\n\nAdd a tgtdev put in the out_fail path, guarded by a NULL check since\ntgtdev is only acquired for SAS_END_DEVICE types and the same cleanup\npath is shared by earlier error cases where tgtdev is still NULL.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -126054,7 +126054,7 @@
                 "cve_id": "CVE-2026-98129",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: mpi3mr: Fix NULL pointer dereference in mpi3mr_sas_port_add()\n\nsas_port_alloc_num() can return NULL on memory allocation failure. The\nreturn value is passed directly to sas_port_add() without a NULL check,\nwhich causes a NULL pointer dereference.\n\nAdditionally, if sas_port_add() fails, the allocated port is not freed\nbefore jumping to out_fail, leaking the sas_port structure. Call\nsas_port_free() to properly release it.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
