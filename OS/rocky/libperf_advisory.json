@@ -59878,11 +59878,47 @@
                     }
                 ]
             },
+            "CVE-2026-89823": {
+                "cve_id": "CVE-2026-89823",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm: fix race between partial drm_dev_register() failure and ioctl\n\nIf drm_dev_register() fails after registering a minor (e.g. render minor\nregistered, primary minor fails), userspace could have opened the first\nminor and entered a drm_dev_enter() critical section. Since the\nunplugged flag was never set, the ioctl proceeds while the error path\ntears down device resources.\n\nFix this by introducing drm_dev_synchronize_unplug(), which sets the\nunplugged flag and waits for the SRCU barrier, ensuring all in-flight\ndrm_dev_enter() critical sections complete before cleanup proceeds; call\nit on the error path of drm_dev_register().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89828": {
                 "cve_id": "CVE-2026-89828",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: Fix init ordering in amdgpu_vram_mgr_init()\n\ndrmm_cgroup_register_region() is called before INIT_LIST_HEAD() and\ngpu_buddy_init() in amdgpu_vram_mgr_init(). If it fails, the function\nreturns early and bypasses those initializations.\n\nSince adev->mman.initialized is set to true before amdgpu_vram_mgr_init()\nis called, a failure triggers amdgpu_ttm_fini(), which calls\namdgpu_vram_mgr_fini(), which then:\n\n - Calls list_for_each_entry_safe() on reservations_pending and\n   reserved_pages, whose list_head::next pointers are zero-initialized\n   (NULL). The loop does not recognize them as empty and dereferences NULL.\n\n - Calls gpu_buddy_fini(), which iterates free_trees[] unconditionally\n   via for_each_free_tree(). Since mm->free_trees is NULL\n   (never allocated), this dereferences NULL.\n\nBoth result in a kernel panic on the module load error path.\n\nFix by moving drmm_cgroup_register_region() to after the list and buddy\nallocator are fully initialized, so the teardown path is safe to run.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89844": {
+                "cve_id": "CVE-2026-89844",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Hold vport_slock for host map update in report ID acquisition\n\nqla24xx_report_id_acquisition() format-1 handling drops vport_slock after\ntaking the vport reference and then calls qla_update_host_map() without\nthe lock. That reaches qla_update_vp_map(), which mutates the ha->host_map\nbtree via btree_insert32()/btree_update32()/btree_remove32() and is\ndocumented to require vport_slock to be held by the caller. Running it\nunlocked can race concurrent host_map updates and corrupt the btree.\n\nThe format-2 path in the same function already wraps its host_map update\n(SET_AL_PA) in vport_slock; the format-1 path is the lone outlier.\n\nHold vport_slock across the format-1 qla_update_host_map() call to honor\nthe documented locking contract. The vref_count taken in the loop keeps\nthe vport valid, so this only adds the missing host_map serialization.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -59914,11 +59950,65 @@
                     }
                 ]
             },
+            "CVE-2026-89847": {
+                "cve_id": "CVE-2026-89847",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Avoid double completion in async IOCB timeout\n\nqla2x00_async_iocb_timeout() tries to abort a timed-out async IOCB. When\nqla24xx_async_abort_cmd() fails, both the SRB_LOGIN_CMD path and the\nSRB_CTRL_VP/default path scan outstanding_cmds[] for the SRB and then\ncall sp->done(sp, QLA_FUNCTION_TIMEOUT) unconditionally, without checking\nwhether the SRB was actually found and removed.\n\nIf the response ISR completes the same handle first, it removes the SRB\nunder qp_lock_ptr and runs sp->done() -> complete(sp->comp). The\nsubmitter qla24xx_control_vp() wakes from wait_for_completion(), clears\nsp->comp, drops its reference and returns, reclaiming the on-stack\ncompletion. The timer reference keeps the SRB alive across the timeout\nhandler, but not the submitter's stack. The timeout then issues a second\nsp->done() -> qla_ctrlvp_sp_done(), which evaluates \"if (sp->comp)\ncomplete(sp->comp)\"; with the pointer loaded before the submitter's NULL\nstore, complete() writes into the freed stack frame, a use-after-free.\n\nTrack whether this path removed the SRB from outstanding_cmds and only\ncall sp->done() when it did, so the command is completed exactly once by\nwhichever path owns it. This mirrors the sp_found guard already used in\nqla24xx_abort_iocb_timeout().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89848": {
+                "cve_id": "CVE-2026-89848",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Quiesce response IRQ before freeing request queue\n\nqla2xxx_delete_qpair() deletes the request queue before the response\nqueue. qla25xx_delete_req_que() frees the request queue memory\n(kfree(req) in qla25xx_free_req_que()), but the response-queue MSI-X is\nonly released later, in qla25xx_free_rsp_que(). In that window the\nresponse interrupt can still fire, qla2xxx_msix_rsp_q() queues\nqpair->q_work, and qla_do_work() -> qla24xx_process_response_queue()\ndereferences the now-freed rsp->req (LOGINOUT/CT/ELS entries and the\nstatus path), a use-after-free.\n\nThe cancel_work_sync() added for the qpair teardown lives in the\nresponse free path, which runs after the request queue is already freed,\nso it does not protect rsp->req.\n\nRelease the response-queue interrupt and flush qpair->q_work before\ndeleting the request queue, so no late completion can reach the freed\nrequest queue. Clearing have_irq makes the subsequent\nqla25xx_free_rsp_que() skip its free_irq(), and the firmware\nqueue-delete order (request then response) is preserved; the\nrequest-delete mailbox completes on the default vector and is unaffected\nby dropping the qpair response interrupt early.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89851": {
                 "cve_id": "CVE-2026-89851",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix FCE trace enable parsing in debugfs\n\nqla2x00_dfs_fce_write() called kstrtoul() with a NULL result pointer,\nso a successful parse would dereference NULL and oops. Worse, the int\nreturn value (0 on success, negative errno on failure) was assigned to\nthe unsigned long enable flag, inverting the intended logic: a valid\nnumber was treated as \"disable\" while a parse failure enabled FCE.\n\nParse the value into enable and propagate parse errors to userspace.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89853": {
+                "cve_id": "CVE-2026-89853",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix FCE trace use-after-free during firmware dump\n\nqla2x00_free_fce_trace() freed and cleared ha->fce while holding only\nfce_mutex. The firmware-dump consumers qla27xx_fwdt_entry_t264() and\nqla25xx_copy_fce() read ha->fce (NULL check followed by a copy of the\nbuffer) under hardware_lock and never take fce_mutex. A debugfs FCE\ndisable could therefore free the DMA buffer between a dump's NULL check\nand its copy, resulting in a use-after-free.\n\nUnpublish ha->fce under hardware_lock, then release the lock and free\nthe DMA buffer (dma_free_coherent() may sleep). A concurrent dump either\ncompletes its check and copy with the buffer still valid, or observes\nha->fce == NULL and skips it.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -59954,6 +60044,60 @@
                 "cve_id": "CVE-2026-89856",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Clamp MSI-X derived queue counts to avoid truncation\n\nha->msix_count is u16, but ha->max_req_queues, ha->max_rsp_queues and\nha->max_qpairs are u8. Deriving the queue count as\n\"ha->max_req_queues = ha->msix_count - 1\" therefore truncates: a board\n(or a misconfigured/malicious hot-plugged device) advertising 257 MSI-X\nvectors yields msix_count - 1 == 256, which truncates to 0. An MSI-X\ncount of 1 zeroes it as well, and in target mode the subsequent\n\"ha->max_req_queues--\" then underflows 0 to 255.\n\nWhen the count is 0, qla2x00_alloc_queues() calls\nkzalloc_objs(struct req_que *, 0), which returns ZERO_SIZE_PTR. That is\nnot NULL, so the allocation check passes and the following\n\"ha->req_q_map[0] = req\" dereferences ZERO_SIZE_PTR, corrupting memory\nor crashing the kernel.\n\nAdd qla_calc_queue_count() to clamp the derived value into\n[1, QLA_MAX_QUEUES - 1] so it always fits in u8 and is never zero, and\nuse it at all three derivation sites (qla25xx_iospace_config(),\nqla83xx_iospace_config() and qla24xx_enable_msix()). Also guard the\ntarget-mode decrement so it cannot reintroduce a zero (which would in\nturn underflow max_qpairs).",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89858": {
+                "cve_id": "CVE-2026-89858",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Bound image count in qla2x00_update_fru_versions()\n\nqla2x00_update_fru_versions() copies the user-supplied BSG request into\na fixed 256-byte stack buffer (bsg[DMA_POOL_SIZE]) and then iterates\nlist->count times over the qla_image_version array embedded in that\nbuffer, advancing the image pointer each iteration. count is taken\ndirectly from user input with no upper bound, while only (DMA_POOL_SIZE\n- sizeof(list->count)) / sizeof(struct qla_image_version) = 6 entries\nactually fit. A larger count walks the image pointer off the end of the\nstack buffer, reading adjacent kernel stack memory and sending it to the\ndevice via qla2x00_write_sfp().\n\nReject requests whose declared count does not fit in the buffer.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89860": {
+                "cve_id": "CVE-2026-89860",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Initialize NVMe abort_work once at submission\n\nqla_nvme_fcp_abort() and qla_nvme_ls_abort() ran INIT_WORK() on\npriv->abort_work immediately before schedule_work(). INIT_WORK()\nreinitializes the work_struct, resetting its list head and clearing the\npending bit. If an abort is issued more than once for the same command\n(for example, concurrent transport teardown and a timeout-driven abort),\nthe second INIT_WORK() reinitializes a work item that is already queued,\nwhich can corrupt the workqueue list and lead to crashes or a looping\nworker.\n\nInitialize priv->abort_work once at command submission, next to the\nexisting per-command spin_lock_init(&priv->cmd_lock), and leave only\nschedule_work() in the abort paths. schedule_work() already does nothing\nwhen the work item is still pending, so a repeated abort no longer\ndisturbs an in-flight work item. The command is not returned to the\ntransport until the final kref_put()/release callback runs after\nabort_work has completed, so the work item is idle before priv is reused\nand the single submission-time INIT_WORK() is safe.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89861": {
+                "cve_id": "CVE-2026-89861",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Hold vport reference in qla24xx_report_id_acquisition()\n\nIn the format 1 path, the virtual port is located on ha->vp_list while\nholding vport_slock, but the lock is dropped before vp is used:\nqla_update_host_map() is called and VP_IDX_ACQUIRED/REGISTER_FC4_NEEDED/\nREGISTER_FDMI_NEEDED are set on vp. No reference is taken across that\nwindow, so a concurrent qla24xx_deallocate_vp_id() can tear the vport\ndown and free it, leading to a use-after-free.\n\nTake a vport reference (vref_count) under vport_slock when the matching\nvp is found, and drop it after the last use of\nvp. qla24xx_deallocate_vp_id() waits for vref_count to reach zero before\nunlinking and freeing the vport, so the pointer stays valid. This\nmatches the reference idiom already used by the other ha->vp_list\ntraversals.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -60004,10 +60148,100 @@
                     }
                 ]
             },
+            "CVE-2026-89864": {
+                "cve_id": "CVE-2026-89864",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Bound i2c->length in I2C bsg handlers\n\nstruct qla_i2c_access carries a 16-bit length field alongside a fixed\n64-byte buffer:\n\n\tstruct qla_i2c_access {\n\t\tuint16_t device, offset, option, length;\n\t\tuint8_t  buffer[0x40];\n\t} __packed;\n\nqla2x00_write_i2c() and qla2x00_read_i2c() use the user-supplied\ni2c->length without any bounds check. i2c is overlaid on a 256-byte\non-stack buffer and sfp is a 256-byte DMA-pool buffer, so a length up to\n65535 overruns both:\n\n  - write: memcpy(sfp, i2c->buffer, i2c->length) over-reads the stack and\n    over-writes the sfp heap buffer, and qla2x00_write_sfp() then DMAs\n    i2c->length bytes out of the 256-byte buffer.\n  - read: qla2x00_read_sfp() DMAs i2c->length bytes into the 256-byte sfp,\n    then memcpy(i2c->buffer, sfp, i2c->length) overflows the 64-byte\n    buffer inside the on-stack array.\n\nA caller holding CAP_SYS_RAWIO can use this to corrupt the heap and the\nkernel stack. Reject requests whose length exceeds the buffer before any\ncopy or DMA transfer in both handlers.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89879": {
+                "cve_id": "CVE-2026-89879",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: s2255: bound JPEG frame size before copying into the buffer\n\ns2255_fillbuff() memcpy()s vc->jpg_size bytes of a captured JPEG/MJPEG\nframe into the vb2 plane.  vc->jpg_size is taken verbatim from the\nS2255_MARKER_FRAME header the device sends (pdword[4] in save_frame())\nand, unlike the frame payload length just above it, is never bounded:\n\n\tpayload = le32_to_cpu(pdword[3]);\n\tif (payload > vc->req_image_size)\t/* payload is checked ... */\n\t\treturn -EINVAL;\n\tvc->pkt_size = payload;\n\tvc->jpg_size = le32_to_cpu(pdword[4]);\t/* ... jpg_size is not */\n\nA malicious or malfunctioning device can therefore report a jpg_size\nlarger than the destination vb2 plane, and the memcpy() writes past it.\njpg_size is a signed int, so a value with the top bit set also turns\ninto a huge length.\n\nReject a frame whose jpg_size is negative or exceeds the plane size\nbefore copying it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89897": {
+                "cve_id": "CVE-2026-89897",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cec: Serialize exclusive follower delivery\n\ncec_receive_notify() reads the exclusive follower pointer without the\nadapter lock. Serialize the no-follower check and message delivery\nagainst mode changes and release.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89899": {
+                "cve_id": "CVE-2026-89899",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cec: disable delayed work before freeing an interrupted transmit\n\ncec_transmit_msg_fh() drops adap->lock to wait for a blocking transmit in\nwait_for_completion_killable(). If that wait is interrupted by a signal,\ncancel_delayed_work_sync() can run before the CEC kthread arms the reply\ntimeout via schedule_delayed_work(&data->work) in cec_transmit_done_ts().\nThe work is then armed after the cancel, and the data is freed with its\ndelayed_work still pending:\n\n  ODEBUG: free active (active state 0) object: ... hint: cec_wait_timeout\n\nUse disable_delayed_work_sync(): it cancels the work and disables it, so\nthe later schedule_delayed_work() becomes a no-op and the work cannot be\nre-armed. The data is freed right after, so it need not be re-enabled.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89912": {
                 "cve_id": "CVE-2026-89912",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Don't dereference a NULL collection on ITT save\n\nMAPC with V=0 drops ite->collection but leaves the ITE on the device's\nITT list, and vgic_its_save_ite() dereferences it unconditionally. A\nguest that issues MAPD, MAPTI and then MAPC(V=0) therefore oopses the\nhost when the VMM issues KVM_DEV_ARM_ITS_SAVE_TABLES to migrate it.\nThat sequence is UNPREDICTABLE per the architecture, but KVM already\nhandles the resulting state in the translate, MOVI and DISCARD paths.\n\nSave a zeroed entry, which vgic_its_restore_ite() reads back as\ninvalid. Skipping the ITE instead would leave the ITT slot holding\nwhatever is in guest memory, and restore rejects an entry naming a\ncollection the restored collection table does not have.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89913": {
+                "cve_id": "CVE-2026-89913",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-v3: take an LPI reference in vgic_v3_save_pending_tables\n\nvgic_v3_save_pending_tables() iterates dist->lpi_xa using xa_for_each()\nand dereferences the returned struct vgic_irq in the loop body without\nholding a reference on the LPI.\n\nThe xarray iterator only provides temporary RCU coverage while looking up\nthe current entry. That is not sufficient for this loop body, which reads\nfields from struct vgic_irq and performs guest memory accesses before the\niteration completes.\n\nA concurrent path can trigger this race: the irqfd cached injection path\n(vgic_its_inject_cached_translation) obtains a transient LPI reference\nvia vgic_its_check_cache() without holding kvm->lock, vcpu->mutex,\nconfig_lock, or its_lock. If guest ITS DISCARD then drops the cache and\nITE references under its_lock, the transient inject reference may become\nthe final one. When vgic_put_irq() drops it, the LPI is erased from\nlpi_xa and freed via kfree_rcu(). Meanwhile, vgic_v3_save_pending_tables()\nmay still hold a stale pointer obtained from the xarray iterator and\ndereference it after the RCU grace period completes.\n\nFix this by re-fetching each iterated LPI via vgic_get_irq(), which takes\na stable reference, and dropping it with vgic_put_irq() on all paths.\nThis matches the pattern already used by other lpi_xa iterators in the\nvgic ITS code.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -77378,6 +77612,24 @@
                 "cve_id": "CVE-2026-98839",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvt: selection: Fix unsigned underflow and slab-out-of-bounds read in paste_selection()\n\nIn paste_selection(), the loop copies min_t(unsigned int,\nvc_sel.buf_len - pasted,tty->receive_room) bytes per iteration into\ntty_ldisc_receive_buf() and increments pasted += count.\n\nBecause the selection mutex (vc_sel.lock) is dropped inside the loop\nWhenever the line discipline buffer fills up and paste_selection()\nsleeps on tty->write_wait, a concurrent TIOCLINUX (TIOCL_SETSEL) ioctl\ncan replace vc_sel.buffer with a shorter selection and reduce\nvc_sel.buf_len below pasted.\n\nWhen paste_selection() resumes, vc_sel.buf_len - pasted underflows as an\nunsigned integer to a large positive value, causing\ntty_ldisc_receive_buf(ld, vc_sel.buffer + pasted, NULL, count) to read\nup to 4094 bytes out-of-bounds past the newly allocated vc_sel.buffer.\n\nFix this by terminating the loop when pasted >= vc_sel.buf_len.\n\nKernel stack trace (Linux 7.3.0-rc3):\n ==================================================================\n BUG: KASAN: slab-out-of-bounds in n_tty_receive_buf_common+0xa01/0x1650\n Read of size 4094 at addr ffff888101c58010 by task kworker/u17:1/65\n Workqueue: events_unbound flush_to_ldisc\n Call Trace:\n  <TASK>\n  dump_stack_lvl+0x70/0xa0\n  print_report+0x153/0x4c6\n  kasan_report+0xf1/0x120\n  kasan_check_range+0x11c/0x200\n  __asan_memcpy+0x29/0x70\n  n_tty_receive_buf_common+0xa01/0x1650\n  tty_ldisc_receive_buf+0x66/0x110\n  tty_port_default_receive_buf+0x6b/0xb0\n  flush_to_ldisc+0x1b4/0x410\n  process_one_work+0x6ff/0x1110\n  worker_thread+0x4a8/0xb70\n  kthread+0x307/0x3e0\n  ret_from_fork+0x3ed/0x680\n  </TASK>\n ==================================================================",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98846": {
+                "cve_id": "CVE-2026-98846",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: check RCV_SHUTDOWN after the sendmsg connect wait\n\nsctp_wait_for_connect() drops the socket lock while it sleeps. An\nout-of-the-blue ABORT can then be processed from the socket backlog and\nunlink the association. If a concurrent shutdown(fd, SHUT_RD) sets\nRCV_SHUTDOWN, the waiter breaks with err == 0 before checking\nasoc->base.dead. Its final sctp_association_put() can then free the\nassociation, leaving sctp_sendmsg_to_asoc() to continue with a dangling\npointer.\n\nCheck RCV_SHUTDOWN along with the wait error in sctp_sendmsg_to_asoc()\nbefore using the association again. The check only accesses the socket,\nso it needs no additional association reference. Return the existing\n-ESRCH so that sctp_sendmsg() skips freeing a new association that may\nalready have been destroyed.\n\nKeep sctp_wait_for_connect() unchanged to preserve its behavior for the\nconnect() caller.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -137352,11 +137604,47 @@
                     }
                 ]
             },
+            "CVE-2026-89823": {
+                "cve_id": "CVE-2026-89823",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm: fix race between partial drm_dev_register() failure and ioctl\n\nIf drm_dev_register() fails after registering a minor (e.g. render minor\nregistered, primary minor fails), userspace could have opened the first\nminor and entered a drm_dev_enter() critical section. Since the\nunplugged flag was never set, the ioctl proceeds while the error path\ntears down device resources.\n\nFix this by introducing drm_dev_synchronize_unplug(), which sets the\nunplugged flag and waits for the SRCU barrier, ensuring all in-flight\ndrm_dev_enter() critical sections complete before cleanup proceeds; call\nit on the error path of drm_dev_register().",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89828": {
                 "cve_id": "CVE-2026-89828",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: Fix init ordering in amdgpu_vram_mgr_init()\n\ndrmm_cgroup_register_region() is called before INIT_LIST_HEAD() and\ngpu_buddy_init() in amdgpu_vram_mgr_init(). If it fails, the function\nreturns early and bypasses those initializations.\n\nSince adev->mman.initialized is set to true before amdgpu_vram_mgr_init()\nis called, a failure triggers amdgpu_ttm_fini(), which calls\namdgpu_vram_mgr_fini(), which then:\n\n - Calls list_for_each_entry_safe() on reservations_pending and\n   reserved_pages, whose list_head::next pointers are zero-initialized\n   (NULL). The loop does not recognize them as empty and dereferences NULL.\n\n - Calls gpu_buddy_fini(), which iterates free_trees[] unconditionally\n   via for_each_free_tree(). Since mm->free_trees is NULL\n   (never allocated), this dereferences NULL.\n\nBoth result in a kernel panic on the module load error path.\n\nFix by moving drmm_cgroup_register_region() to after the list and buddy\nallocator are fully initialized, so the teardown path is safe to run.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89844": {
+                "cve_id": "CVE-2026-89844",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Hold vport_slock for host map update in report ID acquisition\n\nqla24xx_report_id_acquisition() format-1 handling drops vport_slock after\ntaking the vport reference and then calls qla_update_host_map() without\nthe lock. That reaches qla_update_vp_map(), which mutates the ha->host_map\nbtree via btree_insert32()/btree_update32()/btree_remove32() and is\ndocumented to require vport_slock to be held by the caller. Running it\nunlocked can race concurrent host_map updates and corrupt the btree.\n\nThe format-2 path in the same function already wraps its host_map update\n(SET_AL_PA) in vport_slock; the format-1 path is the lone outlier.\n\nHold vport_slock across the format-1 qla_update_host_map() call to honor\nthe documented locking contract. The vref_count taken in the loop keeps\nthe vport valid, so this only adds the missing host_map serialization.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -137388,11 +137676,65 @@
                     }
                 ]
             },
+            "CVE-2026-89847": {
+                "cve_id": "CVE-2026-89847",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Avoid double completion in async IOCB timeout\n\nqla2x00_async_iocb_timeout() tries to abort a timed-out async IOCB. When\nqla24xx_async_abort_cmd() fails, both the SRB_LOGIN_CMD path and the\nSRB_CTRL_VP/default path scan outstanding_cmds[] for the SRB and then\ncall sp->done(sp, QLA_FUNCTION_TIMEOUT) unconditionally, without checking\nwhether the SRB was actually found and removed.\n\nIf the response ISR completes the same handle first, it removes the SRB\nunder qp_lock_ptr and runs sp->done() -> complete(sp->comp). The\nsubmitter qla24xx_control_vp() wakes from wait_for_completion(), clears\nsp->comp, drops its reference and returns, reclaiming the on-stack\ncompletion. The timer reference keeps the SRB alive across the timeout\nhandler, but not the submitter's stack. The timeout then issues a second\nsp->done() -> qla_ctrlvp_sp_done(), which evaluates \"if (sp->comp)\ncomplete(sp->comp)\"; with the pointer loaded before the submitter's NULL\nstore, complete() writes into the freed stack frame, a use-after-free.\n\nTrack whether this path removed the SRB from outstanding_cmds and only\ncall sp->done() when it did, so the command is completed exactly once by\nwhichever path owns it. This mirrors the sp_found guard already used in\nqla24xx_abort_iocb_timeout().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89848": {
+                "cve_id": "CVE-2026-89848",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Quiesce response IRQ before freeing request queue\n\nqla2xxx_delete_qpair() deletes the request queue before the response\nqueue. qla25xx_delete_req_que() frees the request queue memory\n(kfree(req) in qla25xx_free_req_que()), but the response-queue MSI-X is\nonly released later, in qla25xx_free_rsp_que(). In that window the\nresponse interrupt can still fire, qla2xxx_msix_rsp_q() queues\nqpair->q_work, and qla_do_work() -> qla24xx_process_response_queue()\ndereferences the now-freed rsp->req (LOGINOUT/CT/ELS entries and the\nstatus path), a use-after-free.\n\nThe cancel_work_sync() added for the qpair teardown lives in the\nresponse free path, which runs after the request queue is already freed,\nso it does not protect rsp->req.\n\nRelease the response-queue interrupt and flush qpair->q_work before\ndeleting the request queue, so no late completion can reach the freed\nrequest queue. Clearing have_irq makes the subsequent\nqla25xx_free_rsp_que() skip its free_irq(), and the firmware\nqueue-delete order (request then response) is preserved; the\nrequest-delete mailbox completes on the default vector and is unaffected\nby dropping the qpair response interrupt early.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89851": {
                 "cve_id": "CVE-2026-89851",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix FCE trace enable parsing in debugfs\n\nqla2x00_dfs_fce_write() called kstrtoul() with a NULL result pointer,\nso a successful parse would dereference NULL and oops. Worse, the int\nreturn value (0 on success, negative errno on failure) was assigned to\nthe unsigned long enable flag, inverting the intended logic: a valid\nnumber was treated as \"disable\" while a parse failure enabled FCE.\n\nParse the value into enable and propagate parse errors to userspace.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89853": {
+                "cve_id": "CVE-2026-89853",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix FCE trace use-after-free during firmware dump\n\nqla2x00_free_fce_trace() freed and cleared ha->fce while holding only\nfce_mutex. The firmware-dump consumers qla27xx_fwdt_entry_t264() and\nqla25xx_copy_fce() read ha->fce (NULL check followed by a copy of the\nbuffer) under hardware_lock and never take fce_mutex. A debugfs FCE\ndisable could therefore free the DMA buffer between a dump's NULL check\nand its copy, resulting in a use-after-free.\n\nUnpublish ha->fce under hardware_lock, then release the lock and free\nthe DMA buffer (dma_free_coherent() may sleep). A concurrent dump either\ncompletes its check and copy with the buffer still valid, or observes\nha->fce == NULL and skips it.",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -137428,6 +137770,60 @@
                 "cve_id": "CVE-2026-89856",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Clamp MSI-X derived queue counts to avoid truncation\n\nha->msix_count is u16, but ha->max_req_queues, ha->max_rsp_queues and\nha->max_qpairs are u8. Deriving the queue count as\n\"ha->max_req_queues = ha->msix_count - 1\" therefore truncates: a board\n(or a misconfigured/malicious hot-plugged device) advertising 257 MSI-X\nvectors yields msix_count - 1 == 256, which truncates to 0. An MSI-X\ncount of 1 zeroes it as well, and in target mode the subsequent\n\"ha->max_req_queues--\" then underflows 0 to 255.\n\nWhen the count is 0, qla2x00_alloc_queues() calls\nkzalloc_objs(struct req_que *, 0), which returns ZERO_SIZE_PTR. That is\nnot NULL, so the allocation check passes and the following\n\"ha->req_q_map[0] = req\" dereferences ZERO_SIZE_PTR, corrupting memory\nor crashing the kernel.\n\nAdd qla_calc_queue_count() to clamp the derived value into\n[1, QLA_MAX_QUEUES - 1] so it always fits in u8 and is never zero, and\nuse it at all three derivation sites (qla25xx_iospace_config(),\nqla83xx_iospace_config() and qla24xx_enable_msix()). Also guard the\ntarget-mode decrement so it cannot reintroduce a zero (which would in\nturn underflow max_qpairs).",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89858": {
+                "cve_id": "CVE-2026-89858",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Bound image count in qla2x00_update_fru_versions()\n\nqla2x00_update_fru_versions() copies the user-supplied BSG request into\na fixed 256-byte stack buffer (bsg[DMA_POOL_SIZE]) and then iterates\nlist->count times over the qla_image_version array embedded in that\nbuffer, advancing the image pointer each iteration. count is taken\ndirectly from user input with no upper bound, while only (DMA_POOL_SIZE\n- sizeof(list->count)) / sizeof(struct qla_image_version) = 6 entries\nactually fit. A larger count walks the image pointer off the end of the\nstack buffer, reading adjacent kernel stack memory and sending it to the\ndevice via qla2x00_write_sfp().\n\nReject requests whose declared count does not fit in the buffer.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89860": {
+                "cve_id": "CVE-2026-89860",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Initialize NVMe abort_work once at submission\n\nqla_nvme_fcp_abort() and qla_nvme_ls_abort() ran INIT_WORK() on\npriv->abort_work immediately before schedule_work(). INIT_WORK()\nreinitializes the work_struct, resetting its list head and clearing the\npending bit. If an abort is issued more than once for the same command\n(for example, concurrent transport teardown and a timeout-driven abort),\nthe second INIT_WORK() reinitializes a work item that is already queued,\nwhich can corrupt the workqueue list and lead to crashes or a looping\nworker.\n\nInitialize priv->abort_work once at command submission, next to the\nexisting per-command spin_lock_init(&priv->cmd_lock), and leave only\nschedule_work() in the abort paths. schedule_work() already does nothing\nwhen the work item is still pending, so a repeated abort no longer\ndisturbs an in-flight work item. The command is not returned to the\ntransport until the final kref_put()/release callback runs after\nabort_work has completed, so the work item is idle before priv is reused\nand the single submission-time INIT_WORK() is safe.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89861": {
+                "cve_id": "CVE-2026-89861",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Hold vport reference in qla24xx_report_id_acquisition()\n\nIn the format 1 path, the virtual port is located on ha->vp_list while\nholding vport_slock, but the lock is dropped before vp is used:\nqla_update_host_map() is called and VP_IDX_ACQUIRED/REGISTER_FC4_NEEDED/\nREGISTER_FDMI_NEEDED are set on vp. No reference is taken across that\nwindow, so a concurrent qla24xx_deallocate_vp_id() can tear the vport\ndown and free it, leading to a use-after-free.\n\nTake a vport reference (vref_count) under vport_slock when the matching\nvp is found, and drop it after the last use of\nvp. qla24xx_deallocate_vp_id() waits for vref_count to reach zero before\nunlinking and freeing the vport, so the pointer stays valid. This\nmatches the reference idiom already used by the other ha->vp_list\ntraversals.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -137478,10 +137874,100 @@
                     }
                 ]
             },
+            "CVE-2026-89864": {
+                "cve_id": "CVE-2026-89864",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Bound i2c->length in I2C bsg handlers\n\nstruct qla_i2c_access carries a 16-bit length field alongside a fixed\n64-byte buffer:\n\n\tstruct qla_i2c_access {\n\t\tuint16_t device, offset, option, length;\n\t\tuint8_t  buffer[0x40];\n\t} __packed;\n\nqla2x00_write_i2c() and qla2x00_read_i2c() use the user-supplied\ni2c->length without any bounds check. i2c is overlaid on a 256-byte\non-stack buffer and sfp is a 256-byte DMA-pool buffer, so a length up to\n65535 overruns both:\n\n  - write: memcpy(sfp, i2c->buffer, i2c->length) over-reads the stack and\n    over-writes the sfp heap buffer, and qla2x00_write_sfp() then DMAs\n    i2c->length bytes out of the 256-byte buffer.\n  - read: qla2x00_read_sfp() DMAs i2c->length bytes into the 256-byte sfp,\n    then memcpy(i2c->buffer, sfp, i2c->length) overflows the 64-byte\n    buffer inside the on-stack array.\n\nA caller holding CAP_SYS_RAWIO can use this to corrupt the heap and the\nkernel stack. Reject requests whose length exceeds the buffer before any\ncopy or DMA transfer in both handlers.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89879": {
+                "cve_id": "CVE-2026-89879",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: s2255: bound JPEG frame size before copying into the buffer\n\ns2255_fillbuff() memcpy()s vc->jpg_size bytes of a captured JPEG/MJPEG\nframe into the vb2 plane.  vc->jpg_size is taken verbatim from the\nS2255_MARKER_FRAME header the device sends (pdword[4] in save_frame())\nand, unlike the frame payload length just above it, is never bounded:\n\n\tpayload = le32_to_cpu(pdword[3]);\n\tif (payload > vc->req_image_size)\t/* payload is checked ... */\n\t\treturn -EINVAL;\n\tvc->pkt_size = payload;\n\tvc->jpg_size = le32_to_cpu(pdword[4]);\t/* ... jpg_size is not */\n\nA malicious or malfunctioning device can therefore report a jpg_size\nlarger than the destination vb2 plane, and the memcpy() writes past it.\njpg_size is a signed int, so a value with the top bit set also turns\ninto a huge length.\n\nReject a frame whose jpg_size is negative or exceeds the plane size\nbefore copying it.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89897": {
+                "cve_id": "CVE-2026-89897",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cec: Serialize exclusive follower delivery\n\ncec_receive_notify() reads the exclusive follower pointer without the\nadapter lock. Serialize the no-follower check and message delivery\nagainst mode changes and release.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89899": {
+                "cve_id": "CVE-2026-89899",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cec: disable delayed work before freeing an interrupted transmit\n\ncec_transmit_msg_fh() drops adap->lock to wait for a blocking transmit in\nwait_for_completion_killable(). If that wait is interrupted by a signal,\ncancel_delayed_work_sync() can run before the CEC kthread arms the reply\ntimeout via schedule_delayed_work(&data->work) in cec_transmit_done_ts().\nThe work is then armed after the cancel, and the data is freed with its\ndelayed_work still pending:\n\n  ODEBUG: free active (active state 0) object: ... hint: cec_wait_timeout\n\nUse disable_delayed_work_sync(): it cancels the work and disables it, so\nthe later schedule_delayed_work() becomes a no-op and the work cannot be\nre-armed. The data is freed right after, so it need not be re-enabled.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89912": {
                 "cve_id": "CVE-2026-89912",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Don't dereference a NULL collection on ITT save\n\nMAPC with V=0 drops ite->collection but leaves the ITE on the device's\nITT list, and vgic_its_save_ite() dereferences it unconditionally. A\nguest that issues MAPD, MAPTI and then MAPC(V=0) therefore oopses the\nhost when the VMM issues KVM_DEV_ARM_ITS_SAVE_TABLES to migrate it.\nThat sequence is UNPREDICTABLE per the architecture, but KVM already\nhandles the resulting state in the translate, MOVI and DISCARD paths.\n\nSave a zeroed entry, which vgic_its_restore_ite() reads back as\ninvalid. Skipping the ITE instead would leave the ITT slot holding\nwhatever is in guest memory, and restore rejects an entry naming a\ncollection the restored collection table does not have.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89913": {
+                "cve_id": "CVE-2026-89913",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-v3: take an LPI reference in vgic_v3_save_pending_tables\n\nvgic_v3_save_pending_tables() iterates dist->lpi_xa using xa_for_each()\nand dereferences the returned struct vgic_irq in the loop body without\nholding a reference on the LPI.\n\nThe xarray iterator only provides temporary RCU coverage while looking up\nthe current entry. That is not sufficient for this loop body, which reads\nfields from struct vgic_irq and performs guest memory accesses before the\niteration completes.\n\nA concurrent path can trigger this race: the irqfd cached injection path\n(vgic_its_inject_cached_translation) obtains a transient LPI reference\nvia vgic_its_check_cache() without holding kvm->lock, vcpu->mutex,\nconfig_lock, or its_lock. If guest ITS DISCARD then drops the cache and\nITE references under its_lock, the transient inject reference may become\nthe final one. When vgic_put_irq() drops it, the LPI is erased from\nlpi_xa and freed via kfree_rcu(). Meanwhile, vgic_v3_save_pending_tables()\nmay still hold a stale pointer obtained from the xarray iterator and\ndereference it after the RCU grace period completes.\n\nFix this by re-fetching each iterated LPI via vgic_get_irq(), which takes\na stable reference, and dropping it with vgic_put_irq() on all paths.\nThis matches the pattern already used by other lpi_xa iterators in the\nvgic ITS code.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -154852,6 +155338,24 @@
                 "cve_id": "CVE-2026-98839",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvt: selection: Fix unsigned underflow and slab-out-of-bounds read in paste_selection()\n\nIn paste_selection(), the loop copies min_t(unsigned int,\nvc_sel.buf_len - pasted,tty->receive_room) bytes per iteration into\ntty_ldisc_receive_buf() and increments pasted += count.\n\nBecause the selection mutex (vc_sel.lock) is dropped inside the loop\nWhenever the line discipline buffer fills up and paste_selection()\nsleeps on tty->write_wait, a concurrent TIOCLINUX (TIOCL_SETSEL) ioctl\ncan replace vc_sel.buffer with a shorter selection and reduce\nvc_sel.buf_len below pasted.\n\nWhen paste_selection() resumes, vc_sel.buf_len - pasted underflows as an\nunsigned integer to a large positive value, causing\ntty_ldisc_receive_buf(ld, vc_sel.buffer + pasted, NULL, count) to read\nup to 4094 bytes out-of-bounds past the newly allocated vc_sel.buffer.\n\nFix this by terminating the loop when pasted >= vc_sel.buf_len.\n\nKernel stack trace (Linux 7.3.0-rc3):\n ==================================================================\n BUG: KASAN: slab-out-of-bounds in n_tty_receive_buf_common+0xa01/0x1650\n Read of size 4094 at addr ffff888101c58010 by task kworker/u17:1/65\n Workqueue: events_unbound flush_to_ldisc\n Call Trace:\n  <TASK>\n  dump_stack_lvl+0x70/0xa0\n  print_report+0x153/0x4c6\n  kasan_report+0xf1/0x120\n  kasan_check_range+0x11c/0x200\n  __asan_memcpy+0x29/0x70\n  n_tty_receive_buf_common+0xa01/0x1650\n  tty_ldisc_receive_buf+0x66/0x110\n  tty_port_default_receive_buf+0x6b/0xb0\n  flush_to_ldisc+0x1b4/0x410\n  process_one_work+0x6ff/0x1110\n  worker_thread+0x4a8/0xb70\n  kthread+0x307/0x3e0\n  ret_from_fork+0x3ed/0x680\n  </TASK>\n ==================================================================",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98846": {
+                "cve_id": "CVE-2026-98846",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: check RCV_SHUTDOWN after the sendmsg connect wait\n\nsctp_wait_for_connect() drops the socket lock while it sleeps. An\nout-of-the-blue ABORT can then be processed from the socket backlog and\nunlink the association. If a concurrent shutdown(fd, SHUT_RD) sets\nRCV_SHUTDOWN, the waiter breaks with err == 0 before checking\nasoc->base.dead. Its final sctp_association_put() can then free the\nassociation, leaving sctp_sendmsg_to_asoc() to continue with a dangling\npointer.\n\nCheck RCV_SHUTDOWN along with the wait error in sctp_sendmsg_to_asoc()\nbefore using the association again. The check only accesses the socket,\nso it needs no additional association reference. Return the existing\n-ESRCH so that sctp_sendmsg() skips freeing a new association that may\nalready have been destroyed.\n\nKeep sctp_wait_for_connect() unchanged to preserve its behavior for the\nconnect() caller.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -201542,11 +202046,39 @@
                     }
                 ]
             },
+            "CVE-2026-89823": {
+                "cve_id": "CVE-2026-89823",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm: fix race between partial drm_dev_register() failure and ioctl\n\nIf drm_dev_register() fails after registering a minor (e.g. render minor\nregistered, primary minor fails), userspace could have opened the first\nminor and entered a drm_dev_enter() critical section. Since the\nunplugged flag was never set, the ioctl proceeds while the error path\ntears down device resources.\n\nFix this by introducing drm_dev_synchronize_unplug(), which sets the\nunplugged flag and waits for the SRCU barrier, ensuring all in-flight\ndrm_dev_enter() critical sections complete before cleanup proceeds; call\nit on the error path of drm_dev_register().",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89828": {
                 "cve_id": "CVE-2026-89828",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: Fix init ordering in amdgpu_vram_mgr_init()\n\ndrmm_cgroup_register_region() is called before INIT_LIST_HEAD() and\ngpu_buddy_init() in amdgpu_vram_mgr_init(). If it fails, the function\nreturns early and bypasses those initializations.\n\nSince adev->mman.initialized is set to true before amdgpu_vram_mgr_init()\nis called, a failure triggers amdgpu_ttm_fini(), which calls\namdgpu_vram_mgr_fini(), which then:\n\n - Calls list_for_each_entry_safe() on reservations_pending and\n   reserved_pages, whose list_head::next pointers are zero-initialized\n   (NULL). The loop does not recognize them as empty and dereferences NULL.\n\n - Calls gpu_buddy_fini(), which iterates free_trees[] unconditionally\n   via for_each_free_tree(). Since mm->free_trees is NULL\n   (never allocated), this dereferences NULL.\n\nBoth result in a kernel panic on the module load error path.\n\nFix by moving drmm_cgroup_register_region() to after the list and buddy\nallocator are fully initialized, so the teardown path is safe to run.",
                 "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89844": {
+                "cve_id": "CVE-2026-89844",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Hold vport_slock for host map update in report ID acquisition\n\nqla24xx_report_id_acquisition() format-1 handling drops vport_slock after\ntaking the vport reference and then calls qla_update_host_map() without\nthe lock. That reaches qla_update_vp_map(), which mutates the ha->host_map\nbtree via btree_insert32()/btree_update32()/btree_remove32() and is\ndocumented to require vport_slock to be held by the caller. Running it\nunlocked can race concurrent host_map updates and corrupt the btree.\n\nThe format-2 path in the same function already wraps its host_map update\n(SET_AL_PA) in vport_slock; the format-1 path is the lone outlier.\n\nHold vport_slock across the format-1 qla_update_host_map() call to honor\nthe documented locking contract. The vref_count taken in the loop keeps\nthe vport valid, so this only adds the missing host_map serialization.",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -201570,11 +202102,53 @@
                     }
                 ]
             },
+            "CVE-2026-89847": {
+                "cve_id": "CVE-2026-89847",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Avoid double completion in async IOCB timeout\n\nqla2x00_async_iocb_timeout() tries to abort a timed-out async IOCB. When\nqla24xx_async_abort_cmd() fails, both the SRB_LOGIN_CMD path and the\nSRB_CTRL_VP/default path scan outstanding_cmds[] for the SRB and then\ncall sp->done(sp, QLA_FUNCTION_TIMEOUT) unconditionally, without checking\nwhether the SRB was actually found and removed.\n\nIf the response ISR completes the same handle first, it removes the SRB\nunder qp_lock_ptr and runs sp->done() -> complete(sp->comp). The\nsubmitter qla24xx_control_vp() wakes from wait_for_completion(), clears\nsp->comp, drops its reference and returns, reclaiming the on-stack\ncompletion. The timer reference keeps the SRB alive across the timeout\nhandler, but not the submitter's stack. The timeout then issues a second\nsp->done() -> qla_ctrlvp_sp_done(), which evaluates \"if (sp->comp)\ncomplete(sp->comp)\"; with the pointer loaded before the submitter's NULL\nstore, complete() writes into the freed stack frame, a use-after-free.\n\nTrack whether this path removed the SRB from outstanding_cmds and only\ncall sp->done() when it did, so the command is completed exactly once by\nwhichever path owns it. This mirrors the sp_found guard already used in\nqla24xx_abort_iocb_timeout().",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89848": {
+                "cve_id": "CVE-2026-89848",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Quiesce response IRQ before freeing request queue\n\nqla2xxx_delete_qpair() deletes the request queue before the response\nqueue. qla25xx_delete_req_que() frees the request queue memory\n(kfree(req) in qla25xx_free_req_que()), but the response-queue MSI-X is\nonly released later, in qla25xx_free_rsp_que(). In that window the\nresponse interrupt can still fire, qla2xxx_msix_rsp_q() queues\nqpair->q_work, and qla_do_work() -> qla24xx_process_response_queue()\ndereferences the now-freed rsp->req (LOGINOUT/CT/ELS entries and the\nstatus path), a use-after-free.\n\nThe cancel_work_sync() added for the qpair teardown lives in the\nresponse free path, which runs after the request queue is already freed,\nso it does not protect rsp->req.\n\nRelease the response-queue interrupt and flush qpair->q_work before\ndeleting the request queue, so no late completion can reach the freed\nrequest queue. Clearing have_irq makes the subsequent\nqla25xx_free_rsp_que() skip its free_irq(), and the firmware\nqueue-delete order (request then response) is preserved; the\nrequest-delete mailbox completes on the default vector and is unaffected\nby dropping the qpair response interrupt early.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89851": {
                 "cve_id": "CVE-2026-89851",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix FCE trace enable parsing in debugfs\n\nqla2x00_dfs_fce_write() called kstrtoul() with a NULL result pointer,\nso a successful parse would dereference NULL and oops. Worse, the int\nreturn value (0 on success, negative errno on failure) was assigned to\nthe unsigned long enable flag, inverting the intended logic: a valid\nnumber was treated as \"disable\" while a parse failure enabled FCE.\n\nParse the value into enable and propagate parse errors to userspace.",
                 "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89853": {
+                "cve_id": "CVE-2026-89853",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Fix FCE trace use-after-free during firmware dump\n\nqla2x00_free_fce_trace() freed and cleared ha->fce while holding only\nfce_mutex. The firmware-dump consumers qla27xx_fwdt_entry_t264() and\nqla25xx_copy_fce() read ha->fce (NULL check followed by a copy of the\nbuffer) under hardware_lock and never take fce_mutex. A debugfs FCE\ndisable could therefore free the DMA buffer between a dump's NULL check\nand its copy, resulting in a use-after-free.\n\nUnpublish ha->fce under hardware_lock, then release the lock and free\nthe DMA buffer (dma_free_coherent() may sleep). A concurrent dump either\ncompletes its check and copy with the buffer still valid, or observes\nha->fce == NULL and skips it.",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -201602,6 +202176,48 @@
                 "cve_id": "CVE-2026-89856",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Clamp MSI-X derived queue counts to avoid truncation\n\nha->msix_count is u16, but ha->max_req_queues, ha->max_rsp_queues and\nha->max_qpairs are u8. Deriving the queue count as\n\"ha->max_req_queues = ha->msix_count - 1\" therefore truncates: a board\n(or a misconfigured/malicious hot-plugged device) advertising 257 MSI-X\nvectors yields msix_count - 1 == 256, which truncates to 0. An MSI-X\ncount of 1 zeroes it as well, and in target mode the subsequent\n\"ha->max_req_queues--\" then underflows 0 to 255.\n\nWhen the count is 0, qla2x00_alloc_queues() calls\nkzalloc_objs(struct req_que *, 0), which returns ZERO_SIZE_PTR. That is\nnot NULL, so the allocation check passes and the following\n\"ha->req_q_map[0] = req\" dereferences ZERO_SIZE_PTR, corrupting memory\nor crashing the kernel.\n\nAdd qla_calc_queue_count() to clamp the derived value into\n[1, QLA_MAX_QUEUES - 1] so it always fits in u8 and is never zero, and\nuse it at all three derivation sites (qla25xx_iospace_config(),\nqla83xx_iospace_config() and qla24xx_enable_msix()). Also guard the\ntarget-mode decrement so it cannot reintroduce a zero (which would in\nturn underflow max_qpairs).",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89858": {
+                "cve_id": "CVE-2026-89858",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Bound image count in qla2x00_update_fru_versions()\n\nqla2x00_update_fru_versions() copies the user-supplied BSG request into\na fixed 256-byte stack buffer (bsg[DMA_POOL_SIZE]) and then iterates\nlist->count times over the qla_image_version array embedded in that\nbuffer, advancing the image pointer each iteration. count is taken\ndirectly from user input with no upper bound, while only (DMA_POOL_SIZE\n- sizeof(list->count)) / sizeof(struct qla_image_version) = 6 entries\nactually fit. A larger count walks the image pointer off the end of the\nstack buffer, reading adjacent kernel stack memory and sending it to the\ndevice via qla2x00_write_sfp().\n\nReject requests whose declared count does not fit in the buffer.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89860": {
+                "cve_id": "CVE-2026-89860",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Initialize NVMe abort_work once at submission\n\nqla_nvme_fcp_abort() and qla_nvme_ls_abort() ran INIT_WORK() on\npriv->abort_work immediately before schedule_work(). INIT_WORK()\nreinitializes the work_struct, resetting its list head and clearing the\npending bit. If an abort is issued more than once for the same command\n(for example, concurrent transport teardown and a timeout-driven abort),\nthe second INIT_WORK() reinitializes a work item that is already queued,\nwhich can corrupt the workqueue list and lead to crashes or a looping\nworker.\n\nInitialize priv->abort_work once at command submission, next to the\nexisting per-command spin_lock_init(&priv->cmd_lock), and leave only\nschedule_work() in the abort paths. schedule_work() already does nothing\nwhen the work item is still pending, so a repeated abort no longer\ndisturbs an in-flight work item. The command is not returned to the\ntransport until the final kref_put()/release callback runs after\nabort_work has completed, so the work item is idle before priv is reused\nand the single submission-time INIT_WORK() is safe.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89861": {
+                "cve_id": "CVE-2026-89861",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Hold vport reference in qla24xx_report_id_acquisition()\n\nIn the format 1 path, the virtual port is located on ha->vp_list while\nholding vport_slock, but the lock is dropped before vp is used:\nqla_update_host_map() is called and VP_IDX_ACQUIRED/REGISTER_FC4_NEEDED/\nREGISTER_FDMI_NEEDED are set on vp. No reference is taken across that\nwindow, so a concurrent qla24xx_deallocate_vp_id() can tear the vport\ndown and free it, leading to a use-after-free.\n\nTake a vport reference (vref_count) under vport_slock when the matching\nvp is found, and drop it after the last use of\nvp. qla24xx_deallocate_vp_id() waits for vref_count to reach zero before\nunlinking and freeing the vport, so the pointer stays valid. This\nmatches the reference idiom already used by the other ha->vp_list\ntraversals.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -201640,10 +202256,80 @@
                     }
                 ]
             },
+            "CVE-2026-89864": {
+                "cve_id": "CVE-2026-89864",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: qla2xxx: Bound i2c->length in I2C bsg handlers\n\nstruct qla_i2c_access carries a 16-bit length field alongside a fixed\n64-byte buffer:\n\n\tstruct qla_i2c_access {\n\t\tuint16_t device, offset, option, length;\n\t\tuint8_t  buffer[0x40];\n\t} __packed;\n\nqla2x00_write_i2c() and qla2x00_read_i2c() use the user-supplied\ni2c->length without any bounds check. i2c is overlaid on a 256-byte\non-stack buffer and sfp is a 256-byte DMA-pool buffer, so a length up to\n65535 overruns both:\n\n  - write: memcpy(sfp, i2c->buffer, i2c->length) over-reads the stack and\n    over-writes the sfp heap buffer, and qla2x00_write_sfp() then DMAs\n    i2c->length bytes out of the 256-byte buffer.\n  - read: qla2x00_read_sfp() DMAs i2c->length bytes into the 256-byte sfp,\n    then memcpy(i2c->buffer, sfp, i2c->length) overflows the 64-byte\n    buffer inside the on-stack array.\n\nA caller holding CAP_SYS_RAWIO can use this to corrupt the heap and the\nkernel stack. Reject requests whose length exceeds the buffer before any\ncopy or DMA transfer in both handlers.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89879": {
+                "cve_id": "CVE-2026-89879",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: s2255: bound JPEG frame size before copying into the buffer\n\ns2255_fillbuff() memcpy()s vc->jpg_size bytes of a captured JPEG/MJPEG\nframe into the vb2 plane.  vc->jpg_size is taken verbatim from the\nS2255_MARKER_FRAME header the device sends (pdword[4] in save_frame())\nand, unlike the frame payload length just above it, is never bounded:\n\n\tpayload = le32_to_cpu(pdword[3]);\n\tif (payload > vc->req_image_size)\t/* payload is checked ... */\n\t\treturn -EINVAL;\n\tvc->pkt_size = payload;\n\tvc->jpg_size = le32_to_cpu(pdword[4]);\t/* ... jpg_size is not */\n\nA malicious or malfunctioning device can therefore report a jpg_size\nlarger than the destination vb2 plane, and the memcpy() writes past it.\njpg_size is a signed int, so a value with the top bit set also turns\ninto a huge length.\n\nReject a frame whose jpg_size is negative or exceeds the plane size\nbefore copying it.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89897": {
+                "cve_id": "CVE-2026-89897",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cec: Serialize exclusive follower delivery\n\ncec_receive_notify() reads the exclusive follower pointer without the\nadapter lock. Serialize the no-follower check and message delivery\nagainst mode changes and release.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89899": {
+                "cve_id": "CVE-2026-89899",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: cec: disable delayed work before freeing an interrupted transmit\n\ncec_transmit_msg_fh() drops adap->lock to wait for a blocking transmit in\nwait_for_completion_killable(). If that wait is interrupted by a signal,\ncancel_delayed_work_sync() can run before the CEC kthread arms the reply\ntimeout via schedule_delayed_work(&data->work) in cec_transmit_done_ts().\nThe work is then armed after the cancel, and the data is freed with its\ndelayed_work still pending:\n\n  ODEBUG: free active (active state 0) object: ... hint: cec_wait_timeout\n\nUse disable_delayed_work_sync(): it cancels the work and disables it, so\nthe later schedule_delayed_work() becomes a no-op and the work cannot be\nre-armed. The data is freed right after, so it need not be re-enabled.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-89912": {
                 "cve_id": "CVE-2026-89912",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Don't dereference a NULL collection on ITT save\n\nMAPC with V=0 drops ite->collection but leaves the ITE on the device's\nITT list, and vgic_its_save_ite() dereferences it unconditionally. A\nguest that issues MAPD, MAPTI and then MAPC(V=0) therefore oopses the\nhost when the VMM issues KVM_DEV_ARM_ITS_SAVE_TABLES to migrate it.\nThat sequence is UNPREDICTABLE per the architecture, but KVM already\nhandles the resulting state in the translate, MOVI and DISCARD paths.\n\nSave a zeroed entry, which vgic_its_restore_ite() reads back as\ninvalid. Skipping the ITE instead would leave the ITT slot holding\nwhatever is in guest memory, and restore rejects an entry naming a\ncollection the restored collection table does not have.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89913": {
+                "cve_id": "CVE-2026-89913",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-v3: take an LPI reference in vgic_v3_save_pending_tables\n\nvgic_v3_save_pending_tables() iterates dist->lpi_xa using xa_for_each()\nand dereferences the returned struct vgic_irq in the loop body without\nholding a reference on the LPI.\n\nThe xarray iterator only provides temporary RCU coverage while looking up\nthe current entry. That is not sufficient for this loop body, which reads\nfields from struct vgic_irq and performs guest memory accesses before the\niteration completes.\n\nA concurrent path can trigger this race: the irqfd cached injection path\n(vgic_its_inject_cached_translation) obtains a transient LPI reference\nvia vgic_its_check_cache() without holding kvm->lock, vcpu->mutex,\nconfig_lock, or its_lock. If guest ITS DISCARD then drops the cache and\nITE references under its_lock, the transient inject reference may become\nthe final one. When vgic_put_irq() drops it, the LPI is erased from\nlpi_xa and freed via kfree_rcu(). Meanwhile, vgic_v3_save_pending_tables()\nmay still hold a stale pointer obtained from the xarray iterator and\ndereference it after the RCU grace period completes.\n\nFix this by re-fetching each iterated LPI via vgic_get_irq(), which takes\na stable reference, and dropping it with vgic_put_irq() on all paths.\nThis matches the pattern already used by other lpi_xa iterators in the\nvgic ITS code.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -215154,6 +215840,20 @@
                 "cve_id": "CVE-2026-98839",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvt: selection: Fix unsigned underflow and slab-out-of-bounds read in paste_selection()\n\nIn paste_selection(), the loop copies min_t(unsigned int,\nvc_sel.buf_len - pasted,tty->receive_room) bytes per iteration into\ntty_ldisc_receive_buf() and increments pasted += count.\n\nBecause the selection mutex (vc_sel.lock) is dropped inside the loop\nWhenever the line discipline buffer fills up and paste_selection()\nsleeps on tty->write_wait, a concurrent TIOCLINUX (TIOCL_SETSEL) ioctl\ncan replace vc_sel.buffer with a shorter selection and reduce\nvc_sel.buf_len below pasted.\n\nWhen paste_selection() resumes, vc_sel.buf_len - pasted underflows as an\nunsigned integer to a large positive value, causing\ntty_ldisc_receive_buf(ld, vc_sel.buffer + pasted, NULL, count) to read\nup to 4094 bytes out-of-bounds past the newly allocated vc_sel.buffer.\n\nFix this by terminating the loop when pasted >= vc_sel.buf_len.\n\nKernel stack trace (Linux 7.3.0-rc3):\n ==================================================================\n BUG: KASAN: slab-out-of-bounds in n_tty_receive_buf_common+0xa01/0x1650\n Read of size 4094 at addr ffff888101c58010 by task kworker/u17:1/65\n Workqueue: events_unbound flush_to_ldisc\n Call Trace:\n  <TASK>\n  dump_stack_lvl+0x70/0xa0\n  print_report+0x153/0x4c6\n  kasan_report+0xf1/0x120\n  kasan_check_range+0x11c/0x200\n  __asan_memcpy+0x29/0x70\n  n_tty_receive_buf_common+0xa01/0x1650\n  tty_ldisc_receive_buf+0x66/0x110\n  tty_port_default_receive_buf+0x6b/0xb0\n  flush_to_ldisc+0x1b4/0x410\n  process_one_work+0x6ff/0x1110\n  worker_thread+0x4a8/0xb70\n  kthread+0x307/0x3e0\n  ret_from_fork+0x3ed/0x680\n  </TASK>\n ==================================================================",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98846": {
+                "cve_id": "CVE-2026-98846",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: check RCV_SHUTDOWN after the sendmsg connect wait\n\nsctp_wait_for_connect() drops the socket lock while it sleeps. An\nout-of-the-blue ABORT can then be processed from the socket backlog and\nunlink the association. If a concurrent shutdown(fd, SHUT_RD) sets\nRCV_SHUTDOWN, the waiter breaks with err == 0 before checking\nasoc->base.dead. Its final sctp_association_put() can then free the\nassociation, leaving sctp_sendmsg_to_asoc() to continue with a dangling\npointer.\n\nCheck RCV_SHUTDOWN along with the wait error in sctp_sendmsg_to_asoc()\nbefore using the association again. The check only accesses the socket,\nso it needs no additional association reference. Return the existing\n-ESRCH so that sctp_sendmsg() skips freeing a new association that may\nalready have been destroyed.\n\nKeep sctp_wait_for_connect() unchanged to preserve its behavior for the\nconnect() caller.",
                 "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
