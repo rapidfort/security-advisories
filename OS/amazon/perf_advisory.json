@@ -8042,7 +8042,7 @@
                 "cve_id": "CVE-2023-54158",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: don't free qgroup space unless specified\n\nBoris noticed in his simple quotas testing that he was getting a leak\nwith Sweet Tea's change to subvol create that stopped doing a\ntransaction commit.  This was just a side effect of that change.\n\nIn the delayed inode code we have an optimization that will free extra\nreservations if we think we can pack a dir item into an already modified\nleaf.  Previously this wouldn't be triggered in the subvolume create\ncase because we'd commit the transaction, it was still possible but\nmuch harder to trigger.  It could actually be triggered if we did a\nmkdir && subvol create with qgroups enabled.\n\nThis occurs because in btrfs_insert_delayed_dir_index(), which gets\ncalled when we're adding the dir item, we do the following:\n\n  btrfs_block_rsv_release(fs_info, trans->block_rsv, bytes, NULL);\n\nif we're able to skip reserving space.\n\nThe problem here is that trans->block_rsv points at the temporary block\nrsv for the subvolume create, which has qgroup reservations in the block\nrsv.\n\nThis is a problem because btrfs_block_rsv_release() will do the\nfollowing:\n\n  if (block_rsv->qgroup_rsv_reserved >= block_rsv->qgroup_rsv_size) {\n\t  qgroup_to_release = block_rsv->qgroup_rsv_reserved -\n\t\t  block_rsv->qgroup_rsv_size;\n\t  block_rsv->qgroup_rsv_reserved = block_rsv->qgroup_rsv_size;\n  }\n\nThe temporary block rsv just has ->qgroup_rsv_reserved set,\n->qgroup_rsv_size == 0.  The optimization in\nbtrfs_insert_delayed_dir_index() sets ->qgroup_rsv_reserved = 0.  Then\nlater on when we call btrfs_subvolume_release_metadata() which has\n\n  btrfs_block_rsv_release(fs_info, rsv, (u64)-1, &qgroup_to_release);\n  btrfs_qgroup_convert_reserved_meta(root, qgroup_to_release);\n\nqgroup_to_release is set to 0, and we do not convert the reserved\nmetadata space.\n\nThe problem here is that the block rsv code has been unconditionally\nmessing with ->qgroup_rsv_reserved, because the main place this is used\nis delalloc, and any time we call btrfs_block_rsv_release() we do it\nwith qgroup_to_release set, and thus do the proper accounting.\n\nThe subvolume code is the only other code that uses the qgroup\nreservation stuff, but it's intermingled with the above optimization,\nand thus was getting its reservation freed out from underneath it and\nthus leaking the reserved space.\n\nThe solution is to simply not mess with the qgroup reservations if we\ndon't have qgroup_to_release set.  This works with the existing code as\nanything that messes with the delalloc reservations always have\nqgroup_to_release set.  This fixes the leak that Boris was observing.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -8490,7 +8490,7 @@
                 "cve_id": "CVE-2023-54248",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/ntfs3: Add check for kmemdup\n\nSince the kmemdup may return NULL pointer,\nit should be better to add check for the return value\nin order to avoid NULL pointer dereference.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -8672,7 +8672,7 @@
                 "cve_id": "CVE-2023-54293",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbcache: fixup btree_cache_wait list damage\n\nWe get a kernel crash about \"list_add corruption. next->prev should be\nprev (ffff9c801bc01210), but was ffff9c77b688237c.\n(next=ffffae586d8afe68).\"\n\ncrash> struct list_head 0xffff9c801bc01210\nstruct list_head {\n  next = 0xffffae586d8afe68,\n  prev = 0xffffae586d8afe68\n}\ncrash> struct list_head 0xffff9c77b688237c\nstruct list_head {\n  next = 0x0,\n  prev = 0x0\n}\ncrash> struct list_head 0xffffae586d8afe68\nstruct list_head struct: invalid kernel virtual address: ffffae586d8afe68  type: \"gdb_readmem_callback\"\nCannot access memory at address 0xffffae586d8afe68\n\n[230469.019492] Call Trace:\n[230469.032041]  prepare_to_wait+0x8a/0xb0\n[230469.044363]  ? bch_btree_keys_free+0x6c/0xc0 [escache]\n[230469.056533]  mca_cannibalize_lock+0x72/0x90 [escache]\n[230469.068788]  mca_alloc+0x2ae/0x450 [escache]\n[230469.080790]  bch_btree_node_get+0x136/0x2d0 [escache]\n[230469.092681]  bch_btree_check_thread+0x1e1/0x260 [escache]\n[230469.104382]  ? finish_wait+0x80/0x80\n[230469.115884]  ? bch_btree_check_recurse+0x1a0/0x1a0 [escache]\n[230469.127259]  kthread+0x112/0x130\n[230469.138448]  ? kthread_flush_work_fn+0x10/0x10\n[230469.149477]  ret_from_fork+0x35/0x40\n\nbch_btree_check_thread() and bch_dirty_init_thread() may call\nmca_cannibalize() to cannibalize other cached btree nodes. Only one thread\ncan do it at a time, so the op of other threads will be added to the\nbtree_cache_wait list.\n\nWe must call finish_wait() to remove op from btree_cache_wait before free\nit's memory address. Otherwise, the list will be damaged. Also should call\nbch_cannibalize_unlock() to release the btree_cache_alloc_lock and wake_up\nother waiters.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -8714,7 +8714,7 @@
                 "cve_id": "CVE-2023-54297",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: zoned: fix memory leak after finding block group with super blocks\n\nAt exclude_super_stripes(), if we happen to find a block group that has\nsuper blocks mapped to it and we are on a zoned filesystem, we error out\nas this is not supposed to happen, indicating either a bug or maybe some\nmemory corruption for example. However we are exiting the function without\nfreeing the memory allocated for the logical address of the super blocks.\nFix this by freeing the logical address.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -9188,8 +9188,8 @@
             },
             "CVE-2024-1627": {
                 "cve_id": "CVE-2024-1627",
-                "title": "CVE-2024-1627",
-                "description": "A vulnerability was discovered in the Linux kernel's IPv4 networking stack. Under certain conditions, MPTCP and NetLabel can be configured in a way that triggers a double free memory error in net/ipv4/af_inet.c:inet_sock_destruct(). This may lead to a system crash, denial of service, or potential arbitrary code execution.",
+                "title": "Amazon Linux 2023 - ALAS2023-2024-603: Medium priority package update for kernel",
+                "description": "In the Linux kernel, the following vulnerability has been resolved: cpumap: Zero-initialise xdp_rxq_info struct before running XDP program",
                 "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
@@ -30320,7 +30320,7 @@
                 "cve_id": "CVE-2025-68325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: sch_cake: Fix incorrect qlen reduction in cake_drop\n\nIn cake_drop(), qdisc_tree_reduce_backlog() is used to update the qlen\nand backlog of the qdisc hierarchy. Its caller, cake_enqueue(), assumes\nthat the parent qdisc will enqueue the current packet. However, this\nassumption breaks when cake_enqueue() returns NET_XMIT_CN: the parent\nqdisc stops enqueuing current packet, leaving the tree qlen/backlog\naccounting inconsistent. This mismatch can lead to a NULL dereference\n(e.g., when the parent Qdisc is qfq_qdisc).\n\nThis patch computes the qlen/backlog delta in a more robust way by\nobserving the difference before and after the series of cake_drop()\ncalls, and then compensates the qdisc tree accounting if cake_enqueue()\nreturns NET_XMIT_CN.\n\nTo ensure correct compensation when ACK thinning is enabled, a new\nvariable is introduced to keep qlen unchanged.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -30532,7 +30532,7 @@
                 "cve_id": "CVE-2025-68727",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs3: Fix uninit buffer allocated by __getname()\n\nFix uninit errors caused after buffer allocation given to 'de'; by\ninitializing the buffer with zeroes. The fix was found by using KMSAN.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -30546,7 +30546,7 @@
                 "cve_id": "CVE-2025-68728",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs3: fix uninit memory after failed mi_read in mi_format_new\n\nFix a KMSAN un-init bug found by syzkaller.\n\nntfs_get_bh() expects a buffer from sb_getblk(), that buffer may not be\nuptodate. We do not bring the buffer uptodate before setting it as\nuptodate. If the buffer were to not be uptodate, it could mean adding a\nbuffer with un-init data to the mi record. Attempting to load that record\nwill trigger KMSAN.\n\nAvoid this by setting the buffer as uptodate, if it\u2019s not already, by\noverwriting it.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -30849,7 +30849,7 @@
                 "cve_id": "CVE-2025-71067",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs: set dummy blocksize to read boot_block when mounting\n\nWhen mounting, sb->s_blocksize is used to read the boot_block without\nbeing defined or validated. Set a dummy blocksize before attempting to\nread the boot_block.\n\nThe issue can be triggered with the following syz reproducer:\n\n  mkdirat(0xffffffffffffff9c, &(0x7f0000000080)='./file1\\x00', 0x0)\n  r4 = openat$nullb(0xffffffffffffff9c, &(0x7f0000000040), 0x121403, 0x0)\n  ioctl$FS_IOC_SETFLAGS(r4, 0x40081271, &(0x7f0000000980)=0x4000)\n  mount(&(0x7f0000000140)=@nullb, &(0x7f0000000040)='./cgroup\\x00',\n        &(0x7f0000000000)='ntfs3\\x00', 0x2208004, 0x0)\n  syz_clone(0x88200200, 0x0, 0x0, 0x0, 0x0, 0x0)\n\nHere, the ioctl sets the bdev block size to 16384. During mount,\nget_tree_bdev_flags() calls sb_set_blocksize(sb, block_size(bdev)),\nbut since block_size(bdev) > PAGE_SIZE, sb_set_blocksize() leaves\nsb->s_blocksize at zero.\n\nLater, ntfs_init_from_boot() attempts to read the boot_block while\nsb->s_blocksize is still zero, which triggers the bug.\n\n[almaz.alexandrovich@paragon-software.com: changed comment style, added\nreturn value handling]",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -45172,7 +45172,7 @@
                 "cve_id": "CVE-2026-72097",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndm-verity: fix a possible NULL pointer dereference\n\nFix a possible NULL pointer dereference dm_verity_loadpin_is_bdev_trusted\nif the device has no table.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -49872,7 +49872,7 @@
                 "cve_id": "CVE-2026-80765",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nHID: hyperv: validate initial device info bounds\n\nThe Hyper-V synthetic HID host supplies SYNTH_HID_INITIAL_DEVICE_INFO\nmessages that contain a HID descriptor followed by the report descriptor\nbytes. mousevsc_on_receive_device_info() trusts bLength and\nwDescriptorLength without checking that the received packet contains both\nbyte ranges.\n\nA malformed host or backend message can therefore make the guest read\npast the received VMBus packet while copying the report descriptor. Pass\nthe received initial-device-info size into the parser and reject\ndescriptor lengths that exceed the packet.\n\nImpact: A malicious Hyper-V host or backend can crash a guest by sending\na short initial device-info message with an oversized HID report\ndescriptor length.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -50216,7 +50216,7 @@
                 "cve_id": "CVE-2026-80880",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/mlx5: Properly support implicit ODP rereg_mr\n\nDue to all the child mkeys in the implicit ODP configuration we cannot\nchange anything in place for the parent mkey. Instead the whole thing\nneeds to be rebuilt if any change is requested. If the user does not\nspecify a translation then force the implicit values which will then fall\nthrough the logic into mlx5_ib_reg_user_mr() to allocate a completely new\nMR.\n\nSince implicit children were also touching the mr->pd, this removes\nanother case where the access was racy.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -51939,7 +51939,7 @@
                 "cve_id": "CVE-2026-89785",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/ntfs3: fix out-of-bounds read of INDEX_ROOT in reparse/objid init\n\nntfs_reparse_init() and ntfs_objid_init() parse the index root of the\n$Extend/$Reparse and $Extend/$ObjId metafiles (the INDEX_ROOT attributes\nnamed $R and $O). They read its type and rule fields through\nresident_data(), which does not check that the resident attribute is\nlarge enough to hold them.\n\nmi_enum_attr() accepts a resident attribute with data_off == asize and\ndata_size == 0. For such an attribute placed last in its MFT record,\nresident_data() returns a pointer to the end of the record_size buffer,\nso reading root->type / root->rule reads past the allocation.\n\nUse resident_data_ex(attr, sizeof(struct INDEX_ROOT)) and bail out when\nit returns NULL, as ntfs_security_init() already does for $SDH / $SII.\n\nThe attribute is only parsed while mounting a crafted image, so this\nneeds CAP_SYS_ADMIN.\n\n BUG: KASAN: slab-out-of-bounds in ntfs_reparse_init (fs/ntfs3/fsntfs.c:2306)\n Read of size 4 at addr ffff88801219dc00 by task mount\n  ntfs_reparse_init (fs/ntfs3/fsntfs.c:2306)\n  ntfs_fill_super (fs/ntfs3/super.c:1604)\n  get_tree_bdev_flags (fs/super.c:1703)\n  vfs_get_tree (fs/super.c:1758)\n  path_mount (fs/namespace.c:4131)\n  __x64_sys_mount (fs/namespace.c:4360)",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -52119,7 +52119,7 @@
                 "cve_id": "CVE-2026-89983",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: core: fix debugfs UAF on adapter removal\n\ni2c_del_adapter() frees the adapter's debugfs directory before it\nunregisters the adapter device, but the new_device sysfs attribute\nstays writable until device_del(). A write racing with removal still\nreaches i2c_device_probe(), which passes the freed adap->debugfs to\ndebugfs_create_dir() as the new client's parent:\n\n  BUG: KASAN: slab-use-after-free in lookup_noperm_common+0x407/0x430\n  Read of size 4 at addr ffff88803ef87810 by task syz.0.61/6090\n   lookup_noperm_common+0x407/0x430\n   simple_start_creating+0x9c/0x110\n   debugfs_start_creating+0xdb/0x1a0\n   debugfs_create_dir+0x24/0x350\n   i2c_device_probe+0x814/0xbf0\n\nIt's technically possible to create a client after i2c_deregister_clients\nhas run. That client will never be unregistered and make\nwait_for_completion hang.\n\nClose the window by removing the new_device attribute at the start of\ni2c_del_adapter(). device_remove_file() will drain any clients left.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -52360,7 +52360,7 @@
                 "cve_id": "CVE-2026-90063",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio-net: Ensure that TCP packets don't overflow gso_segs\n\nThe user can specify any gso_size in a packet crafted with an AF_PACKET\nPACKET_VNET_HDR socket, even smaller than TCP_MIN_GSO_SIZE = 8. At the\nsame time, GSO_MAX_SIZE = 8 * GSO_MAX_SEGS = 8 * 65535. When the user\ncrafts a packet with gso_size < 8, there is a risk for partial GSO to\noverflow the 16-bit gso_segs field when dividing the SKB length by\ngso_size.\n\nAdjust gso_size of TCP packets to be at least TCP_MIN_GSO_SIZE = 8. Keep\ngso_size of UDP GSO packets, as gso_size=1 is valid and explicitly\ntested at tools/testing/selftests/net/tun.c:649.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -52810,7 +52810,7 @@
                 "cve_id": "CVE-2026-90218",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/cma: Fix WARNING in res_to_rt\n\nsyzbot reported a WARN_ON(!res->dev) in res_to_rt() triggered via\naddr_handler() during asynchronous address resolution:\n\n\"\nWARNING: drivers/infiniband/core/restrack.c:138 at res_to_rt+0x1c4/0x230\nCPU#1: kworker/u8:4/59\nModules linked in:\nCPU: 1 UID: 0 PID: 59 Comm: kworker/u8:4 Not tainted syzkaller #0 PREEMPT(full)\nHardware name: Google Compute Engine, BIOS Google 07/24/2026\nWorkqueue: ib_addr process_one_req\nRIP: 0010:res_to_rt+0x1c4/0x230 drivers/infiniband/core/restrack.c:138\nRSP: 0018:ffffc9000201f850 EFLAGS: 00010293\nRAX: ffffffff88d00ce5 RBX: ffff88807f0fd4f8 RCX: ffff88801e6e0000\nRDX: 0000000000000000 RSI: ffffffff8fd996f0 RDI: 0000000000000003\nRBP: 0000000000000000 R08: ffff88801e6e0000 R09: 000000000000000a\nR10: 0000000000000009 R11: 0000000000000000 R12: dffffc0000000000\nR13: 1ffff1100fe1fa9f R14: 0000000000000000 R15: 0000000000000003\nFS:  0000000000000000(0000) GS:ffff888125012000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 00001d559c3d2000 CR3: 0000000077c4c000 CR4: 00000000003526f0\nCall Trace:\n <TASK>\n rdma_restrack_add+0x5a/0x8a0 drivers/infiniband/core/restrack.c:236\n addr_handler+0x41a/0x5a0 drivers/infiniband/core/cma.c:3534\n process_one_req+0x2eb/0x540 drivers/infiniband/core/addr.c:624\n process_one_work kernel/workqueue.c:3375 [inline]\n process_scheduled_works+0xc4e/0x1630 kernel/workqueue.c:3458\n worker_thread+0xa47/0xfb0 kernel/workqueue.c:3539\n kthread+0x388/0x470 kernel/kthread.c:436\n ret_from_fork+0x514/0xb70 arch/x86/kernel/process.c:158\n ret_from_fork_asm+0x1a/0x30 arch/x86/entry/entry_64.S:245\n </TASK>\n\"\n\nIn addr_handler(), cma_acquire_dev_by_src_ip() is called to populate\nid_priv->cma_dev and bind the associated ib_device to id_priv->id.device.\nIf cma_acquire_dev_by_src_ip() returns an error (non-zero status), the ID\nremains unassociated with any RDMA device.\n\nPreviously, rdma_restrack_add(&id_priv->res) was invoked unconditionally\neven when cma_acquire_dev_by_src_ip() failed, passing a resource with a\nNULL dev pointer and triggering the WARN_ON assertion in res_to_rt().\n\nFix this by only adding the resource to restrack when acquiring the device\nsucceeds.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -81923,10 +81923,38 @@
                     }
                 ]
             },
+            "CVE-2026-80900": {
+                "cve_id": "CVE-2026-80900",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nASoC: SDCA: Make UMP message size check more robust\n\nIf message offset was larger than the buffer length the size\ncheck will pass incorrectly. Refactor the check such that it is\nmore robust to invalid sizes.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-80903": {
                 "cve_id": "CVE-2026-80903",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/xe/oa: Fix sync entry leak on OA config emit failure\n\nxe_oa_emit_oa_config() releases the sync entries and the syncs array\nonly on its success path. When it fails before the point of no return\n(fence allocation, config buffer allocation or batch submission), it\nreturns without touching stream->syncs.\n\nThe stream open path handles such failures in the caller, but\nxe_oa_config_locked() propagates the error without any cleanup, so the\nsyncs array and the fence references held by the parsed entries are\nleaked. The next config ioctl overwrites stream->syncs, making the\nmemory unreachable for good.\n\nClean up the parsed syncs when xe_oa_emit_oa_config() fails, matching\nthe cleanup done by the stream open error path.\n\n(cherry picked from commit 8af97b3da2cfce04e6b457c6eb17ed3c1daf912b)",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80907": {
+                "cve_id": "CVE-2026-80907",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: Fix UVD dpb min size calculation for H264\n\nThis should use actual number of references from the decode\nmessage, instead of maximum derived from level.\n\n(cherry picked from commit 64b525edb7e7bdfcdc77883c5e413804e2396856)",
                 "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
@@ -84224,6 +84252,20 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: fix scope of mqd_mgr dereference in pqm_debugfs_mqds\n\nReading /sys/kernel/debug/kfd/mqds while a process holds an active KFD\nqueue triggers a NULL pointer dereference because the for loop that\ncalls mqd_mgr->debugfs_show_mqd() is incorrectly placed outside the\nif (pqn->q) block that initializes mqd_mgr.\n\nThe queue list can contain entries where pqn->q is NULL (kernel queues\nwhere only pqn->kq is valid). In the original code:\n\n  if (pqn->q) {\n      ...\n      mqd_mgr = q->device->dqm->mqd_mgrs[mqd_type];\n      size = mqd_mgr->mqd_stride(...);\n  }\n\n  for (xcc = 0; xcc < num_xccs; xcc++) {  // WRONG: outside if block\n      mqd = q->mqd + size * xcc;\n      r = mqd_mgr->debugfs_show_mqd(m, mqd);\n  }\n\nWhen iterating over a queue node where pqn->q is NULL:\n1. The if (pqn->q) block is skipped\n2. mqd_mgr remains uninitialized (NULL from declaration)\n3. The for loop executes anyway\n4. mqd_mgr->debugfs_show_mqd(m, mqd) dereferences NULL\n\nThe crash manifests as:\n\n  BUG: kernel NULL pointer dereference, address: 0000000000000000\n  #PF: supervisor instruction fetch in kernel mode\n  RIP: 0010:0x0\n  Call Trace:\n   pqm_debugfs_mqds+0x10c/0x1d0 [amdgpu]\n   kfd_debugfs_mqds_by_process+0x9b/0x110 [amdgpu]\n   seq_read_iter+0x132/0x4b0\n   ...\n\nFix by moving the for loop inside the if (pqn->q) block, so mqd_mgr\nand related variables are only used when properly initialized.\n\n(cherry picked from commit 8bfe29d5c798940f797aa24135d2734c3ffce9de)",
                 "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89810": {
+                "cve_id": "CVE-2026-89810",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Fix error path at svm_migrate_copy_to_ram\n\nIf page migration from device to sys ram fails for some reasons driver needs\nrelease and unlock allocated system pages. To do that driver should use page\nphysical address, or pfn, then get struct page*. Current driver uses dma\naddress(for adev) that is not correct with IOMMU enabled, or even in general.\n\nThe patch releases and unlocks allocated system pages based on where migration\nfailed by struct page* of sys ram pages. Also dma_unmap correspodent system\nram pages at error path.",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
