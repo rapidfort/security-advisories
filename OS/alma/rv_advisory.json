@@ -2183,6 +2183,20 @@
                     }
                 ]
             },
+            "CVE-2026-43503": {
+                "cve_id": "CVE-2026-43503",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: propagate shared-frag marker through frag-transfer helpers\n\nTwo frag-transfer helpers (__pskb_copy_fclone() and skb_shift()) fail\nto propagate the SKBFL_SHARED_FRAG bit in skb_shinfo()->flags when\nmoving frags from source to destination.  __pskb_copy_fclone() defers\nthe rest of the shinfo metadata to skb_copy_header() after copying\nfrag descriptors, but that helper only carries over gso_{size,segs,\ntype} and never touches skb_shinfo()->flags; skb_shift() moves frag\ndescriptors directly and leaves flags untouched.  As a result, the\ndestination skb keeps a reference to the same externally-owned or\npage-cache-backed pages while reporting skb_has_shared_frag() as\nfalse.\n\nThe mismatch is harmful in any in-place writer that uses\nskb_has_shared_frag() to decide whether shared pages must be detoured\nthrough skb_cow_data().  ESP input is one such writer (esp4.c,\nesp6.c), and a single nft 'dup to <local>' rule -- or any other\nnf_dup_ipv4() / xt_TEE caller -- is enough to land a pskb_copy()'d\nskb in esp_input() with the marker stripped, letting an unprivileged\nuser write into the page cache of a root-owned read-only file via\nauthencesn-ESN stray writes.\n\nSet SKBFL_SHARED_FRAG on the destination whenever frag descriptors\nwere actually moved from the source.  skb_copy() and skb_copy_expand()\nshare skb_copy_header() too but linearize all paged data into freshly\nallocated head storage and emerge with nr_frags == 0, so\nskb_has_shared_frag() returns false on its own; they need no change.\n\nThe same omission exists in skb_gro_receive() and skb_gro_receive_list().\nThe former moves the incoming skb's frag descriptors into the\naccumulator's last sub-skb via two paths (a direct frag-move loop and\nthe head_frag + memcpy path); the latter chains the incoming skb whole\nonto p's frag_list.  Downstream skb_segment() reads only\nskb_shinfo(p)->flags, and skb_segment_list() reuses each sub-skb's\nshinfo as the nskb -- both p and lp must carry the marker.\n\nThe same omission also exists in tcp_clone_payload(), which builds an\nMTU probe skb by moving frag descriptors from skbs on sk_write_queue\ninto a freshly allocated nskb.  The helper falls into the same family\nand warrants the same fix for consistency; no TCP TX-side in-place\nwriter is currently known to reach a user page through this gap, but\na future consumer depending on the marker would regress silently.\n\nThe same omission exists in skb_segment(): the per-iteration flag\nmerge takes only head_skb's flag, and the inner switch that rebinds\nfrag_skb to list_skb on head_skb-frags exhaustion does not fold the\nnew frag_skb's flag into nskb.  Fold frag_skb's flag at both sites\nso segments drawing frags from frag_list members carry the marker.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.16.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-45856": {
                 "cve_id": "CVE-2026-45856",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7150,6 +7164,20 @@
                     }
                 ]
             },
+            "CVE-2026-72123": {
+                "cve_id": "CVE-2026-72123",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: bcm: defer rx_op deallocation to workqueue to fix thrtimer UAF\n\nCommit f1b4e32aca08 (\"can: bcm: use call_rcu() instead of costly\nsynchronize_rcu()\") replaced synchronize_rcu() in bcm_delete_rx_op()\nwith call_rcu() and introduced the RX_NO_AUTOTIMER flag.\n\nHowever, this flag check was omitted for thrtimer in the packet rx\nfast-path. During BCM RX operation teardown, a concurrent RCU reader\n(bcm_rx_handler) can race and re-arm thrtimer via\nbcm_rx_update_and_send() after call_rcu() has been scheduled.  Once\nthe RCU grace period elapses, bcm_op is freed.  The subsequently\nfiring thrtimer then dereferences the deallocated op, causing a UAF.\n\nAdding flag checks to the rx fast-path (bcm_rx_update_and_send) does not\nfully close the TOCTOU race and introduces latency for every CAN frame.\nConversely, calling hrtimer_cancel() directly inside the RCU callback\n(softirq context) is fatal as hrtimer_cancel() can sleep, triggering\na \"scheduling while atomic\" panic.\n\nResolve this by deferring the timer cancellation and memory free to a\ndedicated unbound workqueue (bcm_wq).  The RCU callback now queues a\nwork item to bcm_wq, which safely cancels both timers and deallocates\nmemory in sleepable process context.  A dedicated workqueue is used to\nprevent system-wide WQ saturation and is cleanly flushed/destroyed\non module unload to avoid rmmod page faults.\n\nSince the deferred work can now outlive the calling context by an\nunbounded amount, also take a reference on op->sk when it is assigned\nand drop it only once the deferred work has cancelled both timers, so a\nsocket can no longer be freed out from under a still-armed timer whose\ncallback (bcm_send_to_user()) dereferences op->sk.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.37.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-72129": {
                 "cve_id": "CVE-2026-72129",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7433,6 +7461,20 @@
                     {
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.66.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-74580": {
+                "cve_id": "CVE-2026-74580",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost: reset the vring metadata cache on vring reconfiguration\n\nvq->meta_iotlb[] caches the vhost_iotlb_map that backs each vring\nmetadata region, and iotlb_access_ok() returns early on a cache hit,\ntaking the hit as proof that the region has already been validated:\n\n\tif (vhost_vq_meta_fetch(vq, addr, len, type))\n\t\treturn true;\n\nThe cache is reset on VHOST_IOTLB_UPDATE and VHOST_IOTLB_INVALIDATE, on\ndevice IOTLB (re)initialisation and on vq reset, but not when\nVHOST_SET_VRING_ADDR replaces vq->desc, vq->avail and vq->used, nor when\nVHOST_SET_VRING_NUM changes the region sizes.\n\nWith a device IOTLB attached both ioctls are accepted while the vq is\nlive, and neither validates the addresses at ioctl time: vq_access_ok()\nand vq_log_used_access_ok() return true early because the addresses are\nGIOVAs, deferring validation to prefetch time.  Once the cache has been\npopulated that deferred validation no longer runs -- vq_meta_prefetch()\nhits the stale entry and returns true -- and vhost_vq_meta_fetch() keeps\ntranslating through the old mapping as\n\n\tmap->addr + addr - map->start\n\nfor an address the mapping no longer covers.  vhost_copy_to_user() and\nvhost_copy_from_user() consume the result with __copy_to_user() and\n__copy_from_user(), which do not check it either, so a subsequent used\nring update or descriptor fetch accesses memory outside the region the\nIOTLB actually maps.\n\nReset the metadata cache whenever the vring is reconfigured, so the new\naddresses are pushed back through iotlb_access_ok()'s slow path.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.49.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -99664,6 +99706,71 @@
                         "identifier": "el10"
                     }
                 ]
+            },
+            "CVE-2026-98871": {
+                "cve_id": "CVE-2026-98871",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: ccp - Fix possible deadlock in SEV init failure path\n\n__sev_platform_init_handle_init_ex_path() calls\nrmp_mark_pages_firmware() with locked=false while the parent\nfunction of init_ex_path already acquired the sev_cmd_mutex.\nIn the case of an RMPUPDATE failure for any page after the first, the cleanup\npath would invoke reclaim pages which would result in a deadlock in\nsev_do_cmd.\n\nPass locked=true to honor the lock status of the parent function.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98873": {
+                "cve_id": "CVE-2026-98873",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nf_conntrack_expect: zero at allocation time\n\nThere are occasional LLM hints wrt. leaking uninitialized data to\nuserspace via ctnetlink.  Just zero at allocation time,\nexpectations are not frequently used these days.\n\nIntentionally keeps _init as-is because we could theoretically\nsupport re-init, so add the missing exp->dir there.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98874": {
+                "cve_id": "CVE-2026-98874",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: iwlwifi: mld: don't WARN on WoWLAN suspend w/o netdetect\n\nClearly, from a user perspective, it must be valid to configure\nWoWLAN and then suspend while not connected to a network. Since\nmac80211 doesn't distinguish these cases and simply calls the\ndriver to suspend whenever WoWLAN is configured, the driver has\nto cleanly handle the case where it's called for WoWLAN, it's\nnot connected but there's also no netdetect configured.\n\nRemove the WARN_ON() and keep returning 1 to disconnect and\nthen suspend.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98876": {
+                "cve_id": "CVE-2026-98876",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhost1x: bus: Fix missing ops null check in error teardown\n\nIn host1x_device_init(), the error teardown paths do not check\nclient->ops before dereferencing it, unlike the forward init paths\nwhich correctly guard with 'client->ops &&'. This can result in a\nNULL pointer dereference if client->ops is NULL.\n\nFix by adding the missing client->ops check in both the teardown\nand teardown_late labels.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98877": {
+                "cve_id": "CVE-2026-98877",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nirqchip/gic-v4: Don't advertise VLPIs if no ITS is probed\n\nWhen accidentally setting \u201ckvm-arm.vgic_v4_enable=1\u201d on a system that has\nno MSI controller device tree node and GICv4, it results a panic as\n\u201cgic_domain\u201d is NULL and the kernel attempts to access it.\n\n    Unable to handle kernel NULL pointer dereference at virtual address 0000000000000028\n    Mem abort info:\n      ESR = 0x0000000096000006\n\n    CPU: 1 UID: 0 PID: 295 Comm: lkvm-static Not tainted 7.1.0-rc4-ge3f15ad3970e #5 PREEMPT\n    Hardware name: linux,dummy-virt (DT)\n    pstate: 81402005 (Nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)\n    pc : __irq_domain_instantiate+0x1d4/0x578\n    lr : __irq_domain_instantiate+0x1cc/0x578\n\nSet vLPI support to false at init time if the host has no ITS, so it\npropagates properly to kvm_vgic_global_state.has_gicv4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
             }
         },
         "9": {
@@ -100131,6 +100238,19 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.10.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2025-71117": {
+                "cve_id": "CVE-2025-71117",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nblock: Remove queue freezing from several sysfs store callbacks\n\nFreezing the request queue from inside sysfs store callbacks may cause a\ndeadlock in combination with the dm-multipath driver and the\nqueue_if_no_path option. Additionally, freezing the request queue slows\ndown system boot on systems where sysfs attributes are set synchronously.\n\nFix this by removing the blk_mq_freeze_queue() / blk_mq_unfreeze_queue()\ncalls from the store callbacks that do not strictly need these callbacks.\nAdd the __data_racy annotation to request_queue.rq_timeout to suppress\nKCSAN data race reports about the rq_timeout reads.\n\nThis patch may cause a small delay in applying the new settings.\n\nFor all the attributes affected by this patch, I/O will complete\ncorrectly whether the old or the new value of the attribute is used.\n\nThis patch affects the following sysfs attributes:\n* io_poll_delay\n* io_timeout\n* nomerges\n* read_ahead_kb\n* rq_affinity\n\nHere is an example of a deadlock triggered by running test srp/002\nif this patch is not applied:\n\ntask:multipathd\nCall Trace:\n <TASK>\n __schedule+0x8c1/0x1bf0\n schedule+0xdd/0x270\n schedule_preempt_disabled+0x1c/0x30\n __mutex_lock+0xb89/0x1650\n mutex_lock_nested+0x1f/0x30\n dm_table_set_restrictions+0x823/0xdf0\n __bind+0x166/0x590\n dm_swap_table+0x2a7/0x490\n do_resume+0x1b1/0x610\n dev_suspend+0x55/0x1a0\n ctl_ioctl+0x3a5/0x7e0\n dm_ctl_ioctl+0x12/0x20\n __x64_sys_ioctl+0x127/0x1a0\n x64_sys_call+0xe2b/0x17d0\n do_syscall_64+0x96/0x3a0\n entry_SYSCALL_64_after_hwframe+0x4b/0x53\n </TASK>\ntask:(udev-worker)\nCall Trace:\n <TASK>\n __schedule+0x8c1/0x1bf0\n schedule+0xdd/0x270\n blk_mq_freeze_queue_wait+0xf2/0x140\n blk_mq_freeze_queue_nomemsave+0x23/0x30\n queue_ra_store+0x14e/0x290\n queue_attr_store+0x23e/0x2c0\n sysfs_kf_write+0xde/0x140\n kernfs_fop_write_iter+0x3b2/0x630\n vfs_write+0x4fd/0x1390\n ksys_write+0xfd/0x230\n __x64_sys_write+0x76/0xc0\n x64_sys_call+0x276/0x17d0\n do_syscall_64+0x96/0x3a0\n entry_SYSCALL_64_after_hwframe+0x4b/0x53\n </TASK>",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el9"
                     }
                 ]
@@ -101596,6 +101716,20 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.15.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-43503": {
+                "cve_id": "CVE-2026-43503",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: propagate shared-frag marker through frag-transfer helpers\n\nTwo frag-transfer helpers (__pskb_copy_fclone() and skb_shift()) fail\nto propagate the SKBFL_SHARED_FRAG bit in skb_shinfo()->flags when\nmoving frags from source to destination.  __pskb_copy_fclone() defers\nthe rest of the shinfo metadata to skb_copy_header() after copying\nfrag descriptors, but that helper only carries over gso_{size,segs,\ntype} and never touches skb_shinfo()->flags; skb_shift() moves frag\ndescriptors directly and leaves flags untouched.  As a result, the\ndestination skb keeps a reference to the same externally-owned or\npage-cache-backed pages while reporting skb_has_shared_frag() as\nfalse.\n\nThe mismatch is harmful in any in-place writer that uses\nskb_has_shared_frag() to decide whether shared pages must be detoured\nthrough skb_cow_data().  ESP input is one such writer (esp4.c,\nesp6.c), and a single nft 'dup to <local>' rule -- or any other\nnf_dup_ipv4() / xt_TEE caller -- is enough to land a pskb_copy()'d\nskb in esp_input() with the marker stripped, letting an unprivileged\nuser write into the page cache of a root-owned read-only file via\nauthencesn-ESN stray writes.\n\nSet SKBFL_SHARED_FRAG on the destination whenever frag descriptors\nwere actually moved from the source.  skb_copy() and skb_copy_expand()\nshare skb_copy_header() too but linearize all paged data into freshly\nallocated head storage and emerge with nr_frags == 0, so\nskb_has_shared_frag() returns false on its own; they need no change.\n\nThe same omission exists in skb_gro_receive() and skb_gro_receive_list().\nThe former moves the incoming skb's frag descriptors into the\naccumulator's last sub-skb via two paths (a direct frag-move loop and\nthe head_frag + memcpy path); the latter chains the incoming skb whole\nonto p's frag_list.  Downstream skb_segment() reads only\nskb_shinfo(p)->flags, and skb_segment_list() reuses each sub-skb's\nshinfo as the nskb -- both p and lp must carry the marker.\n\nThe same omission also exists in tcp_clone_payload(), which builds an\nMTU probe skb by moving frag descriptors from skbs on sk_write_queue\ninto a freshly allocated nskb.  The helper falls into the same family\nand warrants the same fix for consistency; no TCP TX-side in-place\nwriter is currently known to reach a user page through this gap, but\na future consumer depending on the marker would regress silently.\n\nThe same omission exists in skb_segment(): the per-iteration flag\nmerge takes only head_skb's flag, and the inner switch that rebinds\nfrag_skb to list_skb on head_skb-frags exhaustion does not fold the\nnew frag_skb's flag into nskb.  Fold frag_skb's flag at both sites\nso segments drawing frags from frag_list members carry the marker.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-687.10.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -106500,6 +106634,20 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.49.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-72123": {
+                "cve_id": "CVE-2026-72123",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: bcm: defer rx_op deallocation to workqueue to fix thrtimer UAF\n\nCommit f1b4e32aca08 (\"can: bcm: use call_rcu() instead of costly\nsynchronize_rcu()\") replaced synchronize_rcu() in bcm_delete_rx_op()\nwith call_rcu() and introduced the RX_NO_AUTOTIMER flag.\n\nHowever, this flag check was omitted for thrtimer in the packet rx\nfast-path. During BCM RX operation teardown, a concurrent RCU reader\n(bcm_rx_handler) can race and re-arm thrtimer via\nbcm_rx_update_and_send() after call_rcu() has been scheduled.  Once\nthe RCU grace period elapses, bcm_op is freed.  The subsequently\nfiring thrtimer then dereferences the deallocated op, causing a UAF.\n\nAdding flag checks to the rx fast-path (bcm_rx_update_and_send) does not\nfully close the TOCTOU race and introduces latency for every CAN frame.\nConversely, calling hrtimer_cancel() directly inside the RCU callback\n(softirq context) is fatal as hrtimer_cancel() can sleep, triggering\na \"scheduling while atomic\" panic.\n\nResolve this by deferring the timer cancellation and memory free to a\ndedicated unbound workqueue (bcm_wq).  The RCU callback now queues a\nwork item to bcm_wq, which safely cancels both timers and deallocates\nmemory in sleepable process context.  A dedicated workqueue is used to\nprevent system-wide WQ saturation and is cleanly flushed/destroyed\non module unload to avoid rmmod page faults.\n\nSince the deferred work can now outlive the calling context by an\nunbounded amount, also take a reference on op->sk when it is assigned\nand drop it only once the deferred work has cancelled both timers, so a\nsocket can no longer be freed out from under a still-armed timer whose\ncallback (bcm_send_to_user()) dereferences op->sk.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-687.29.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -211392,19 +211540,6 @@
                     }
                 ]
             },
-            "CVE-2025-71117": {
-                "cve_id": "CVE-2025-71117",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nblock: Remove queue freezing from several sysfs store callbacks\n\nFreezing the request queue from inside sysfs store callbacks may cause a\ndeadlock in combination with the dm-multipath driver and the\nqueue_if_no_path option. Additionally, freezing the request queue slows\ndown system boot on systems where sysfs attributes are set synchronously.\n\nFix this by removing the blk_mq_freeze_queue() / blk_mq_unfreeze_queue()\ncalls from the store callbacks that do not strictly need these callbacks.\nAdd the __data_racy annotation to request_queue.rq_timeout to suppress\nKCSAN data race reports about the rq_timeout reads.\n\nThis patch may cause a small delay in applying the new settings.\n\nFor all the attributes affected by this patch, I/O will complete\ncorrectly whether the old or the new value of the attribute is used.\n\nThis patch affects the following sysfs attributes:\n* io_poll_delay\n* io_timeout\n* nomerges\n* read_ahead_kb\n* rq_affinity\n\nHere is an example of a deadlock triggered by running test srp/002\nif this patch is not applied:\n\ntask:multipathd\nCall Trace:\n <TASK>\n __schedule+0x8c1/0x1bf0\n schedule+0xdd/0x270\n schedule_preempt_disabled+0x1c/0x30\n __mutex_lock+0xb89/0x1650\n mutex_lock_nested+0x1f/0x30\n dm_table_set_restrictions+0x823/0xdf0\n __bind+0x166/0x590\n dm_swap_table+0x2a7/0x490\n do_resume+0x1b1/0x610\n dev_suspend+0x55/0x1a0\n ctl_ioctl+0x3a5/0x7e0\n dm_ctl_ioctl+0x12/0x20\n __x64_sys_ioctl+0x127/0x1a0\n x64_sys_call+0xe2b/0x17d0\n do_syscall_64+0x96/0x3a0\n entry_SYSCALL_64_after_hwframe+0x4b/0x53\n </TASK>\ntask:(udev-worker)\nCall Trace:\n <TASK>\n __schedule+0x8c1/0x1bf0\n schedule+0xdd/0x270\n blk_mq_freeze_queue_wait+0xf2/0x140\n blk_mq_freeze_queue_nomemsave+0x23/0x30\n queue_ra_store+0x14e/0x290\n queue_attr_store+0x23e/0x2c0\n sysfs_kf_write+0xde/0x140\n kernfs_fop_write_iter+0x3b2/0x630\n vfs_write+0x4fd/0x1390\n ksys_write+0xfd/0x230\n __x64_sys_write+0x76/0xc0\n x64_sys_call+0x276/0x17d0\n do_syscall_64+0x96/0x3a0\n entry_SYSCALL_64_after_hwframe+0x4b/0x53\n </TASK>",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2025-71131": {
                 "cve_id": "CVE-2025-71131",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -211626,20 +211761,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-43503": {
-                "cve_id": "CVE-2026-43503",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: propagate shared-frag marker through frag-transfer helpers\n\nTwo frag-transfer helpers (__pskb_copy_fclone() and skb_shift()) fail\nto propagate the SKBFL_SHARED_FRAG bit in skb_shinfo()->flags when\nmoving frags from source to destination.  __pskb_copy_fclone() defers\nthe rest of the shinfo metadata to skb_copy_header() after copying\nfrag descriptors, but that helper only carries over gso_{size,segs,\ntype} and never touches skb_shinfo()->flags; skb_shift() moves frag\ndescriptors directly and leaves flags untouched.  As a result, the\ndestination skb keeps a reference to the same externally-owned or\npage-cache-backed pages while reporting skb_has_shared_frag() as\nfalse.\n\nThe mismatch is harmful in any in-place writer that uses\nskb_has_shared_frag() to decide whether shared pages must be detoured\nthrough skb_cow_data().  ESP input is one such writer (esp4.c,\nesp6.c), and a single nft 'dup to <local>' rule -- or any other\nnf_dup_ipv4() / xt_TEE caller -- is enough to land a pskb_copy()'d\nskb in esp_input() with the marker stripped, letting an unprivileged\nuser write into the page cache of a root-owned read-only file via\nauthencesn-ESN stray writes.\n\nSet SKBFL_SHARED_FRAG on the destination whenever frag descriptors\nwere actually moved from the source.  skb_copy() and skb_copy_expand()\nshare skb_copy_header() too but linearize all paged data into freshly\nallocated head storage and emerge with nr_frags == 0, so\nskb_has_shared_frag() returns false on its own; they need no change.\n\nThe same omission exists in skb_gro_receive() and skb_gro_receive_list().\nThe former moves the incoming skb's frag descriptors into the\naccumulator's last sub-skb via two paths (a direct frag-move loop and\nthe head_frag + memcpy path); the latter chains the incoming skb whole\nonto p's frag_list.  Downstream skb_segment() reads only\nskb_shinfo(p)->flags, and skb_segment_list() reuses each sub-skb's\nshinfo as the nskb -- both p and lp must carry the marker.\n\nThe same omission also exists in tcp_clone_payload(), which builds an\nMTU probe skb by moving frag descriptors from skbs on sk_write_queue\ninto a freshly allocated nskb.  The helper falls into the same family\nand warrants the same fix for consistency; no TCP TX-side in-place\nwriter is currently known to reach a user page through this gap, but\na future consumer depending on the marker would regress silently.\n\nThe same omission exists in skb_segment(): the per-iteration flag\nmerge takes only head_skb's flag, and the inner switch that rebinds\nfrag_skb to list_skb on head_skb-frags exhaustion does not fold the\nnew frag_skb's flag into nskb.  Fold frag_skb's flag at both sites\nso segments drawing frags from frag_list members carry the marker.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.10.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -212439,20 +212560,6 @@
                     }
                 ]
             },
-            "CVE-2026-72123": {
-                "cve_id": "CVE-2026-72123",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncan: bcm: defer rx_op deallocation to workqueue to fix thrtimer UAF\n\nCommit f1b4e32aca08 (\"can: bcm: use call_rcu() instead of costly\nsynchronize_rcu()\") replaced synchronize_rcu() in bcm_delete_rx_op()\nwith call_rcu() and introduced the RX_NO_AUTOTIMER flag.\n\nHowever, this flag check was omitted for thrtimer in the packet rx\nfast-path. During BCM RX operation teardown, a concurrent RCU reader\n(bcm_rx_handler) can race and re-arm thrtimer via\nbcm_rx_update_and_send() after call_rcu() has been scheduled.  Once\nthe RCU grace period elapses, bcm_op is freed.  The subsequently\nfiring thrtimer then dereferences the deallocated op, causing a UAF.\n\nAdding flag checks to the rx fast-path (bcm_rx_update_and_send) does not\nfully close the TOCTOU race and introduces latency for every CAN frame.\nConversely, calling hrtimer_cancel() directly inside the RCU callback\n(softirq context) is fatal as hrtimer_cancel() can sleep, triggering\na \"scheduling while atomic\" panic.\n\nResolve this by deferring the timer cancellation and memory free to a\ndedicated unbound workqueue (bcm_wq).  The RCU callback now queues a\nwork item to bcm_wq, which safely cancels both timers and deallocates\nmemory in sleepable process context.  A dedicated workqueue is used to\nprevent system-wide WQ saturation and is cleanly flushed/destroyed\non module unload to avoid rmmod page faults.\n\nSince the deferred work can now outlive the calling context by an\nunbounded amount, also take a reference on op->sk when it is assigned\nand drop it only once the deferred work has cancelled both timers, so a\nsocket can no longer be freed out from under a still-armed timer whose\ncallback (bcm_send_to_user()) dereferences op->sk.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.29.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-72165": {
                 "cve_id": "CVE-2026-72165",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -213059,6 +213166,71 @@
                 "cve_id": "CVE-2026-98597",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: usb: sr9700: include receive overhead in the length check\n\nThe receive fixup subtracts the Ethernet CRC from the reported packet\nlength, but compares that payload length against the whole remaining\nreceive buffer. The following copy starts after the three-byte header,\nand the cursor advance consumes both that header and the four-byte CRC.\n\nRequire the payload to fit after SR_RX_OVERHEAD before copying it or\nadvancing to the next packet. The loop already ensures that the\nremaining buffer is larger than the overhead, so the subtraction is\nsafe.\n\nThe issue was found by our static-analysis tool.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98871": {
+                "cve_id": "CVE-2026-98871",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncrypto: ccp - Fix possible deadlock in SEV init failure path\n\n__sev_platform_init_handle_init_ex_path() calls\nrmp_mark_pages_firmware() with locked=false while the parent\nfunction of init_ex_path already acquired the sev_cmd_mutex.\nIn the case of an RMPUPDATE failure for any page after the first, the cleanup\npath would invoke reclaim pages which would result in a deadlock in\nsev_do_cmd.\n\nPass locked=true to honor the lock status of the parent function.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98873": {
+                "cve_id": "CVE-2026-98873",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nf_conntrack_expect: zero at allocation time\n\nThere are occasional LLM hints wrt. leaking uninitialized data to\nuserspace via ctnetlink.  Just zero at allocation time,\nexpectations are not frequently used these days.\n\nIntentionally keeps _init as-is because we could theoretically\nsupport re-init, so add the missing exp->dir there.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98874": {
+                "cve_id": "CVE-2026-98874",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: iwlwifi: mld: don't WARN on WoWLAN suspend w/o netdetect\n\nClearly, from a user perspective, it must be valid to configure\nWoWLAN and then suspend while not connected to a network. Since\nmac80211 doesn't distinguish these cases and simply calls the\ndriver to suspend whenever WoWLAN is configured, the driver has\nto cleanly handle the case where it's called for WoWLAN, it's\nnot connected but there's also no netdetect configured.\n\nRemove the WARN_ON() and keep returning 1 to disconnect and\nthen suspend.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98876": {
+                "cve_id": "CVE-2026-98876",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhost1x: bus: Fix missing ops null check in error teardown\n\nIn host1x_device_init(), the error teardown paths do not check\nclient->ops before dereferencing it, unlike the forward init paths\nwhich correctly guard with 'client->ops &&'. This can result in a\nNULL pointer dereference if client->ops is NULL.\n\nFix by adding the missing client->ops check in both the teardown\nand teardown_late labels.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98877": {
+                "cve_id": "CVE-2026-98877",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nirqchip/gic-v4: Don't advertise VLPIs if no ITS is probed\n\nWhen accidentally setting \u201ckvm-arm.vgic_v4_enable=1\u201d on a system that has\nno MSI controller device tree node and GICv4, it results a panic as\n\u201cgic_domain\u201d is NULL and the kernel attempts to access it.\n\n    Unable to handle kernel NULL pointer dereference at virtual address 0000000000000028\n    Mem abort info:\n      ESR = 0x0000000096000006\n\n    CPU: 1 UID: 0 PID: 295 Comm: lkvm-static Not tainted 7.1.0-rc4-ge3f15ad3970e #5 PREEMPT\n    Hardware name: linux,dummy-virt (DT)\n    pstate: 81402005 (Nzcv daif +PAN -UAO -TCO +DIT -SSBS BTYPE=--)\n    pc : __irq_domain_instantiate+0x1d4/0x578\n    lr : __irq_domain_instantiate+0x1cc/0x578\n\nSet vLPI support to false at init time if the host has no ITS, so it\npropagates properly to kvm_vgic_global_state.has_gicv4.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
