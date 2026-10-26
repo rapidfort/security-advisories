@@ -57397,6 +57397,19 @@
                     }
                 ]
             },
+            "CVE-2026-68476": {
+                "cve_id": "CVE-2026-68476",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipvs: reload ip header after head reallocation\n\n__ip_vs_get_out_rt() calls skb_ensure_writable() which may\nreallocate skb->head.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-68477": {
                 "cve_id": "CVE-2026-68477",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -111336,19 +111349,6 @@
                     }
                 ]
             },
-            "CVE-2026-53236": {
-                "cve_id": "CVE-2026-53236",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-53238": {
                 "cve_id": "CVE-2026-53238",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -111744,19 +111744,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Add upper bound check for num_of_nodes\n\ndrm/amdkfd: Add upper bound check for num_of_nodes\nin kfd_ioctl_get_process_apertures_new.\n\n(cherry picked from commit 98ff46a5ea090c14d2cdb4f5b993b05d74f3949f)",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-53388": {
-                "cve_id": "CVE-2026-53388",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: re-lock request before replacing page cache folio\n\nfuse_try_move_folio() unlocks the request on entry but does not\nre-lock it on the success path. This means fuse_chan_abort() can end the\nrequest and free the fuse_io_args (eg fuse_readpages_end()) while the\nsubsequent copy chain logic after fuse_try_move_folio() accesses the\nfuse_io_args, leading to use-after-free issues.\n\nFix this by calling lock_request() before replace_page_cache_folio().\nThis ensures the request is locked on the success path which will\nprevent the fuse_io_args from being freed while the later copying logic\nruns, and also ensures that the ap->folios[i]->mapping is never null\nsince ap->folios[i] will always point to the newfolio after\nreplace_page_cache_folio().",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -113065,19 +113052,6 @@
                     }
                 ]
             },
-            "CVE-2026-64378": {
-                "cve_id": "CVE-2026-64378",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwriteback: fix race between cgroup_writeback_umount() and inode_switch_wbs()\n\nWhen a container exits, the following BUG_ON() is occasionally triggered:\n\n==================================================================\n VFS: Busy inodes after unmount of sdb (ext4)\n ------------[ cut here ]------------\n kernel BUG at fs/super.c:695!\n CPU: 3 PID: 6 Comm: containerd-shim Tainted: G OE K 6.6 #1\n pstate: 63400009 (nZCv daif +PAN -UAO +TCO +DIT -SSBS BTYPE=--)\n pc : generic_shutdown_super+0xf0/0x100\n lr : generic_shutdown_super+0xf0/0x100\n Call trace:\n  generic_shutdown_super+0xf0/0x100\n  kill_block_super+0x20/0x48\n  ext4_kill_sb+0x28/0x60\n  deactivate_locked_super+0x54/0x130\n  deactivate_super+0x84/0xa0\n  cleanup_mnt+0xa4/0x140\n  __cleanup_mnt+0x18/0x28\n  task_work_run+0x78/0xe0\n  do_notify_resume+0x204/0x240\n==================================================================\n\nThe root cause is a race between cgroup_writeback_umount() and\ninode_switch_wbs()/cleanup_offline_cgwb(). There is a window between\ninode_prepare_wbs_switch() returning true and the subsequent\nwb_queue_isw() call. Following is the process that triggers the issue:\n\n      CPU A (umount)           |          CPU B (writeback)\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n                                 inode_switch_wbs/cleanup_offline_cgwb\n                                  atomic_inc(&isw_nr_in_flight)\n                                  inode_prepare_wbs_switch\n                                   -> passes SB_ACTIVE check\n                                   __iget(inode)\n generic_shutdown_super\n  sb->s_flags &= ~SB_ACTIVE\n  cgroup_writeback_umount(sb)\n   smp_mb()\n   atomic_read(&isw_nr_in_flight)\n   rcu_barrier()\n    -> no pending RCU callbacks\n   flush_workqueue(isw_wq)\n    -> nothing queued, returns\n  evict_inodes(sb)\n   -> Inode skipped as isw still holds a ref.\n  sop->put_super(sb)\n   /* destroys percpu counters */\n  -> VFS: Busy inodes after unmount!\n                                  wb_queue_isw()\n                                   queue_work(isw_wq, ...)\n                                  /* later in work function */\n                                  inode_switch_wbs_work_fn\n                                   process_inode_switch_wbs\n                                    iput() -> evict\n                                     percpu_counter_dec() // UAF!\n\nFix this by extending the RCU read-side critical section in\ninode_switch_wbs() and cleanup_offline_cgwb() to cover from\ninode_prepare_wbs_switch() through wb_queue_isw().  Since there is\nno sleep in this window, rcu_read_lock() can be used.  Then add a\nsynchronize_rcu() in cgroup_writeback_umount() before the existing\nrcu_barrier(), so that all in-flight switchers that have passed the\nSB_ACTIVE check have completed queue_work() before flush_workqueue()\nis called.\n\nThe existing rcu_barrier() is intentionally retained so this fix can\nbe backported unchanged to stable kernels (5.10.y, 6.6.y, ...) that\nstill queue switches via queue_rcu_work(). It is a no-op on current\nmainline (since commit e1b849cfa6b6 (\"writeback: Avoid contention on\nwb->list_lock when switching inodes\")) and is removed in a follow-up\npatch.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-64380": {
                 "cve_id": "CVE-2026-64380",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -113962,32 +113936,6 @@
                     }
                 ]
             },
-            "CVE-2026-68136": {
-                "cve_id": "CVE-2026-68136",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-68138": {
-                "cve_id": "CVE-2026-68138",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/sched: serialize qdisc_rtab_list against concurrent get/put\n\nqdisc_get_rtab() and qdisc_put_rtab() mutate the process-global singly\nlinked list qdisc_rtab_list and a plain non-atomic 'int refcnt' with no\nlock. This was only safe because every caller historically held the RTNL\nmutex, which serialized all rate-table lookups, inserts and frees.\n\nThat invariant no longer holds. cls_flower sets\nTCF_PROTO_OPS_DOIT_UNLOCKED, so tc_new_tfilter() keeps rtnl_held == false\nfor it and sets TCA_ACT_FLAGS_NO_RTNL. That flag propagates through\ntcf_exts_validate_ex() -> tcf_action_init() -> tcf_action_init_1() ->\ntcf_police_init(), which calls qdisc_get_rtab()/qdisc_put_rtab() with the\nRTNL mutex NOT held. Two RTM_NEWTFILTER requests on different CPUs, each\nadding a flower filter with a police action carrying the same rate, then\nrace on qdisc_rtab_list and on the non-atomic refcnt, leading to a\nuse-after-free / double-free of the kmalloc-2k struct qdisc_rate_table.\nqdisc_rtab_list is a single global (not per-netns), so the corrupted\nobject is shared system-wide.\n\n  BUG: KASAN: slab-use-after-free in qdisc_put_rtab+0x12f/0x160\n   qdisc_put_rtab+0x12f/0x160\n   tcf_police_init+0xda9/0x1590\n   tcf_action_init_1+0x460/0x6b0\n   tcf_action_init+0x439/0xa40\n   tcf_exts_validate_ex+0x42d/0x550\n   fl_change+0xddd/0x7da0\n   tc_new_tfilter+0xaa7/0x2420\n   rtnetlink_rcv_msg+0x95e/0xe90\n  which belongs to the cache kmalloc-2k of size 2048\n\nProtect qdisc_rtab_list and the refcount with a dedicated spinlock. The\n(sleeping, GFP_KERNEL) allocation in qdisc_get_rtab() is performed before\ntaking the lock; if a concurrent inserter added an identical table in the\nmeantime the freshly allocated one is freed under the lock, so no\nduplicate is leaked. qdisc_put_rtab() now decrements the refcount and\nunlinks under the same lock.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-68141": {
                 "cve_id": "CVE-2026-68141",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -114773,19 +114721,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject redirect helpers without a bpf_net_context\n\nThe bpf_redirect*() helpers and skb_do_redirect() obtain the per-task\nbpf_redirect_info via bpf_net_ctx_get_ri(), which dereferences the\ncurrent->bpf_net_context unconditionally. That context is established\non the paths that run tc BPF such as sch_handle_{ingress,egress}(),\n*except* for the case where {cls,act}_bpf was attached to a proper\nqdisc. A program running from there reaches the NULL deref in two ways:\n\n* It calls bpf_redirect() directly, which dereferences the context at\n  the top of the helper:\n\n     tc qdisc add dev eth0 root handle 1: red limit 1MB min 10KB max 20KB \\\n        avpkt 1000 burst 100 qevent early_drop block 10\n     tc filter add block 10 pref 1 bpf obj redirect.o\n\n* It simply returns TC_ACT_REDIRECT without helper call: tcf_qevent_handle()\n  then dispatches to skb_do_redirect(), which dereferences the context\n\nRather than extending bpf_net_context management into the qdisc path,\nmake the redirect helpers refuse to operate when no context exists, and\nhave tcf_qevent_handle() drop a TC_ACT_REDIRECT verdict instead of\ncalling skb_do_redirect(). Previous behaviour was a crash, so nothing\nregresses by not supporting it.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-68338": {
-                "cve_id": "CVE-2026-68338",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -118109,19 +118044,6 @@
                     }
                 ]
             },
-            "CVE-2026-74515": {
-                "cve_id": "CVE-2026-74515",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: s390: pci: Reject adapter interrupt forwarding if already enabled\n\nThe MPCIFC instruction doesn't allow registering adapter interrupts without\nfirst unregistering. So reject any request to enable interrupt forwarding\nif its already enabled for the zPCI device. This also fixes overwriting and\nthus leaking resources when the ioctl is called multiple times for the same\ndevice.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-74519": {
                 "cve_id": "CVE-2026-74519",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -119383,19 +119305,6 @@
                     }
                 ]
             },
-            "CVE-2026-80586": {
-                "cve_id": "CVE-2026-80586",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmptcp: options: reset DSS fields in case of unexpected size\n\nA remote peer could send a malformed DSS with a wrong size, followed by\nanother DSS or MPC + Data. In this case, the first suboption will be\nignored, but leaving some fields written, which could lead to\ninconsistency or access uninitialized data.\n\nExplicitly reset the fields that could have been modified in case of\nunexpected size.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-80587": {
                 "cve_id": "CVE-2026-80587",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -120116,19 +120025,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: don't livelock in scrub on a circular unlinked list\n\nLOLLM points out that online fsck can livelock if an unlinked inode list\ncontains a loop.  Use a bitmap to detect cycles.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-80824": {
-                "cve_id": "CVE-2026-80824",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: usbfs: fix use-after-free of usb_device in usbdev_release()\n\nusbdev_release() drops its reference to the struct usb_device before\ndraining the list of completed async URBs, but that drain path reads back\nthrough the same object: free_async() calls dec_usb_memory_use_count()\nfor any URB whose buffer came from the usbfs mmap() region, and its first\nstatement is bus_to_hcd(ps->dev->bus).\n\nAfter a disconnect the usbfs reference can be the last one, in which case\nusb_put_dev() frees the device and the subsequent loop reads offset 80 of\nfreed memory and uses the result as a struct usb_hcd *, which\nhcd_buffer_free_pages() then dereferences.\n\nThis is reachable by an unprivileged process that has read/write access to\na /dev/bus/usb node: mmap() the fd, submit one URB with a buffer inside the\nmapping, wait for the device to be unplugged, then munmap() and close().\nIt reproduces on every attempt rather than being a race, because a live\nMAP_SHARED vma holds a reference on the struct file, so usbdev_release()\ncannot run until the last vma is gone and the freeing branch of\ndec_usb_memory_use_count() is always taken.\n\n  BUG: KASAN: slab-use-after-free in dec_usb_memory_use_count+0x3ae/0x410\n  Read of size 8 at addr ffff8880122ee050 by task poc/769\n  CPU: 1 UID: 1000 PID: 769 Comm: poc Tainted: G    B    6.12.94 #3\n\n  Call Trace:\n   dec_usb_memory_use_count+0x3ae/0x410\n   free_async+0x2aa/0x4f0\n   usbdev_release+0x375/0x460\n   __fput+0x3ea/0xb50\n   __x64_sys_close+0x86/0x100\n\n  Allocated by task 11:\n   usb_alloc_dev+0x55/0xd90\n   hub_event+0x2524/0x43d0\n\n  Freed by task 769:\n   kfree+0x121/0x360\n   device_release+0xd2/0x280\n   usb_put_dev+0x23/0x30\n   usbdev_release+0x2d8/0x460\n\nRelease the device reference after the drain loop instead. Nothing between\nthe two points requires it to have been dropped.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -121624,19 +121520,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: clear ce->tgthint in free_tgts()\n\nWhen free_tgts() frees all structures in ce->tlist, ce->tgthint\nis left pointing to one of the freed cache_dfs_tgt structures.\n\nIf ce->tgthint is not reset before it is used later, it results\nin a use-after-free.\n\nSet ce->tgthint to NULL in free_tgts() after the elements are\nfreed to reflect that no elements remain.",
                 "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-89638": {
-                "cve_id": "CVE-2026-89638",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: clear setuid/setgid bit on write with cifsacl/modefromsid/posix extensions\n\nWhen a file has the setuid or setgid bit set and is written to, the VFS\nstrips those bits and issues a setattr with ATTR_KILL_SUID/ATTR_KILL_SGID\ntogether with an ATTR_MODE carrying the already-cleared mode.\n\nBoth cifs_setattr_unix() and cifs_setattr_nounix() unconditionally dropped\nATTR_MODE in that case:\n\n\t/* skip mode change if it's just for clearing setuid/setgid */\n\tif (attrs->ia_valid & (ATTR_KILL_SUID|ATTR_KILL_SGID))\n\t\tattrs->ia_valid &= ~ATTR_MODE;\n\nThis is fine for the default mount, where the mode is only emulated via\nthe DOS read-only attribute and cannot represent the setuid/setgid bits\nanyway.  However, with the \"cifsacl\" or \"modefromsid\" mount options the\nmode is stored on the server through an ACL (id_mode_to_cifs_acl()), with\nthe SMB3.1.1 POSIX extensions the mode is sent to the server directly,\nand with the SMB1 Unix extensions (cifs_setattr_unix) the mode is sent\nvia CIFSSMBUnixSetPathInfo().  In all those cases dropping ATTR_MODE means\nthe cleared mode is never pushed to the server, so the setuid/setgid bit\nsurvives the write.\n\nThis is a security issue: on local filesystems the setuid bit is stripped\nwhen a file is written, but over these cifs.ko mounts the bit persists on\nthe server, potentially allowing an unexpected privilege escalation on\nsubsequent execution.\n\nFix this in two places:\n\n  1. cifs_setattr_nounix(): only take the \"skip mode change\" shortcut\n     when the mode is emulated via the DOS read-only attribute (i.e.\n     neither cifsacl/modefromsid nor the SMB3.1.1 POSIX extensions are\n     in effect), so that the cleared mode is propagated to the server\n     in the ACL / POSIX cases.\n\n  2. cifs_setattr_unix(): this function is only called when Unix\n     extensions are in effect, so the mode is always stored on the\n     server.  Remove the shortcut entirely so that the cleared mode is\n     always pushed.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
