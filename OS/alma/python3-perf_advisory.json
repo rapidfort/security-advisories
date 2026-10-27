@@ -847,6 +847,25 @@
                     }
                 ]
             },
+            "CVE-2024-57974": {
+                "cve_id": "CVE-2024-57974",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nudp: Deal with race between UDP socket address change and rehash\n\nIf a UDP socket changes its local address while it's receiving\ndatagrams, as a result of connect(), there is a period during which\na lookup operation might fail to find it, after the address is changed\nbut before the secondary hash (port and address) and the four-tuple\nhash (local and remote ports and addresses) are updated.\n\nSecondary hash chains were introduced by commit 30fff9231fad (\"udp:\nbind() optimisation\") and, as a result, a rehash operation became\nneeded to make a bound socket reachable again after a connect().\n\nThis operation was introduced by commit 719f835853a9 (\"udp: add\nrehash on connect()\") which isn't however a complete fix: the\nsocket will be found once the rehashing completes, but not while\nit's pending.\n\nThis is noticeable with a socat(1) server in UDP4-LISTEN mode, and a\nclient sending datagrams to it. After the server receives the first\ndatagram (cf. _xioopen_ipdgram_listen()), it issues a connect() to\nthe address of the sender, in order to set up a directed flow.\n\nNow, if the client, running on a different CPU thread, happens to\nsend a (subsequent) datagram while the server's socket changes its\naddress, but is not rehashed yet, this will result in a failed\nlookup and a port unreachable error delivered to the client, as\napparent from the following reproducer:\n\n  LEN=$(($(cat /proc/sys/net/core/wmem_default) / 4))\n  dd if=/dev/urandom bs=1 count=${LEN} of=tmp.in\n\n  while :; do\n  \ttaskset -c 1 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.1 || sleep 1\n  \ttaskset -c 2 socat OPEN:tmp.in UDP4:localhost:1337,shut-null\n  \twait\n  done\n\nwhere the client will eventually get ECONNREFUSED on a write()\n(typically the second or third one of a given iteration):\n\n  2024/11/13 21:28:23 socat[46901] E write(6, 0x556db2e3c000, 8192): Connection refused\n\nThis issue was first observed as a seldom failure in Podman's tests\nchecking UDP functionality while using pasta(1) to connect the\ncontainer's network namespace, which leads us to a reproducer with\nthe lookup error resulting in an ICMP packet on a tap device:\n\n  LOCAL_ADDR=\"$(ip -j -4 addr show|jq -rM '.[] | .addr_info[0] | select(.scope == \"global\").local')\"\n\n  while :; do\n  \t./pasta --config-net -p pasta.pcap -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.2 || sleep 1\n  \tsocat OPEN:tmp.in UDP4:${LOCAL_ADDR}:1337,shut-null\n  \twait\n  \tcmp tmp.in tmp.out\n  done\n\nOnce this fails:\n\n  tmp.in tmp.out differ: char 8193, line 29\n\nwe can finally have a look at what's going on:\n\n  $ tshark -r pasta.pcap\n      1   0.000000           :: ? ff02::16     ICMPv6 110 Multicast Listener Report Message v2\n      2   0.168690 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      3   0.168767 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      4   0.168806 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      5   0.168827 c6:47:05:8d:dc:04 ? Broadcast    ARP 42 Who has 88.198.0.161? Tell 88.198.0.164\n      6   0.168851 9a:55:9a:55:9a:55 ? c6:47:05:8d:dc:04 ARP 42 88.198.0.161 is at 9a:55:9a:55:9a:55\n      7   0.168875 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      8   0.168896 88.198.0.164 ? 88.198.0.161 ICMP 590 Destination unreachable (Port unreachable)\n      9   0.168926 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     10   0.168959 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     11   0.168989 88.198.0.161 ? 88.198.0.164 UDP 4138 60260 ? 1337 Len=4096\n     12   0.169010 88.198.0.161 ? 88.198.0.164 UDP 42 60260 ? 1337 Len=0\n\nOn the third datagram received, the network namespace of the container\ninitiates an ARP lookup to deliver the ICMP message.\n\nIn another variant of this reproducer, starting the client with:\n\n  strace -f pasta --config-net -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,tru\n---truncated---",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2024-57979": {
                 "cve_id": "CVE-2024-57979",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -5257,8 +5276,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -5973,6 +5997,44 @@
                     }
                 ]
             },
+            "CVE-2026-63978": {
+                "cve_id": "CVE-2026-63978",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Drain pending requests at net namespace exit\n\nThe arguments to list_splice_init() in handshake_net_exit() are\nreversed. The call moves the local empty \"requests\" list onto\nhn->hn_requests, leaving the local list empty, so the subsequent\ndrain loop runs zero iterations. Pending handshake requests that\nhad not yet been accepted are not torn down when the net namespace\nis destroyed; each one keeps a reference on a socket file and on\nthe handshake_req allocation.\n\nPass the source and destination in the documented order\n(list_splice_init(list, head) moves list onto head) so the pending\nlist is transferred to the local scratch list and drained through\nhandshake_complete().\n\nFixing the splice direction exposes a list-corruption race. After\nthe splice each req->hr_list still has non-empty link pointers,\nthreading the stack-local scratch list rather than hn_requests.\nA concurrent handshake_req_cancel() -- for example, from sunrpc's\nTLS timeout on a kernel socket whose netns reference was not\ntaken -- finds the request through the rhashtable, calls\nremove_pending(), and sees !list_empty(&req->hr_list).\n__remove_pending_locked() then list_del_init()s an entry off the\nscratch list while the drain iterates, corrupting it. The same\ncall arriving after the drain loop has run list_del() on an\nentry hits LIST_POISON instead.\n\nHave remove_pending() check HANDSHAKE_F_NET_DRAINING under\nhn_lock and report not-found when drain is in progress. The\ndrain has already taken ownership; handshake_complete()'s existing\ntest_and_set on HANDSHAKE_F_REQ_COMPLETED still arbitrates\nbetween drain and cancel for who calls the consumer's hp_done. Use\nlist_del_init() rather than list_del() in the drain so req->hr_list\ndoes not carry LIST_POISON after drain releases the entry.\n\nThe DRAINING guard in remove_pending() makes cancel return false,\nbut cancel still falls through to test_and_set_bit on\nHANDSHAKE_F_REQ_COMPLETED and drops the request's hr_file reference.\nWithout another pin, if that is the last reference, sk_destruct frees\nthe request while it is still linked on the drain loop's local list.\nPin each request's hr_file under hn_lock before releasing the list,\nand drop that drain pin after the loop finishes with the request.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-63979": {
+                "cve_id": "CVE-2026-63979",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: hand off the pinned file reference to accept_doit\n\nhandshake_req_next() removes the request from the per-net\npending list and drops hn_lock before handshake_nl_accept_doit()\nreads req->hr_sk->sk_socket and dereferences sock->file (once in\nFD_PREPARE() and again in get_file()).  In that window a\nconsumer running tls_handshake_cancel() followed by sockfd_put()\n(svc_sock_free) or __fput_sync() (xs_reset_transport) releases\nsock->file.  sock_release() then runs sock_orphan(), zeroing\nsk_socket, and frees the struct socket.  The accept-side code\neither reads NULL through sk_socket or chases freed memory.\n\nThe submit-side sock_hold() does not prevent this.  sk_refcnt\nprotects struct sock, but struct socket and sock->file are\nindependently refcounted via the file descriptor the consumer\nowns.  Pinning sk leaves sock and sock->file unprotected.\n\nRetarget the accept-side dereferences at req->hr_file, which was\npinned at submit time, instead of req->hr_sk->sk_socket->file.\nPinning on its own is not sufficient: a consumer that cancels\nbetween handshake_req_next() returning and accept_doit reaching\nFD_PREPARE() takes the !remove_pending() branch in\nhandshake_req_cancel() and drops hr_file before the accept side\ntakes its own reference.  Hand off an additional file reference\ninside handshake_req_next(), under hn_lock, so the accept side\noperates on a reference that no concurrent handshake_req_cancel()\ncan revoke.  FD_PREPARE() consumes that handed-off reference,\neither by transferring it to the new fd in fd_publish() or by\ndropping it in the cleanup destructor on error; the explicit\nget_file() that previously balanced FD_PREPARE() is therefore\nredundant and goes away.\n\nUpdate handshake_req_cancel_test2 and _test3 to simulate the\nFD_PREPARE() consumption with an fput() so the kunit file-count\nassertions stay balanced.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-63992": {
                 "cve_id": "CVE-2026-63992",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -6545,8 +6607,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -6951,6 +7018,25 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.47.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-64523": {
+                "cve_id": "CVE-2026-64523",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Take a long-lived file reference at submit\n\nhandshake_nl_accept_doit() needs the file pointer backing\nreq->hr_sk->sk_socket to survive the window between\nhandshake_req_next() and the subsequent FD_PREPARE() and get_file().\nThe submit-side sock_hold() does not provide that.  sk_refcnt keeps\nstruct sock alive, but struct socket is owned by sock->file: when\nthe consumer fputs the last file reference, sock_release() tears\nthe socket down regardless of any sock_hold.\n\nAdd an hr_file pointer to struct handshake_req and acquire an\nexplicit reference on sock->file during handshake_req_submit().\nhandshake_complete() and handshake_req_cancel() release the\nreference on the completion-bit-winning path.\n\nThe submit error path must also release the file reference, but\nafter rhashtable insertion a concurrent handshake_req_cancel() can\ndiscover the request and race the error path.  Gate the error-path\ncleanup -- sk_destruct restoration, fput, and request destruction\n-- with test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED), the same\nserialization handshake_complete() and handshake_req_cancel()\nalready use.  When cancel has already claimed ownership, the submit\nerror path returns without touching the request; socket teardown\nhandles final destruction.\n\nThe accept-side dereferences are not yet retargeted; that change\ncomes in the next patch.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -8040,8 +8126,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -8250,6 +8341,25 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.44.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-72242": {
+                "cve_id": "CVE-2026-72242",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: avoid sk_socket dereference in selinux_sctp_bind_connect()\n\nselinux_sctp_bind_connect() dereferences sk->sk_socket to pass a\nstruct socket * to selinux_socket_bind() and\nselinux_socket_connect_helper().  However, when the hook is invoked\nfrom the ASCONF softirq path (sctp_process_asconf), there is no file\nreference guaranteeing that sk->sk_socket is non-NULL.  The setsockopt\ncallers (bindx, connectx, set_primary, sendmsg connect) hold a file\nreference and are not affected.\n\nBoth selinux_socket_bind() and selinux_socket_connect_helper()\nimmediately resolve sock->sk, never using the struct socket * for\nanything else.  Refactor the inner logic into helpers that take a\nstruct sock * directly so that selinux_sctp_bind_connect() never needs\nto touch sk->sk_socket at all.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -8470,8 +8580,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -8839,8 +8954,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -9030,8 +9150,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -9127,8 +9252,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -9282,8 +9412,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -9348,6 +9483,25 @@
                     }
                 ]
             },
+            "CVE-2026-98222": {
+                "cve_id": "CVE-2026-98222",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKEYS: encrypted: fix integer overflow of datablob_len\n\nencrypted_key_alloc() stores datablob_len in a u16. It is computed from\nmultiple string and payload lengths. If the result exceeds U16_MAX, the\nassignment truncates the allocation size. KASAN reports a 32760-byte\nslab-out-of-bounds write when __ekey_init() copies the master key\ndescription into the undersized buffer.\n\nThe total payload length stored in key->datalen is also a u16. Use\ncheck_add_overflow() to reject values that do not fit either destination,\nand use kzalloc_flex() for the flexible-array allocation.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-98260": {
                 "cve_id": "CVE-2026-98260",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -9375,8 +9529,13 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "5.14.0-687.5.1.el9_8",
+                        "fixed": "5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -111193,20 +111352,6 @@
                     }
                 ]
             },
-            "CVE-2024-57974": {
-                "cve_id": "CVE-2024-57974",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nudp: Deal with race between UDP socket address change and rehash\n\nIf a UDP socket changes its local address while it's receiving\ndatagrams, as a result of connect(), there is a period during which\na lookup operation might fail to find it, after the address is changed\nbut before the secondary hash (port and address) and the four-tuple\nhash (local and remote ports and addresses) are updated.\n\nSecondary hash chains were introduced by commit 30fff9231fad (\"udp:\nbind() optimisation\") and, as a result, a rehash operation became\nneeded to make a bound socket reachable again after a connect().\n\nThis operation was introduced by commit 719f835853a9 (\"udp: add\nrehash on connect()\") which isn't however a complete fix: the\nsocket will be found once the rehashing completes, but not while\nit's pending.\n\nThis is noticeable with a socat(1) server in UDP4-LISTEN mode, and a\nclient sending datagrams to it. After the server receives the first\ndatagram (cf. _xioopen_ipdgram_listen()), it issues a connect() to\nthe address of the sender, in order to set up a directed flow.\n\nNow, if the client, running on a different CPU thread, happens to\nsend a (subsequent) datagram while the server's socket changes its\naddress, but is not rehashed yet, this will result in a failed\nlookup and a port unreachable error delivered to the client, as\napparent from the following reproducer:\n\n  LEN=$(($(cat /proc/sys/net/core/wmem_default) / 4))\n  dd if=/dev/urandom bs=1 count=${LEN} of=tmp.in\n\n  while :; do\n  \ttaskset -c 1 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.1 || sleep 1\n  \ttaskset -c 2 socat OPEN:tmp.in UDP4:localhost:1337,shut-null\n  \twait\n  done\n\nwhere the client will eventually get ECONNREFUSED on a write()\n(typically the second or third one of a given iteration):\n\n  2024/11/13 21:28:23 socat[46901] E write(6, 0x556db2e3c000, 8192): Connection refused\n\nThis issue was first observed as a seldom failure in Podman's tests\nchecking UDP functionality while using pasta(1) to connect the\ncontainer's network namespace, which leads us to a reproducer with\nthe lookup error resulting in an ICMP packet on a tap device:\n\n  LOCAL_ADDR=\"$(ip -j -4 addr show|jq -rM '.[] | .addr_info[0] | select(.scope == \"global\").local')\"\n\n  while :; do\n  \t./pasta --config-net -p pasta.pcap -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.2 || sleep 1\n  \tsocat OPEN:tmp.in UDP4:${LOCAL_ADDR}:1337,shut-null\n  \twait\n  \tcmp tmp.in tmp.out\n  done\n\nOnce this fails:\n\n  tmp.in tmp.out differ: char 8193, line 29\n\nwe can finally have a look at what's going on:\n\n  $ tshark -r pasta.pcap\n      1   0.000000           :: ? ff02::16     ICMPv6 110 Multicast Listener Report Message v2\n      2   0.168690 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      3   0.168767 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      4   0.168806 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      5   0.168827 c6:47:05:8d:dc:04 ? Broadcast    ARP 42 Who has 88.198.0.161? Tell 88.198.0.164\n      6   0.168851 9a:55:9a:55:9a:55 ? c6:47:05:8d:dc:04 ARP 42 88.198.0.161 is at 9a:55:9a:55:9a:55\n      7   0.168875 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      8   0.168896 88.198.0.164 ? 88.198.0.161 ICMP 590 Destination unreachable (Port unreachable)\n      9   0.168926 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     10   0.168959 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     11   0.168989 88.198.0.161 ? 88.198.0.164 UDP 4138 60260 ? 1337 Len=4096\n     12   0.169010 88.198.0.161 ? 88.198.0.164 UDP 42 60260 ? 1337 Len=0\n\nOn the third datagram received, the network namespace of the container\ninitiates an ARP lookup to deliver the ICMP message.\n\nIn another variant of this reproducer, starting the client with:\n\n  strace -f pasta --config-net -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,tru\n---truncated---",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2024-57977": {
                 "cve_id": "CVE-2024-57977",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -112509,34 +112654,6 @@
                     }
                 ]
             },
-            "CVE-2026-63978": {
-                "cve_id": "CVE-2026-63978",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Drain pending requests at net namespace exit\n\nThe arguments to list_splice_init() in handshake_net_exit() are\nreversed. The call moves the local empty \"requests\" list onto\nhn->hn_requests, leaving the local list empty, so the subsequent\ndrain loop runs zero iterations. Pending handshake requests that\nhad not yet been accepted are not torn down when the net namespace\nis destroyed; each one keeps a reference on a socket file and on\nthe handshake_req allocation.\n\nPass the source and destination in the documented order\n(list_splice_init(list, head) moves list onto head) so the pending\nlist is transferred to the local scratch list and drained through\nhandshake_complete().\n\nFixing the splice direction exposes a list-corruption race. After\nthe splice each req->hr_list still has non-empty link pointers,\nthreading the stack-local scratch list rather than hn_requests.\nA concurrent handshake_req_cancel() -- for example, from sunrpc's\nTLS timeout on a kernel socket whose netns reference was not\ntaken -- finds the request through the rhashtable, calls\nremove_pending(), and sees !list_empty(&req->hr_list).\n__remove_pending_locked() then list_del_init()s an entry off the\nscratch list while the drain iterates, corrupting it. The same\ncall arriving after the drain loop has run list_del() on an\nentry hits LIST_POISON instead.\n\nHave remove_pending() check HANDSHAKE_F_NET_DRAINING under\nhn_lock and report not-found when drain is in progress. The\ndrain has already taken ownership; handshake_complete()'s existing\ntest_and_set on HANDSHAKE_F_REQ_COMPLETED still arbitrates\nbetween drain and cancel for who calls the consumer's hp_done. Use\nlist_del_init() rather than list_del() in the drain so req->hr_list\ndoes not carry LIST_POISON after drain releases the entry.\n\nThe DRAINING guard in remove_pending() makes cancel return false,\nbut cancel still falls through to test_and_set_bit on\nHANDSHAKE_F_REQ_COMPLETED and drops the request's hr_file reference.\nWithout another pin, if that is the last reference, sk_destruct frees\nthe request while it is still linked on the drain loop's local list.\nPin each request's hr_file under hn_lock before releasing the list,\nand drop that drain pin after the loop finishes with the request.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-63979": {
-                "cve_id": "CVE-2026-63979",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: hand off the pinned file reference to accept_doit\n\nhandshake_req_next() removes the request from the per-net\npending list and drops hn_lock before handshake_nl_accept_doit()\nreads req->hr_sk->sk_socket and dereferences sock->file (once in\nFD_PREPARE() and again in get_file()).  In that window a\nconsumer running tls_handshake_cancel() followed by sockfd_put()\n(svc_sock_free) or __fput_sync() (xs_reset_transport) releases\nsock->file.  sock_release() then runs sock_orphan(), zeroing\nsk_socket, and frees the struct socket.  The accept-side code\neither reads NULL through sk_socket or chases freed memory.\n\nThe submit-side sock_hold() does not prevent this.  sk_refcnt\nprotects struct sock, but struct socket and sock->file are\nindependently refcounted via the file descriptor the consumer\nowns.  Pinning sk leaves sock and sock->file unprotected.\n\nRetarget the accept-side dereferences at req->hr_file, which was\npinned at submit time, instead of req->hr_sk->sk_socket->file.\nPinning on its own is not sufficient: a consumer that cancels\nbetween handshake_req_next() returning and accept_doit reaching\nFD_PREPARE() takes the !remove_pending() branch in\nhandshake_req_cancel() and drops hr_file before the accept side\ntakes its own reference.  Hand off an additional file reference\ninside handshake_req_next(), under hn_lock, so the accept side\noperates on a reference that no concurrent handshake_req_cancel()\ncan revoke.  FD_PREPARE() consumes that handed-off reference,\neither by transferring it to the new fd in fd_publish() or by\ndropping it in the cleanup destructor on error; the explicit\nget_file() that previously balanced FD_PREPARE() is therefore\nredundant and goes away.\n\nUpdate handshake_req_cancel_test2 and _test3 to simulate the\nFD_PREPARE() consumption with an fput() so the kunit file-count\nassertions stay balanced.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-63993": {
                 "cve_id": "CVE-2026-63993",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -112599,20 +112716,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-64523": {
-                "cve_id": "CVE-2026-64523",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Take a long-lived file reference at submit\n\nhandshake_nl_accept_doit() needs the file pointer backing\nreq->hr_sk->sk_socket to survive the window between\nhandshake_req_next() and the subsequent FD_PREPARE() and get_file().\nThe submit-side sock_hold() does not provide that.  sk_refcnt keeps\nstruct sock alive, but struct socket is owned by sock->file: when\nthe consumer fputs the last file reference, sock_release() tears\nthe socket down regardless of any sock_hold.\n\nAdd an hr_file pointer to struct handshake_req and acquire an\nexplicit reference on sock->file during handshake_req_submit().\nhandshake_complete() and handshake_req_cancel() release the\nreference on the completion-bit-winning path.\n\nThe submit error path must also release the file reference, but\nafter rhashtable insertion a concurrent handshake_req_cancel() can\ndiscover the request and race the error path.  Gate the error-path\ncleanup -- sk_destruct restoration, fput, and request destruction\n-- with test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED), the same\nserialization handshake_complete() and handshake_req_cancel()\nalready use.  When cancel has already claimed ownership, the submit\nerror path returns without touching the request; socket teardown\nhandles final destruction.\n\nThe accept-side dereferences are not yet retargeted; that change\ncomes in the next patch.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -112912,20 +113015,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-72242": {
-                "cve_id": "CVE-2026-72242",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: avoid sk_socket dereference in selinux_sctp_bind_connect()\n\nselinux_sctp_bind_connect() dereferences sk->sk_socket to pass a\nstruct socket * to selinux_socket_bind() and\nselinux_socket_connect_helper().  However, when the hook is invoked\nfrom the ASCONF softirq path (sctp_process_asconf), there is no file\nreference guaranteeing that sk->sk_socket is non-NULL.  The setsockopt\ncallers (bindx, connectx, set_primary, sendmsg connect) hold a file\nreference and are not affected.\n\nBoth selinux_socket_bind() and selinux_socket_connect_helper()\nimmediately resolve sock->sk, never using the struct socket * for\nanything else.  Refactor the inner logic into helpers that take a\nstruct sock * directly so that selinux_sctp_bind_connect() never needs\nto touch sk->sk_socket at all.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
                         "identifier": "el9"
                     }
                 ]
@@ -113333,20 +113422,6 @@
                     }
                 ]
             },
-            "CVE-2026-98222": {
-                "cve_id": "CVE-2026-98222",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKEYS: encrypted: fix integer overflow of datablob_len\n\nencrypted_key_alloc() stores datablob_len in a u16. It is computed from\nmultiple string and payload lengths. If the result exceeds U16_MAX, the\nassignment truncates the allocation size. KASAN reports a 32760-byte\nslab-out-of-bounds write when __ekey_init() copies the master key\ndescription into the undersized buffer.\n\nThe total payload length stored in key->datalen is also a u16. Use\ncheck_add_overflow() to reject values that do not fit either destination,\nand use kzalloc_flex() for the flexible-array allocation.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.61.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-98287": {
                 "cve_id": "CVE-2026-98287",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -113544,6 +113619,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nblk-cgroup: Fix UAF in blkcg_unpin_online()\n\nblkcg_unpin_online() walks up the blkcg hierarchy putting the online pin. To\nwalk up, it uses blkcg_parent(blkcg) but it was calling that after\nblkcg_destroy_blkgs(blkcg) which could free the blkcg, leading to the\nfollowing UAF:\n\n  ==================================================================\n  BUG: KASAN: slab-use-after-free in blkcg_unpin_online+0x15a/0x270\n  Read of size 8 at addr ffff8881057678c0 by task kworker/9:1/117\n\n  CPU: 9 UID: 0 PID: 117 Comm: kworker/9:1 Not tainted 6.13.0-rc1-work-00182-gb8f52214c61a-dirty #48\n  Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS unknown 02/02/2022\n  Workqueue: cgwb_release cgwb_release_workfn\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x27/0x80\n   print_report+0x151/0x710\n   kasan_report+0xc0/0x100\n   blkcg_unpin_online+0x15a/0x270\n   cgwb_release_workfn+0x194/0x480\n   process_scheduled_works+0x71b/0xe20\n   worker_thread+0x82a/0xbd0\n   kthread+0x242/0x2c0\n   ret_from_fork+0x33/0x70\n   ret_from_fork_asm+0x1a/0x30\n   </TASK>\n  ...\n  Freed by task 1944:\n   kasan_save_track+0x2b/0x70\n   kasan_save_free_info+0x3c/0x50\n   __kasan_slab_free+0x33/0x50\n   kfree+0x10c/0x330\n   css_free_rwork_fn+0xe6/0xb30\n   process_scheduled_works+0x71b/0xe20\n   worker_thread+0x82a/0xbd0\n   kthread+0x242/0x2c0\n   ret_from_fork+0x33/0x70\n   ret_from_fork_asm+0x1a/0x30\n\nNote that the UAF is not easy to trigger as the free path is indirected\nbehind a couple RCU grace periods and a work item execution. I could only\ntrigger it with artifical msleep() injected in blkcg_unpin_online().\n\nFix it by reading the parent pointer before destroying the blkcg's blkg's.",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2024-57974": {
+                "cve_id": "CVE-2024-57974",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nudp: Deal with race between UDP socket address change and rehash\n\nIf a UDP socket changes its local address while it's receiving\ndatagrams, as a result of connect(), there is a period during which\na lookup operation might fail to find it, after the address is changed\nbut before the secondary hash (port and address) and the four-tuple\nhash (local and remote ports and addresses) are updated.\n\nSecondary hash chains were introduced by commit 30fff9231fad (\"udp:\nbind() optimisation\") and, as a result, a rehash operation became\nneeded to make a bound socket reachable again after a connect().\n\nThis operation was introduced by commit 719f835853a9 (\"udp: add\nrehash on connect()\") which isn't however a complete fix: the\nsocket will be found once the rehashing completes, but not while\nit's pending.\n\nThis is noticeable with a socat(1) server in UDP4-LISTEN mode, and a\nclient sending datagrams to it. After the server receives the first\ndatagram (cf. _xioopen_ipdgram_listen()), it issues a connect() to\nthe address of the sender, in order to set up a directed flow.\n\nNow, if the client, running on a different CPU thread, happens to\nsend a (subsequent) datagram while the server's socket changes its\naddress, but is not rehashed yet, this will result in a failed\nlookup and a port unreachable error delivered to the client, as\napparent from the following reproducer:\n\n  LEN=$(($(cat /proc/sys/net/core/wmem_default) / 4))\n  dd if=/dev/urandom bs=1 count=${LEN} of=tmp.in\n\n  while :; do\n  \ttaskset -c 1 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.1 || sleep 1\n  \ttaskset -c 2 socat OPEN:tmp.in UDP4:localhost:1337,shut-null\n  \twait\n  done\n\nwhere the client will eventually get ECONNREFUSED on a write()\n(typically the second or third one of a given iteration):\n\n  2024/11/13 21:28:23 socat[46901] E write(6, 0x556db2e3c000, 8192): Connection refused\n\nThis issue was first observed as a seldom failure in Podman's tests\nchecking UDP functionality while using pasta(1) to connect the\ncontainer's network namespace, which leads us to a reproducer with\nthe lookup error resulting in an ICMP packet on a tap device:\n\n  LOCAL_ADDR=\"$(ip -j -4 addr show|jq -rM '.[] | .addr_info[0] | select(.scope == \"global\").local')\"\n\n  while :; do\n  \t./pasta --config-net -p pasta.pcap -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.2 || sleep 1\n  \tsocat OPEN:tmp.in UDP4:${LOCAL_ADDR}:1337,shut-null\n  \twait\n  \tcmp tmp.in tmp.out\n  done\n\nOnce this fails:\n\n  tmp.in tmp.out differ: char 8193, line 29\n\nwe can finally have a look at what's going on:\n\n  $ tshark -r pasta.pcap\n      1   0.000000           :: ? ff02::16     ICMPv6 110 Multicast Listener Report Message v2\n      2   0.168690 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      3   0.168767 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      4   0.168806 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      5   0.168827 c6:47:05:8d:dc:04 ? Broadcast    ARP 42 Who has 88.198.0.161? Tell 88.198.0.164\n      6   0.168851 9a:55:9a:55:9a:55 ? c6:47:05:8d:dc:04 ARP 42 88.198.0.161 is at 9a:55:9a:55:9a:55\n      7   0.168875 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      8   0.168896 88.198.0.164 ? 88.198.0.161 ICMP 590 Destination unreachable (Port unreachable)\n      9   0.168926 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     10   0.168959 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     11   0.168989 88.198.0.161 ? 88.198.0.164 UDP 4138 60260 ? 1337 Len=4096\n     12   0.169010 88.198.0.161 ? 88.198.0.164 UDP 42 60260 ? 1337 Len=0\n\nOn the third datagram received, the network namespace of the container\ninitiates an ARP lookup to deliver the ICMP message.\n\nIn another variant of this reproducer, starting the client with:\n\n  strace -f pasta --config-net -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,tru\n---truncated---",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -118841,6 +118929,32 @@
                     }
                 ]
             },
+            "CVE-2026-63978": {
+                "cve_id": "CVE-2026-63978",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Drain pending requests at net namespace exit\n\nThe arguments to list_splice_init() in handshake_net_exit() are\nreversed. The call moves the local empty \"requests\" list onto\nhn->hn_requests, leaving the local list empty, so the subsequent\ndrain loop runs zero iterations. Pending handshake requests that\nhad not yet been accepted are not torn down when the net namespace\nis destroyed; each one keeps a reference on a socket file and on\nthe handshake_req allocation.\n\nPass the source and destination in the documented order\n(list_splice_init(list, head) moves list onto head) so the pending\nlist is transferred to the local scratch list and drained through\nhandshake_complete().\n\nFixing the splice direction exposes a list-corruption race. After\nthe splice each req->hr_list still has non-empty link pointers,\nthreading the stack-local scratch list rather than hn_requests.\nA concurrent handshake_req_cancel() -- for example, from sunrpc's\nTLS timeout on a kernel socket whose netns reference was not\ntaken -- finds the request through the rhashtable, calls\nremove_pending(), and sees !list_empty(&req->hr_list).\n__remove_pending_locked() then list_del_init()s an entry off the\nscratch list while the drain iterates, corrupting it. The same\ncall arriving after the drain loop has run list_del() on an\nentry hits LIST_POISON instead.\n\nHave remove_pending() check HANDSHAKE_F_NET_DRAINING under\nhn_lock and report not-found when drain is in progress. The\ndrain has already taken ownership; handshake_complete()'s existing\ntest_and_set on HANDSHAKE_F_REQ_COMPLETED still arbitrates\nbetween drain and cancel for who calls the consumer's hp_done. Use\nlist_del_init() rather than list_del() in the drain so req->hr_list\ndoes not carry LIST_POISON after drain releases the entry.\n\nThe DRAINING guard in remove_pending() makes cancel return false,\nbut cancel still falls through to test_and_set_bit on\nHANDSHAKE_F_REQ_COMPLETED and drops the request's hr_file reference.\nWithout another pin, if that is the last reference, sk_destruct frees\nthe request while it is still linked on the drain loop's local list.\nPin each request's hr_file under hn_lock before releasing the list,\nand drop that drain pin after the loop finishes with the request.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-63979": {
+                "cve_id": "CVE-2026-63979",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: hand off the pinned file reference to accept_doit\n\nhandshake_req_next() removes the request from the per-net\npending list and drops hn_lock before handshake_nl_accept_doit()\nreads req->hr_sk->sk_socket and dereferences sock->file (once in\nFD_PREPARE() and again in get_file()).  In that window a\nconsumer running tls_handshake_cancel() followed by sockfd_put()\n(svc_sock_free) or __fput_sync() (xs_reset_transport) releases\nsock->file.  sock_release() then runs sock_orphan(), zeroing\nsk_socket, and frees the struct socket.  The accept-side code\neither reads NULL through sk_socket or chases freed memory.\n\nThe submit-side sock_hold() does not prevent this.  sk_refcnt\nprotects struct sock, but struct socket and sock->file are\nindependently refcounted via the file descriptor the consumer\nowns.  Pinning sk leaves sock and sock->file unprotected.\n\nRetarget the accept-side dereferences at req->hr_file, which was\npinned at submit time, instead of req->hr_sk->sk_socket->file.\nPinning on its own is not sufficient: a consumer that cancels\nbetween handshake_req_next() returning and accept_doit reaching\nFD_PREPARE() takes the !remove_pending() branch in\nhandshake_req_cancel() and drops hr_file before the accept side\ntakes its own reference.  Hand off an additional file reference\ninside handshake_req_next(), under hn_lock, so the accept side\noperates on a reference that no concurrent handshake_req_cancel()\ncan revoke.  FD_PREPARE() consumes that handed-off reference,\neither by transferring it to the new fd in fd_publish() or by\ndropping it in the cleanup destructor on error; the explicit\nget_file() that previously balanced FD_PREPARE() is therefore\nredundant and goes away.\n\nUpdate handshake_req_cancel_test2 and _test3 to simulate the\nFD_PREPARE() consumption with an fput() so the kunit file-count\nassertions stay balanced.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-63984": {
                 "cve_id": "CVE-2026-63984",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -119932,6 +120046,19 @@
                     {
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.53.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-64523": {
+                "cve_id": "CVE-2026-64523",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Take a long-lived file reference at submit\n\nhandshake_nl_accept_doit() needs the file pointer backing\nreq->hr_sk->sk_socket to survive the window between\nhandshake_req_next() and the subsequent FD_PREPARE() and get_file().\nThe submit-side sock_hold() does not provide that.  sk_refcnt keeps\nstruct sock alive, but struct socket is owned by sock->file: when\nthe consumer fputs the last file reference, sock_release() tears\nthe socket down regardless of any sock_hold.\n\nAdd an hr_file pointer to struct handshake_req and acquire an\nexplicit reference on sock->file during handshake_req_submit().\nhandshake_complete() and handshake_req_cancel() release the\nreference on the completion-bit-winning path.\n\nThe submit error path must also release the file reference, but\nafter rhashtable insertion a concurrent handshake_req_cancel() can\ndiscover the request and race the error path.  Gate the error-path\ncleanup -- sk_destruct restoration, fput, and request destruction\n-- with test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED), the same\nserialization handshake_complete() and handshake_req_cancel()\nalready use.  When cancel has already claimed ownership, the submit\nerror path returns without touching the request; socket teardown\nhandles final destruction.\n\nThe accept-side dereferences are not yet retargeted; that change\ncomes in the next patch.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el10"
                     }
                 ]
@@ -121219,6 +121346,19 @@
                     {
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.50.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-72242": {
+                "cve_id": "CVE-2026-72242",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: avoid sk_socket dereference in selinux_sctp_bind_connect()\n\nselinux_sctp_bind_connect() dereferences sk->sk_socket to pass a\nstruct socket * to selinux_socket_bind() and\nselinux_socket_connect_helper().  However, when the hook is invoked\nfrom the ASCONF softirq path (sctp_process_asconf), there is no file\nreference guaranteeing that sk->sk_socket is non-NULL.  The setsockopt\ncallers (bindx, connectx, set_primary, sendmsg connect) hold a file\nreference and are not affected.\n\nBoth selinux_socket_bind() and selinux_socket_connect_helper()\nimmediately resolve sock->sk, never using the struct socket * for\nanything else.  Refactor the inner logic into helpers that take a\nstruct sock * directly so that selinux_sctp_bind_connect() never needs\nto touch sk->sk_socket at all.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el10"
                     }
                 ]
@@ -122575,6 +122715,19 @@
                     {
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.68.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98222": {
+                "cve_id": "CVE-2026-98222",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKEYS: encrypted: fix integer overflow of datablob_len\n\nencrypted_key_alloc() stores datablob_len in a u16. It is computed from\nmultiple string and payload lengths. If the result exceeds U16_MAX, the\nassignment truncates the allocation size. KASAN reports a 32760-byte\nslab-out-of-bounds write when __ekey_init() copies the master key\ndescription into the undersized buffer.\n\nThe total payload length stored in key->datalen is also a u16. Use\ncheck_add_overflow() to reject values that do not fit either destination,\nand use kzalloc_flex() for the flexible-array allocation.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el10"
                     }
                 ]
@@ -201614,19 +201767,6 @@
                     }
                 ]
             },
-            "CVE-2024-57974": {
-                "cve_id": "CVE-2024-57974",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nudp: Deal with race between UDP socket address change and rehash\n\nIf a UDP socket changes its local address while it's receiving\ndatagrams, as a result of connect(), there is a period during which\na lookup operation might fail to find it, after the address is changed\nbut before the secondary hash (port and address) and the four-tuple\nhash (local and remote ports and addresses) are updated.\n\nSecondary hash chains were introduced by commit 30fff9231fad (\"udp:\nbind() optimisation\") and, as a result, a rehash operation became\nneeded to make a bound socket reachable again after a connect().\n\nThis operation was introduced by commit 719f835853a9 (\"udp: add\nrehash on connect()\") which isn't however a complete fix: the\nsocket will be found once the rehashing completes, but not while\nit's pending.\n\nThis is noticeable with a socat(1) server in UDP4-LISTEN mode, and a\nclient sending datagrams to it. After the server receives the first\ndatagram (cf. _xioopen_ipdgram_listen()), it issues a connect() to\nthe address of the sender, in order to set up a directed flow.\n\nNow, if the client, running on a different CPU thread, happens to\nsend a (subsequent) datagram while the server's socket changes its\naddress, but is not rehashed yet, this will result in a failed\nlookup and a port unreachable error delivered to the client, as\napparent from the following reproducer:\n\n  LEN=$(($(cat /proc/sys/net/core/wmem_default) / 4))\n  dd if=/dev/urandom bs=1 count=${LEN} of=tmp.in\n\n  while :; do\n  \ttaskset -c 1 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.1 || sleep 1\n  \ttaskset -c 2 socat OPEN:tmp.in UDP4:localhost:1337,shut-null\n  \twait\n  done\n\nwhere the client will eventually get ECONNREFUSED on a write()\n(typically the second or third one of a given iteration):\n\n  2024/11/13 21:28:23 socat[46901] E write(6, 0x556db2e3c000, 8192): Connection refused\n\nThis issue was first observed as a seldom failure in Podman's tests\nchecking UDP functionality while using pasta(1) to connect the\ncontainer's network namespace, which leads us to a reproducer with\nthe lookup error resulting in an ICMP packet on a tap device:\n\n  LOCAL_ADDR=\"$(ip -j -4 addr show|jq -rM '.[] | .addr_info[0] | select(.scope == \"global\").local')\"\n\n  while :; do\n  \t./pasta --config-net -p pasta.pcap -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.2 || sleep 1\n  \tsocat OPEN:tmp.in UDP4:${LOCAL_ADDR}:1337,shut-null\n  \twait\n  \tcmp tmp.in tmp.out\n  done\n\nOnce this fails:\n\n  tmp.in tmp.out differ: char 8193, line 29\n\nwe can finally have a look at what's going on:\n\n  $ tshark -r pasta.pcap\n      1   0.000000           :: ? ff02::16     ICMPv6 110 Multicast Listener Report Message v2\n      2   0.168690 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      3   0.168767 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      4   0.168806 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      5   0.168827 c6:47:05:8d:dc:04 ? Broadcast    ARP 42 Who has 88.198.0.161? Tell 88.198.0.164\n      6   0.168851 9a:55:9a:55:9a:55 ? c6:47:05:8d:dc:04 ARP 42 88.198.0.161 is at 9a:55:9a:55:9a:55\n      7   0.168875 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      8   0.168896 88.198.0.164 ? 88.198.0.161 ICMP 590 Destination unreachable (Port unreachable)\n      9   0.168926 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     10   0.168959 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     11   0.168989 88.198.0.161 ? 88.198.0.164 UDP 4138 60260 ? 1337 Len=4096\n     12   0.169010 88.198.0.161 ? 88.198.0.164 UDP 42 60260 ? 1337 Len=0\n\nOn the third datagram received, the network namespace of the container\ninitiates an ARP lookup to deliver the ICMP message.\n\nIn another variant of this reproducer, starting the client with:\n\n  strace -f pasta --config-net -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,tru\n---truncated---",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2024-58011": {
                 "cve_id": "CVE-2024-58011",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -207170,32 +207310,6 @@
                     }
                 ]
             },
-            "CVE-2026-63978": {
-                "cve_id": "CVE-2026-63978",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Drain pending requests at net namespace exit\n\nThe arguments to list_splice_init() in handshake_net_exit() are\nreversed. The call moves the local empty \"requests\" list onto\nhn->hn_requests, leaving the local list empty, so the subsequent\ndrain loop runs zero iterations. Pending handshake requests that\nhad not yet been accepted are not torn down when the net namespace\nis destroyed; each one keeps a reference on a socket file and on\nthe handshake_req allocation.\n\nPass the source and destination in the documented order\n(list_splice_init(list, head) moves list onto head) so the pending\nlist is transferred to the local scratch list and drained through\nhandshake_complete().\n\nFixing the splice direction exposes a list-corruption race. After\nthe splice each req->hr_list still has non-empty link pointers,\nthreading the stack-local scratch list rather than hn_requests.\nA concurrent handshake_req_cancel() -- for example, from sunrpc's\nTLS timeout on a kernel socket whose netns reference was not\ntaken -- finds the request through the rhashtable, calls\nremove_pending(), and sees !list_empty(&req->hr_list).\n__remove_pending_locked() then list_del_init()s an entry off the\nscratch list while the drain iterates, corrupting it. The same\ncall arriving after the drain loop has run list_del() on an\nentry hits LIST_POISON instead.\n\nHave remove_pending() check HANDSHAKE_F_NET_DRAINING under\nhn_lock and report not-found when drain is in progress. The\ndrain has already taken ownership; handshake_complete()'s existing\ntest_and_set on HANDSHAKE_F_REQ_COMPLETED still arbitrates\nbetween drain and cancel for who calls the consumer's hp_done. Use\nlist_del_init() rather than list_del() in the drain so req->hr_list\ndoes not carry LIST_POISON after drain releases the entry.\n\nThe DRAINING guard in remove_pending() makes cancel return false,\nbut cancel still falls through to test_and_set_bit on\nHANDSHAKE_F_REQ_COMPLETED and drops the request's hr_file reference.\nWithout another pin, if that is the last reference, sk_destruct frees\nthe request while it is still linked on the drain loop's local list.\nPin each request's hr_file under hn_lock before releasing the list,\nand drop that drain pin after the loop finishes with the request.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-63979": {
-                "cve_id": "CVE-2026-63979",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: hand off the pinned file reference to accept_doit\n\nhandshake_req_next() removes the request from the per-net\npending list and drops hn_lock before handshake_nl_accept_doit()\nreads req->hr_sk->sk_socket and dereferences sock->file (once in\nFD_PREPARE() and again in get_file()).  In that window a\nconsumer running tls_handshake_cancel() followed by sockfd_put()\n(svc_sock_free) or __fput_sync() (xs_reset_transport) releases\nsock->file.  sock_release() then runs sock_orphan(), zeroing\nsk_socket, and frees the struct socket.  The accept-side code\neither reads NULL through sk_socket or chases freed memory.\n\nThe submit-side sock_hold() does not prevent this.  sk_refcnt\nprotects struct sock, but struct socket and sock->file are\nindependently refcounted via the file descriptor the consumer\nowns.  Pinning sk leaves sock and sock->file unprotected.\n\nRetarget the accept-side dereferences at req->hr_file, which was\npinned at submit time, instead of req->hr_sk->sk_socket->file.\nPinning on its own is not sufficient: a consumer that cancels\nbetween handshake_req_next() returning and accept_doit reaching\nFD_PREPARE() takes the !remove_pending() branch in\nhandshake_req_cancel() and drops hr_file before the accept side\ntakes its own reference.  Hand off an additional file reference\ninside handshake_req_next(), under hn_lock, so the accept side\noperates on a reference that no concurrent handshake_req_cancel()\ncan revoke.  FD_PREPARE() consumes that handed-off reference,\neither by transferring it to the new fd in fd_publish() or by\ndropping it in the cleanup destructor on error; the explicit\nget_file() that previously balanced FD_PREPARE() is therefore\nredundant and goes away.\n\nUpdate handshake_req_cancel_test2 and _test3 to simulate the\nFD_PREPARE() consumption with an fput() so the kunit file-count\nassertions stay balanced.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-63988": {
                 "cve_id": "CVE-2026-63988",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -207951,19 +208065,6 @@
                     }
                 ]
             },
-            "CVE-2026-64523": {
-                "cve_id": "CVE-2026-64523",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Take a long-lived file reference at submit\n\nhandshake_nl_accept_doit() needs the file pointer backing\nreq->hr_sk->sk_socket to survive the window between\nhandshake_req_next() and the subsequent FD_PREPARE() and get_file().\nThe submit-side sock_hold() does not provide that.  sk_refcnt keeps\nstruct sock alive, but struct socket is owned by sock->file: when\nthe consumer fputs the last file reference, sock_release() tears\nthe socket down regardless of any sock_hold.\n\nAdd an hr_file pointer to struct handshake_req and acquire an\nexplicit reference on sock->file during handshake_req_submit().\nhandshake_complete() and handshake_req_cancel() release the\nreference on the completion-bit-winning path.\n\nThe submit error path must also release the file reference, but\nafter rhashtable insertion a concurrent handshake_req_cancel() can\ndiscover the request and race the error path.  Gate the error-path\ncleanup -- sk_destruct restoration, fput, and request destruction\n-- with test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED), the same\nserialization handshake_complete() and handshake_req_cancel()\nalready use.  When cancel has already claimed ownership, the submit\nerror path returns without touching the request; socket teardown\nhandles final destruction.\n\nThe accept-side dereferences are not yet retargeted; that change\ncomes in the next patch.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-64542": {
                 "cve_id": "CVE-2026-64542",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -208567,19 +208668,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsunrpc: harden rq_procinfo lifecycle to prevent double-free\n\nThe svc_release_rqst() function executes the callback inside\nrqstp->rq_procinfo->pc_release. However, if a worker thread begins\nprocessing a new request and encounters an early error path (e.g.,\nunsupported protocol, short frame, or bad auth) before a valid\nrq_procinfo is installed, a stale release hook can be re-triggered\nagainst reused state from the previous RPC, resulting in a double-free\nor use-after-free vulnerability.\n\nHarden the lifecycle of rq_procinfo by:\n1. Ensuring svc_release_rqst() always clears rq_procinfo after the\n   optional pc_release() call, regardless of whether the hook exists.\n2. Explicitly clearing rq_procinfo at request entry in svc_process()\n   before any early decode or drop paths.\n3. Ensuring svc_process_bc() does the same at backchannel entry.\n\nThis guarantees that error flows will not encounter a non-NULL stale\nrq_procinfo pointer when there is nothing to release.",
                 "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-72242": {
-                "cve_id": "CVE-2026-72242",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: avoid sk_socket dereference in selinux_sctp_bind_connect()\n\nselinux_sctp_bind_connect() dereferences sk->sk_socket to pass a\nstruct socket * to selinux_socket_bind() and\nselinux_socket_connect_helper().  However, when the hook is invoked\nfrom the ASCONF softirq path (sctp_process_asconf), there is no file\nreference guaranteeing that sk->sk_socket is non-NULL.  The setsockopt\ncallers (bindx, connectx, set_primary, sendmsg connect) hold a file\nreference and are not affected.\n\nBoth selinux_socket_bind() and selinux_socket_connect_helper()\nimmediately resolve sock->sk, never using the struct socket * for\nanything else.  Refactor the inner logic into helpers that take a\nstruct sock * directly so that selinux_sctp_bind_connect() never needs\nto touch sk->sk_socket at all.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -212904,19 +212992,6 @@
                     }
                 ]
             },
-            "CVE-2026-98222": {
-                "cve_id": "CVE-2026-98222",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKEYS: encrypted: fix integer overflow of datablob_len\n\nencrypted_key_alloc() stores datablob_len in a u16. It is computed from\nmultiple string and payload lengths. If the result exceeds U16_MAX, the\nassignment truncates the allocation size. KASAN reports a 32760-byte\nslab-out-of-bounds write when __ekey_init() copies the master key\ndescription into the undersized buffer.\n\nThe total payload length stored in key->datalen is also a u16. Use\ncheck_add_overflow() to reject values that do not fit either destination,\nand use kzalloc_flex() for the flexible-array allocation.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-98223": {
                 "cve_id": "CVE-2026-98223",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -214180,6 +214255,19 @@
                     }
                 ]
             },
+            "CVE-2024-57974": {
+                "cve_id": "CVE-2024-57974",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nudp: Deal with race between UDP socket address change and rehash\n\nIf a UDP socket changes its local address while it's receiving\ndatagrams, as a result of connect(), there is a period during which\na lookup operation might fail to find it, after the address is changed\nbut before the secondary hash (port and address) and the four-tuple\nhash (local and remote ports and addresses) are updated.\n\nSecondary hash chains were introduced by commit 30fff9231fad (\"udp:\nbind() optimisation\") and, as a result, a rehash operation became\nneeded to make a bound socket reachable again after a connect().\n\nThis operation was introduced by commit 719f835853a9 (\"udp: add\nrehash on connect()\") which isn't however a complete fix: the\nsocket will be found once the rehashing completes, but not while\nit's pending.\n\nThis is noticeable with a socat(1) server in UDP4-LISTEN mode, and a\nclient sending datagrams to it. After the server receives the first\ndatagram (cf. _xioopen_ipdgram_listen()), it issues a connect() to\nthe address of the sender, in order to set up a directed flow.\n\nNow, if the client, running on a different CPU thread, happens to\nsend a (subsequent) datagram while the server's socket changes its\naddress, but is not rehashed yet, this will result in a failed\nlookup and a port unreachable error delivered to the client, as\napparent from the following reproducer:\n\n  LEN=$(($(cat /proc/sys/net/core/wmem_default) / 4))\n  dd if=/dev/urandom bs=1 count=${LEN} of=tmp.in\n\n  while :; do\n  \ttaskset -c 1 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.1 || sleep 1\n  \ttaskset -c 2 socat OPEN:tmp.in UDP4:localhost:1337,shut-null\n  \twait\n  done\n\nwhere the client will eventually get ECONNREFUSED on a write()\n(typically the second or third one of a given iteration):\n\n  2024/11/13 21:28:23 socat[46901] E write(6, 0x556db2e3c000, 8192): Connection refused\n\nThis issue was first observed as a seldom failure in Podman's tests\nchecking UDP functionality while using pasta(1) to connect the\ncontainer's network namespace, which leads us to a reproducer with\nthe lookup error resulting in an ICMP packet on a tap device:\n\n  LOCAL_ADDR=\"$(ip -j -4 addr show|jq -rM '.[] | .addr_info[0] | select(.scope == \"global\").local')\"\n\n  while :; do\n  \t./pasta --config-net -p pasta.pcap -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.2 || sleep 1\n  \tsocat OPEN:tmp.in UDP4:${LOCAL_ADDR}:1337,shut-null\n  \twait\n  \tcmp tmp.in tmp.out\n  done\n\nOnce this fails:\n\n  tmp.in tmp.out differ: char 8193, line 29\n\nwe can finally have a look at what's going on:\n\n  $ tshark -r pasta.pcap\n      1   0.000000           :: ? ff02::16     ICMPv6 110 Multicast Listener Report Message v2\n      2   0.168690 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      3   0.168767 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      4   0.168806 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      5   0.168827 c6:47:05:8d:dc:04 ? Broadcast    ARP 42 Who has 88.198.0.161? Tell 88.198.0.164\n      6   0.168851 9a:55:9a:55:9a:55 ? c6:47:05:8d:dc:04 ARP 42 88.198.0.161 is at 9a:55:9a:55:9a:55\n      7   0.168875 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      8   0.168896 88.198.0.164 ? 88.198.0.161 ICMP 590 Destination unreachable (Port unreachable)\n      9   0.168926 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     10   0.168959 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     11   0.168989 88.198.0.161 ? 88.198.0.164 UDP 4138 60260 ? 1337 Len=4096\n     12   0.169010 88.198.0.161 ? 88.198.0.164 UDP 42 60260 ? 1337 Len=0\n\nOn the third datagram received, the network namespace of the container\ninitiates an ARP lookup to deliver the ICMP message.\n\nIn another variant of this reproducer, starting the client with:\n\n  strace -f pasta --config-net -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,tru\n---truncated---",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2024-57993": {
                 "cve_id": "CVE-2024-57993",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -214823,6 +214911,19 @@
                     }
                 ]
             },
+            "CVE-2026-72242": {
+                "cve_id": "CVE-2026-72242",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: avoid sk_socket dereference in selinux_sctp_bind_connect()\n\nselinux_sctp_bind_connect() dereferences sk->sk_socket to pass a\nstruct socket * to selinux_socket_bind() and\nselinux_socket_connect_helper().  However, when the hook is invoked\nfrom the ASCONF softirq path (sctp_process_asconf), there is no file\nreference guaranteeing that sk->sk_socket is non-NULL.  The setsockopt\ncallers (bindx, connectx, set_primary, sendmsg connect) hold a file\nreference and are not affected.\n\nBoth selinux_socket_bind() and selinux_socket_connect_helper()\nimmediately resolve sock->sk, never using the struct socket * for\nanything else.  Refactor the inner logic into helpers that take a\nstruct sock * directly so that selinux_sctp_bind_connect() never needs\nto touch sk->sk_socket at all.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
             "CVE-2026-72243": {
                 "cve_id": "CVE-2026-72243",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -214933,6 +215034,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: Bound GPIO I2C table entry count from VBIOS\n\nReject undersized tables and cap the derived entry count\nto AMDGPU_MAX_I2C_BUS so we do not overrun adev->i2c_bus[]\nor walk an absurd number of entries on corrupt size fields.",
                 "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-98222": {
+                "cve_id": "CVE-2026-98222",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKEYS: encrypted: fix integer overflow of datablob_len\n\nencrypted_key_alloc() stores datablob_len in a u16. It is computed from\nmultiple string and payload lengths. If the result exceeds U16_MAX, the\nassignment truncates the allocation size. KASAN reports a 32760-byte\nslab-out-of-bounds write when __ekey_init() copies the master key\ndescription into the undersized buffer.\n\nThe total payload length stored in key->datalen is also a u16. Use\ncheck_add_overflow() to reject values that do not fit either destination,\nand use kzalloc_flex() for the flexible-array allocation.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -299454,19 +299568,6 @@
                     }
                 ]
             },
-            "CVE-2024-57974": {
-                "cve_id": "CVE-2024-57974",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nudp: Deal with race between UDP socket address change and rehash\n\nIf a UDP socket changes its local address while it's receiving\ndatagrams, as a result of connect(), there is a period during which\na lookup operation might fail to find it, after the address is changed\nbut before the secondary hash (port and address) and the four-tuple\nhash (local and remote ports and addresses) are updated.\n\nSecondary hash chains were introduced by commit 30fff9231fad (\"udp:\nbind() optimisation\") and, as a result, a rehash operation became\nneeded to make a bound socket reachable again after a connect().\n\nThis operation was introduced by commit 719f835853a9 (\"udp: add\nrehash on connect()\") which isn't however a complete fix: the\nsocket will be found once the rehashing completes, but not while\nit's pending.\n\nThis is noticeable with a socat(1) server in UDP4-LISTEN mode, and a\nclient sending datagrams to it. After the server receives the first\ndatagram (cf. _xioopen_ipdgram_listen()), it issues a connect() to\nthe address of the sender, in order to set up a directed flow.\n\nNow, if the client, running on a different CPU thread, happens to\nsend a (subsequent) datagram while the server's socket changes its\naddress, but is not rehashed yet, this will result in a failed\nlookup and a port unreachable error delivered to the client, as\napparent from the following reproducer:\n\n  LEN=$(($(cat /proc/sys/net/core/wmem_default) / 4))\n  dd if=/dev/urandom bs=1 count=${LEN} of=tmp.in\n\n  while :; do\n  \ttaskset -c 1 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.1 || sleep 1\n  \ttaskset -c 2 socat OPEN:tmp.in UDP4:localhost:1337,shut-null\n  \twait\n  done\n\nwhere the client will eventually get ECONNREFUSED on a write()\n(typically the second or third one of a given iteration):\n\n  2024/11/13 21:28:23 socat[46901] E write(6, 0x556db2e3c000, 8192): Connection refused\n\nThis issue was first observed as a seldom failure in Podman's tests\nchecking UDP functionality while using pasta(1) to connect the\ncontainer's network namespace, which leads us to a reproducer with\nthe lookup error resulting in an ICMP packet on a tap device:\n\n  LOCAL_ADDR=\"$(ip -j -4 addr show|jq -rM '.[] | .addr_info[0] | select(.scope == \"global\").local')\"\n\n  while :; do\n  \t./pasta --config-net -p pasta.pcap -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,trunc &\n  \tsleep 0.2 || sleep 1\n  \tsocat OPEN:tmp.in UDP4:${LOCAL_ADDR}:1337,shut-null\n  \twait\n  \tcmp tmp.in tmp.out\n  done\n\nOnce this fails:\n\n  tmp.in tmp.out differ: char 8193, line 29\n\nwe can finally have a look at what's going on:\n\n  $ tshark -r pasta.pcap\n      1   0.000000           :: ? ff02::16     ICMPv6 110 Multicast Listener Report Message v2\n      2   0.168690 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      3   0.168767 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      4   0.168806 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      5   0.168827 c6:47:05:8d:dc:04 ? Broadcast    ARP 42 Who has 88.198.0.161? Tell 88.198.0.164\n      6   0.168851 9a:55:9a:55:9a:55 ? c6:47:05:8d:dc:04 ARP 42 88.198.0.161 is at 9a:55:9a:55:9a:55\n      7   0.168875 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n      8   0.168896 88.198.0.164 ? 88.198.0.161 ICMP 590 Destination unreachable (Port unreachable)\n      9   0.168926 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     10   0.168959 88.198.0.161 ? 88.198.0.164 UDP 8234 60260 ? 1337 Len=8192\n     11   0.168989 88.198.0.161 ? 88.198.0.164 UDP 4138 60260 ? 1337 Len=4096\n     12   0.169010 88.198.0.161 ? 88.198.0.164 UDP 42 60260 ? 1337 Len=0\n\nOn the third datagram received, the network namespace of the container\ninitiates an ARP lookup to deliver the ICMP message.\n\nIn another variant of this reproducer, starting the client with:\n\n  strace -f pasta --config-net -u 1337 socat UDP4-LISTEN:1337,null-eof OPEN:tmp.out,create,tru\n---truncated---",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2024-57977": {
                 "cve_id": "CVE-2024-57977",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -300494,19 +300595,6 @@
                     }
                 ]
             },
-            "CVE-2026-72242": {
-                "cve_id": "CVE-2026-72242",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nselinux: avoid sk_socket dereference in selinux_sctp_bind_connect()\n\nselinux_sctp_bind_connect() dereferences sk->sk_socket to pass a\nstruct socket * to selinux_socket_bind() and\nselinux_socket_connect_helper().  However, when the hook is invoked\nfrom the ASCONF softirq path (sctp_process_asconf), there is no file\nreference guaranteeing that sk->sk_socket is non-NULL.  The setsockopt\ncallers (bindx, connectx, set_primary, sendmsg connect) hold a file\nreference and are not affected.\n\nBoth selinux_socket_bind() and selinux_socket_connect_helper()\nimmediately resolve sock->sk, never using the struct socket * for\nanything else.  Refactor the inner logic into helpers that take a\nstruct sock * directly so that selinux_sctp_bind_connect() never needs\nto touch sk->sk_socket at all.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-72297": {
                 "cve_id": "CVE-2026-72297",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -300798,19 +300886,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nIB/mlx4: Fix use-after-free on pkey sysfs registration failure\n\nregister_pkey_tree() ignores errors from register_one_pkey_tree() and\ncontinues registering the remaining slaves. The per-slave error path has\nalready released the pkey parent kobjects, but their pointers remain\nstored in the device. A later device cleanup therefore passes the stale\npointers to kobject_put(), causing a use-after-free.\n\nClear the parent pointers after releasing a failed slave tree and skip\nunregistered trees during device cleanup. This preserves the existing\nbest-effort registration behavior while preventing a second cleanup of\nthe failed tree.",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-98222": {
-                "cve_id": "CVE-2026-98222",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKEYS: encrypted: fix integer overflow of datablob_len\n\nencrypted_key_alloc() stores datablob_len in a u16. It is computed from\nmultiple string and payload lengths. If the result exceeds U16_MAX, the\nassignment truncates the allocation size. KASAN reports a 32760-byte\nslab-out-of-bounds write when __ekey_init() copies the master key\ndescription into the undersized buffer.\n\nThe total payload length stored in key->datalen is also a u16. Use\ncheck_add_overflow() to reject values that do not fit either destination,\nand use kzalloc_flex() for the flexible-array allocation.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
