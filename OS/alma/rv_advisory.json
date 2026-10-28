@@ -4005,6 +4005,25 @@
                     }
                 ]
             },
+            "CVE-2026-53236": {
+                "cve_id": "CVE-2026-53236",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-53239": {
                 "cve_id": "CVE-2026-53239",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -4369,10 +4388,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse: re-lock request before replacing page cache folio\n\nfuse_try_move_folio() unlocks the request on entry but does not\nre-lock it on the success path. This means fuse_chan_abort() can end the\nrequest and free the fuse_io_args (eg fuse_readpages_end()) while the\nsubsequent copy chain logic after fuse_try_move_folio() accesses the\nfuse_io_args, leading to use-after-free issues.\n\nFix this by calling lock_request() before replace_page_cache_folio().\nThis ensures the request is locked on the success path which will\nprevent the fuse_io_args from being freed while the later copying logic\nruns, and also ensures that the ap->folios[i]->mapping is never null\nsince ap->folios[i] will always point to the newfolio after\nreplace_page_cache_folio().",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -5093,10 +5113,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Drain pending requests at net namespace exit\n\nThe arguments to list_splice_init() in handshake_net_exit() are\nreversed. The call moves the local empty \"requests\" list onto\nhn->hn_requests, leaving the local list empty, so the subsequent\ndrain loop runs zero iterations. Pending handshake requests that\nhad not yet been accepted are not torn down when the net namespace\nis destroyed; each one keeps a reference on a socket file and on\nthe handshake_req allocation.\n\nPass the source and destination in the documented order\n(list_splice_init(list, head) moves list onto head) so the pending\nlist is transferred to the local scratch list and drained through\nhandshake_complete().\n\nFixing the splice direction exposes a list-corruption race. After\nthe splice each req->hr_list still has non-empty link pointers,\nthreading the stack-local scratch list rather than hn_requests.\nA concurrent handshake_req_cancel() -- for example, from sunrpc's\nTLS timeout on a kernel socket whose netns reference was not\ntaken -- finds the request through the rhashtable, calls\nremove_pending(), and sees !list_empty(&req->hr_list).\n__remove_pending_locked() then list_del_init()s an entry off the\nscratch list while the drain iterates, corrupting it. The same\ncall arriving after the drain loop has run list_del() on an\nentry hits LIST_POISON instead.\n\nHave remove_pending() check HANDSHAKE_F_NET_DRAINING under\nhn_lock and report not-found when drain is in progress. The\ndrain has already taken ownership; handshake_complete()'s existing\ntest_and_set on HANDSHAKE_F_REQ_COMPLETED still arbitrates\nbetween drain and cancel for who calls the consumer's hp_done. Use\nlist_del_init() rather than list_del() in the drain so req->hr_list\ndoes not carry LIST_POISON after drain releases the entry.\n\nThe DRAINING guard in remove_pending() makes cancel return false,\nbut cancel still falls through to test_and_set_bit on\nHANDSHAKE_F_REQ_COMPLETED and drops the request's hr_file reference.\nWithout another pin, if that is the last reference, sk_destruct frees\nthe request while it is still linked on the drain loop's local list.\nPin each request's hr_file under hn_lock before releasing the list,\nand drop that drain pin after the loop finishes with the request.",
                 "severity": "CRITICAL",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -5106,10 +5127,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: hand off the pinned file reference to accept_doit\n\nhandshake_req_next() removes the request from the per-net\npending list and drops hn_lock before handshake_nl_accept_doit()\nreads req->hr_sk->sk_socket and dereferences sock->file (once in\nFD_PREPARE() and again in get_file()).  In that window a\nconsumer running tls_handshake_cancel() followed by sockfd_put()\n(svc_sock_free) or __fput_sync() (xs_reset_transport) releases\nsock->file.  sock_release() then runs sock_orphan(), zeroing\nsk_socket, and frees the struct socket.  The accept-side code\neither reads NULL through sk_socket or chases freed memory.\n\nThe submit-side sock_hold() does not prevent this.  sk_refcnt\nprotects struct sock, but struct socket and sock->file are\nindependently refcounted via the file descriptor the consumer\nowns.  Pinning sk leaves sock and sock->file unprotected.\n\nRetarget the accept-side dereferences at req->hr_file, which was\npinned at submit time, instead of req->hr_sk->sk_socket->file.\nPinning on its own is not sufficient: a consumer that cancels\nbetween handshake_req_next() returning and accept_doit reaching\nFD_PREPARE() takes the !remove_pending() branch in\nhandshake_req_cancel() and drops hr_file before the accept side\ntakes its own reference.  Hand off an additional file reference\ninside handshake_req_next(), under hn_lock, so the accept side\noperates on a reference that no concurrent handshake_req_cancel()\ncan revoke.  FD_PREPARE() consumes that handed-off reference,\neither by transferring it to the new fd in fd_publish() or by\ndropping it in the cleanup destructor on error; the explicit\nget_file() that previously balanced FD_PREPARE() is therefore\nredundant and goes away.\n\nUpdate handshake_req_cancel_test2 and _test3 to simulate the\nFD_PREPARE() consumption with an fput() so the kunit file-count\nassertions stay balanced.",
                 "severity": "CRITICAL",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -5248,6 +5270,25 @@
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.63.1.el10_2",
                         "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-64027": {
+                "cve_id": "CVE-2026-64027",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -5457,6 +5498,25 @@
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.60.1.el10_2",
                         "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-64109": {
+                "cve_id": "CVE-2026-64109",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -6155,10 +6215,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/handshake: Take a long-lived file reference at submit\n\nhandshake_nl_accept_doit() needs the file pointer backing\nreq->hr_sk->sk_socket to survive the window between\nhandshake_req_next() and the subsequent FD_PREPARE() and get_file().\nThe submit-side sock_hold() does not provide that.  sk_refcnt keeps\nstruct sock alive, but struct socket is owned by sock->file: when\nthe consumer fputs the last file reference, sock_release() tears\nthe socket down regardless of any sock_hold.\n\nAdd an hr_file pointer to struct handshake_req and acquire an\nexplicit reference on sock->file during handshake_req_submit().\nhandshake_complete() and handshake_req_cancel() release the\nreference on the completion-bit-winning path.\n\nThe submit error path must also release the file reference, but\nafter rhashtable insertion a concurrent handshake_req_cancel() can\ndiscover the request and race the error path.  Gate the error-path\ncleanup -- sk_destruct restoration, fput, and request destruction\n-- with test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED), the same\nserialization handshake_complete() and handshake_req_cancel()\nalready use.  When cancel has already claimed ownership, the submit\nerror path returns without touching the request; socket teardown\nhandles final destruction.\n\nThe accept-side dereferences are not yet retargeted; that change\ncomes in the next patch.",
                 "severity": "CRITICAL",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -6458,6 +6519,25 @@
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.56.1.el10_2",
                         "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-68136": {
+                "cve_id": "CVE-2026-68136",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -6947,6 +7027,25 @@
                     }
                 ]
             },
+            "CVE-2026-68338": {
+                "cve_id": "CVE-2026-68338",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-68343": {
                 "cve_id": "CVE-2026-68343",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7274,6 +7373,25 @@
                     }
                 ]
             },
+            "CVE-2026-72083": {
+                "cve_id": "CVE-2026-72083",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-72098": {
                 "cve_id": "CVE-2026-72098",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7569,10 +7687,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: s390: pci: Reject adapter interrupt forwarding if already enabled\n\nThe MPCIFC instruction doesn't allow registering adapter interrupts without\nfirst unregistering. So reject any request to enable interrupt forwarding\nif its already enabled for the zPCI device. This also fixes overwriting and\nthus leaking resources when the ioctl is called multiple times for the same\ndevice.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -7721,6 +7840,25 @@
                         "introduced": "6.12.0-211.7.1.el10_2",
                         "fixed": "6.12.0-211.67.1.el10_2",
                         "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-74631": {
+                "cve_id": "CVE-2026-74631",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -8003,10 +8141,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: usbfs: fix use-after-free of usb_device in usbdev_release()\n\nusbdev_release() drops its reference to the struct usb_device before\ndraining the list of completed async URBs, but that drain path reads back\nthrough the same object: free_async() calls dec_usb_memory_use_count()\nfor any URB whose buffer came from the usbfs mmap() region, and its first\nstatement is bus_to_hcd(ps->dev->bus).\n\nAfter a disconnect the usbfs reference can be the last one, in which case\nusb_put_dev() frees the device and the subsequent loop reads offset 80 of\nfreed memory and uses the result as a struct usb_hcd *, which\nhcd_buffer_free_pages() then dereferences.\n\nThis is reachable by an unprivileged process that has read/write access to\na /dev/bus/usb node: mmap() the fd, submit one URB with a buffer inside the\nmapping, wait for the device to be unplugged, then munmap() and close().\nIt reproduces on every attempt rather than being a race, because a live\nMAP_SHARED vma holds a reference on the struct file, so usbdev_release()\ncannot run until the last vma is gone and the freeing branch of\ndec_usb_memory_use_count() is always taken.\n\n  BUG: KASAN: slab-use-after-free in dec_usb_memory_use_count+0x3ae/0x410\n  Read of size 8 at addr ffff8880122ee050 by task poc/769\n  CPU: 1 UID: 1000 PID: 769 Comm: poc Tainted: G    B    6.12.94 #3\n\n  Call Trace:\n   dec_usb_memory_use_count+0x3ae/0x410\n   free_async+0x2aa/0x4f0\n   usbdev_release+0x375/0x460\n   __fput+0x3ea/0xb50\n   __x64_sys_close+0x86/0x100\n\n  Allocated by task 11:\n   usb_alloc_dev+0x55/0xd90\n   hub_event+0x2524/0x43d0\n\n  Freed by task 769:\n   kfree+0x121/0x360\n   device_release+0xd2/0x280\n   usb_put_dev+0x23/0x30\n   usbdev_release+0x2d8/0x460\n\nRelease the device reference after the drain loop instead. Nothing between\nthe two points requires it to have been dropped.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -8200,10 +8339,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: clear setuid/setgid bit on write with cifsacl/modefromsid/posix extensions\n\nWhen a file has the setuid or setgid bit set and is written to, the VFS\nstrips those bits and issues a setattr with ATTR_KILL_SUID/ATTR_KILL_SGID\ntogether with an ATTR_MODE carrying the already-cleared mode.\n\nBoth cifs_setattr_unix() and cifs_setattr_nounix() unconditionally dropped\nATTR_MODE in that case:\n\n\t/* skip mode change if it's just for clearing setuid/setgid */\n\tif (attrs->ia_valid & (ATTR_KILL_SUID|ATTR_KILL_SGID))\n\t\tattrs->ia_valid &= ~ATTR_MODE;\n\nThis is fine for the default mount, where the mode is only emulated via\nthe DOS read-only attribute and cannot represent the setuid/setgid bits\nanyway.  However, with the \"cifsacl\" or \"modefromsid\" mount options the\nmode is stored on the server through an ACL (id_mode_to_cifs_acl()), with\nthe SMB3.1.1 POSIX extensions the mode is sent to the server directly,\nand with the SMB1 Unix extensions (cifs_setattr_unix) the mode is sent\nvia CIFSSMBUnixSetPathInfo().  In all those cases dropping ATTR_MODE means\nthe cleared mode is never pushed to the server, so the setuid/setgid bit\nsurvives the write.\n\nThis is a security issue: on local filesystems the setuid bit is stripped\nwhen a file is written, but over these cifs.ko mounts the bit persists on\nthe server, potentially allowing an unexpected privilege escalation on\nsubsequent execution.\n\nFix this in two places:\n\n  1. cifs_setattr_nounix(): only take the \"skip mode change\" shortcut\n     when the mode is emulated via the DOS read-only attribute (i.e.\n     neither cifsacl/modefromsid nor the SMB3.1.1 POSIX extensions are\n     in effect), so that the cleared mode is propagated to the server\n     in the ACL / POSIX cases.\n\n  2. cifs_setattr_unix(): this function is only called when Unix\n     extensions are in effect, so the mode is always stored on the\n     server.  Remove the shortcut entirely so that the cleared mode is\n     always pushed.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -8346,10 +8486,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvfio/pci: clear vdev->msi_perm after freeing it on init failure\n\nvfio_msi_cap_len() lazily allocates the per-device MSI permission table:\n\n\tvdev->msi_perm = kmalloc_obj(struct perm_bits, GFP_KERNEL_ACCOUNT);\n\tif (!vdev->msi_perm)\n\t\treturn -ENOMEM;\n\n\tret = init_pci_cap_msi_perm(vdev->msi_perm, len, flags);\n\tif (ret) {\n\t\tkfree(vdev->msi_perm);\n\t\treturn ret;\t\t/* vdev->msi_perm left dangling */\n\t}\n\nWhen init_pci_cap_msi_perm() -> alloc_perm_bits() fails with -ENOMEM, the\nerror path frees vdev->msi_perm but leaves the freed pointer stored in\nit. vdev->msi_perm is not re-zeroed later because struct\nvfio_pci_core_device is per-device and persists across open/close cycles,\nand the vfio_config_init() error path returns without calling\nvfio_config_free(). So the dangling pointer outlives the failed open.\n\nThat leads to two use-after-frees on the same device:\n\n1. Reuse. The next vfio_config_init() sees the stale pointer at\n   \"if (vdev->msi_perm) return len;\" and reuses the freed object. MSI\n   config accesses in vfio_pci_config_rw_single() then dereference and\n   call the freed perm->readfn / perm->writefn function pointers.\n\n2. Double free. A later vfio_config_free() runs free_perm_bits() and\n   kfree() on the already-freed object.\n\nFix it by NULLing vdev->msi_perm after the kfree(), matching the\nNULL-after-free discipline already used in free_perm_bits() and\nvfio_config_free().\n\n  BUG: KASAN: slab-use-after-free in vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n  Read of size 8 at addr ffff88800fcc88d0 by task exploit/143\n  Call Trace:\n   ...\n   kasan_report (mm/kasan/report.c:595)\n   vfio_pci_config_rw_single (drivers/vfio/pci/vfio_pci_config.c:1961)\n   vfio_pci_config_rw (drivers/vfio/pci/vfio_pci_config.c:1986)\n   vfio_pci_rw (drivers/vfio/pci/vfio_pci_core.c:1599)\n   vfs_read (fs/read_write.c:572)\n   __x64_sys_pread64 (fs/read_write.c:764)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n\nFollowed on device close by a double free of the same object:\n\n  Oops: general protection fault, probably for non-canonical address\n    0x1f63e0e8000008: 0000 [#1] SMP KASAN NOPTI\n  RIP: 0010:kfree (mm/slub.c:6711)\n  Call Trace:\n   vfio_config_free (drivers/vfio/pci/vfio_pci_config.c:1861)\n   vfio_pci_core_disable (drivers/vfio/pci/vfio_pci_core.c:685)\n   vfio_pci_core_close_device (drivers/vfio/pci/vfio_pci_core.c:777)\n   vfio_df_close (drivers/vfio/vfio_main.c:602)\n   vfio_device_fops_release (drivers/vfio/vfio_main.c:648)\n   __fput (fs/file_table.c:512)\n   __x64_sys_close (fs/open.c:1496)\n   do_syscall_64 (arch/x86/entry/syscall_64.c:94)\n   ...\n  Kernel panic - not syncing: Fatal exception",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -8530,10 +8671,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmd/raid5-ppl: fix use-after-free in ppl_do_flush()\n\nThe loop in ppl_do_flush() continues iterating after calling\nppl_io_unit_finished(), touching io->pending_flushes and leading to a\nuse-after-free.\n\nAdd a break statement to stop the loop once io is freed.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.69.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -42875,24 +43017,6 @@
                     }
                 ]
             },
-            "CVE-2026-53236": {
-                "cve_id": "CVE-2026-53236",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-53238": {
                 "cve_id": "CVE-2026-53238",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -45575,24 +45699,6 @@
                     }
                 ]
             },
-            "CVE-2026-64027": {
-                "cve_id": "CVE-2026-64027",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-64028": {
                 "cve_id": "CVE-2026-64028",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -45850,24 +45956,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Reject restored DTE with out-of-range num_eventid_bits\n\nUserspace can restore an ITS Device Table Entry whose Size field encodes\nmore EventID bits than the virtual ITS supports.  The live MAPD path\nrejects that state, but vgic_its_restore_dte() accepts it and stores the\nout-of-range value in dev->num_eventid_bits.\n\nReject restored DTEs with num_eventid_bits > VITS_TYPER_IDBITS before\nallocating the device.  This mirrors the MAPD check and prevents the\nrestored state from reaching vgic_its_restore_itt(), where the unchecked\nvalue can be converted into an oversized scan_its_table() range.",
                 "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-64109": {
-                "cve_id": "CVE-2026-64109",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -49805,24 +49893,6 @@
                     }
                 ]
             },
-            "CVE-2026-68136": {
-                "cve_id": "CVE-2026-68136",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68138": {
                 "cve_id": "CVE-2026-68138",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -51448,24 +51518,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject redirect helpers without a bpf_net_context\n\nThe bpf_redirect*() helpers and skb_do_redirect() obtain the per-task\nbpf_redirect_info via bpf_net_ctx_get_ri(), which dereferences the\ncurrent->bpf_net_context unconditionally. That context is established\non the paths that run tc BPF such as sch_handle_{ingress,egress}(),\n*except* for the case where {cls,act}_bpf was attached to a proper\nqdisc. A program running from there reaches the NULL deref in two ways:\n\n* It calls bpf_redirect() directly, which dereferences the context at\n  the top of the helper:\n\n     tc qdisc add dev eth0 root handle 1: red limit 1MB min 10KB max 20KB \\\n        avpkt 1000 burst 100 qevent early_drop block 10\n     tc filter add block 10 pref 1 bpf obj redirect.o\n\n* It simply returns TC_ACT_REDIRECT without helper call: tcf_qevent_handle()\n  then dispatches to skb_do_redirect(), which dereferences the context\n\nRather than extending bpf_net_context management into the qdisc path,\nmake the redirect helpers refuse to operate when no context exists, and\nhave tcf_qevent_handle() drop a TC_ACT_REDIRECT verdict instead of\ncalling skb_do_redirect(). Previous behaviour was a crash, so nothing\nregresses by not supporting it.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-68338": {
-                "cve_id": "CVE-2026-68338",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -53176,24 +53228,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/resctrl: Fix use-after-free during unmount\n\nDuring unmount or failure teardown all mon_data structures that contain\nmonitoring event file private data are freed after which kernfs nodes are\nremoved. However, the RDT_DELETED flag is never set for the statically\nallocated default resource group.\n\nA concurrent reader of an event file associated with the default resource\ngroup may, after dropping kernfs active protection, block on rdtgroup_mutex\nwhile unmount proceeds to free the file private data and destroy the kernfs\nnode without waiting for the reader.\n\nWhen the mutex is released, the reader wakes up, observes that RDT_DELETED\nis not set for the default group, and dereferences the already-freed\nfile private data.\n\nThe scenario can be depicted as follows:\n  CPU0                                      CPU1\n   /*\n    * Default resource group's\n    * monitoring data accessible via\n    * kernfs file with kernfs_node::priv\n    * pointing to a struct mon_data.\n    * User opens the file for reading.\n    */\n   rdtgroup_mondata_show()                 /* arch encounters fatal error */\n    rdtgroup_kn_lock_live()                 resctrl_exit()\n     atomic_inc(&rdtgroup_default.waitcount) cpus_read_lock()\n     kernfs_break_active_protection(kn)      mutex_lock(&rdtgroup_mutex)\n     cpus_read_lock()                        resctrl_fs_teardown()\n     mutex_lock(&rdtgroup_mutex)              rmdir_all_sub()\n                                              mon_put_kn_priv()\n                                               /* Delete all mon_data structures */\n                                              rdtgroup_destroy_root()\n                                               kernfs_destroy_root()\n                                               rdtgroup_default.kn = NULL\n                                             mutex_unlock(&rdtgroup_mutex)\n     /*\n      * rdtgroup_default.flags is empty so\n      * rdtgroup_kn_lock_live() returns\n      * &rdtgroup_default\n      */\n     md = of->kn->priv;\n\n     /* md points to freed mon_data */\n\nSet RDT_DELETED for the default group unconditionally since the flag does\nnot lead to the freeing of this statically allocated group.\n\nDo not allow a new resctrl mount if there are any waiters on default group\nof previous mount. A new mount will re-initialize the default group that\nwould appear to waiters from previous mount as though the default group is\naccessible causing them to access the mon_data structures from the previous\nmount that have been removed.",
                 "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-72083": {
-                "cve_id": "CVE-2026-72083",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
-                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -60447,24 +60481,6 @@
                 "cve_id": "CVE-2026-74630",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: prevent in6_dev_get() from resurrecting inet6_dev\n\nin6_dev_get() reads dev->ip6_ptr under RCU and then unconditionally\nincrements its refcount. Device teardown can clear the pointer and drop\nthe last reference between these operations. The increment then\nresurrects an object whose RCU free has already been queued, so callers\ncan use it after it is freed.\n\nUse refcount_inc_not_zero() and return NULL when the object has already\nreached zero. RCU keeps the memory accessible through the attempted\nreference acquisition, and a successful increment pins the object for\nthe caller.\n\nAn independent run on the exact unpatched 6f5156d7a31a (v7.2-rc3)\nkernel reproduced the invalid reference acquisition as UID 1000:\n\n  refcount_t: addition on 0; use-after-free.\n  ip6_mc_source+0xef4/0x17e0\n\nIt was followed by the corresponding reference underflow in\nip6_mc_source(). The supplied trace from the same unpatched revision\nadditionally shows the access after the RCU read-side section ends:\n\n  BUG: KASAN: slab-use-after-free in mutex_lock+0x76/0xe0\n  Write of size 8 at addr ffff888015b50240 by task poc/1219\n\nBug found and triaged by OpenAI Security Research and\nvalidated by Trail of Bits.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el10"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-74631": {
-                "cve_id": "CVE-2026-74631",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -104541,6 +104557,24 @@
                     }
                 ]
             },
+            "CVE-2026-53236": {
+                "cve_id": "CVE-2026-53236",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-53239": {
                 "cve_id": "CVE-2026-53239",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -105771,6 +105805,24 @@
                     }
                 ]
             },
+            "CVE-2026-64027": {
+                "cve_id": "CVE-2026-64027",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-64029": {
                 "cve_id": "CVE-2026-64029",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -105939,6 +105991,24 @@
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.53.1.el9_8",
                         "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-64109": {
+                "cve_id": "CVE-2026-64109",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -106884,6 +106954,24 @@
                     }
                 ]
             },
+            "CVE-2026-68136": {
+                "cve_id": "CVE-2026-68136",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-68140": {
                 "cve_id": "CVE-2026-68140",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -107359,6 +107447,24 @@
                     }
                 ]
             },
+            "CVE-2026-68338": {
+                "cve_id": "CVE-2026-68338",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-68343": {
                 "cve_id": "CVE-2026-68343",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -107721,6 +107827,24 @@
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.50.1.el9_8",
                         "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-72083": {
+                "cve_id": "CVE-2026-72083",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -108158,6 +108282,24 @@
                     {
                         "introduced": "0",
                         "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-74631": {
+                "cve_id": "CVE-2026-74631",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -143304,24 +143446,6 @@
                     }
                 ]
             },
-            "CVE-2026-53236": {
-                "cve_id": "CVE-2026-53236",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-53238": {
                 "cve_id": "CVE-2026-53238",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -146004,24 +146128,6 @@
                     }
                 ]
             },
-            "CVE-2026-64027": {
-                "cve_id": "CVE-2026-64027",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-64028": {
                 "cve_id": "CVE-2026-64028",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -146279,24 +146385,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Reject restored DTE with out-of-range num_eventid_bits\n\nUserspace can restore an ITS Device Table Entry whose Size field encodes\nmore EventID bits than the virtual ITS supports.  The live MAPD path\nrejects that state, but vgic_its_restore_dte() accepts it and stores the\nout-of-range value in dev->num_eventid_bits.\n\nReject restored DTEs with num_eventid_bits > VITS_TYPER_IDBITS before\nallocating the device.  This mirrors the MAPD check and prevents the\nrestored state from reaching vgic_its_restore_itt(), where the unchecked\nvalue can be converted into an oversized scan_its_table() range.",
                 "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-64109": {
-                "cve_id": "CVE-2026-64109",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -150234,24 +150322,6 @@
                     }
                 ]
             },
-            "CVE-2026-68136": {
-                "cve_id": "CVE-2026-68136",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68138": {
                 "cve_id": "CVE-2026-68138",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -151877,24 +151947,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject redirect helpers without a bpf_net_context\n\nThe bpf_redirect*() helpers and skb_do_redirect() obtain the per-task\nbpf_redirect_info via bpf_net_ctx_get_ri(), which dereferences the\ncurrent->bpf_net_context unconditionally. That context is established\non the paths that run tc BPF such as sch_handle_{ingress,egress}(),\n*except* for the case where {cls,act}_bpf was attached to a proper\nqdisc. A program running from there reaches the NULL deref in two ways:\n\n* It calls bpf_redirect() directly, which dereferences the context at\n  the top of the helper:\n\n     tc qdisc add dev eth0 root handle 1: red limit 1MB min 10KB max 20KB \\\n        avpkt 1000 burst 100 qevent early_drop block 10\n     tc filter add block 10 pref 1 bpf obj redirect.o\n\n* It simply returns TC_ACT_REDIRECT without helper call: tcf_qevent_handle()\n  then dispatches to skb_do_redirect(), which dereferences the context\n\nRather than extending bpf_net_context management into the qdisc path,\nmake the redirect helpers refuse to operate when no context exists, and\nhave tcf_qevent_handle() drop a TC_ACT_REDIRECT verdict instead of\ncalling skb_do_redirect(). Previous behaviour was a crash, so nothing\nregresses by not supporting it.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-68338": {
-                "cve_id": "CVE-2026-68338",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -153605,24 +153657,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/resctrl: Fix use-after-free during unmount\n\nDuring unmount or failure teardown all mon_data structures that contain\nmonitoring event file private data are freed after which kernfs nodes are\nremoved. However, the RDT_DELETED flag is never set for the statically\nallocated default resource group.\n\nA concurrent reader of an event file associated with the default resource\ngroup may, after dropping kernfs active protection, block on rdtgroup_mutex\nwhile unmount proceeds to free the file private data and destroy the kernfs\nnode without waiting for the reader.\n\nWhen the mutex is released, the reader wakes up, observes that RDT_DELETED\nis not set for the default group, and dereferences the already-freed\nfile private data.\n\nThe scenario can be depicted as follows:\n  CPU0                                      CPU1\n   /*\n    * Default resource group's\n    * monitoring data accessible via\n    * kernfs file with kernfs_node::priv\n    * pointing to a struct mon_data.\n    * User opens the file for reading.\n    */\n   rdtgroup_mondata_show()                 /* arch encounters fatal error */\n    rdtgroup_kn_lock_live()                 resctrl_exit()\n     atomic_inc(&rdtgroup_default.waitcount) cpus_read_lock()\n     kernfs_break_active_protection(kn)      mutex_lock(&rdtgroup_mutex)\n     cpus_read_lock()                        resctrl_fs_teardown()\n     mutex_lock(&rdtgroup_mutex)              rmdir_all_sub()\n                                              mon_put_kn_priv()\n                                               /* Delete all mon_data structures */\n                                              rdtgroup_destroy_root()\n                                               kernfs_destroy_root()\n                                               rdtgroup_default.kn = NULL\n                                             mutex_unlock(&rdtgroup_mutex)\n     /*\n      * rdtgroup_default.flags is empty so\n      * rdtgroup_kn_lock_live() returns\n      * &rdtgroup_default\n      */\n     md = of->kn->priv;\n\n     /* md points to freed mon_data */\n\nSet RDT_DELETED for the default group unconditionally since the flag does\nnot lead to the freeing of this statically allocated group.\n\nDo not allow a new resctrl mount if there are any waiters on default group\nof previous mount. A new mount will re-initialize the default group that\nwould appear to waiters from previous mount as though the default group is\naccessible causing them to access the mon_data structures from the previous\nmount that have been removed.",
                 "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-72083": {
-                "cve_id": "CVE-2026-72083",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
-                "severity": "CRITICAL",
                 "status": "open",
                 "events": [
                     {
@@ -160876,24 +160910,6 @@
                 "cve_id": "CVE-2026-74630",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: prevent in6_dev_get() from resurrecting inet6_dev\n\nin6_dev_get() reads dev->ip6_ptr under RCU and then unconditionally\nincrements its refcount. Device teardown can clear the pointer and drop\nthe last reference between these operations. The increment then\nresurrects an object whose RCU free has already been queued, so callers\ncan use it after it is freed.\n\nUse refcount_inc_not_zero() and return NULL when the object has already\nreached zero. RCU keeps the memory accessible through the attempted\nreference acquisition, and a successful increment pins the object for\nthe caller.\n\nAn independent run on the exact unpatched 6f5156d7a31a (v7.2-rc3)\nkernel reproduced the invalid reference acquisition as UID 1000:\n\n  refcount_t: addition on 0; use-after-free.\n  ip6_mc_source+0xef4/0x17e0\n\nIt was followed by the corresponding reference underflow in\nip6_mc_source(). The supplied trace from the same unpatched revision\nadditionally shows the access after the RCU read-side section ends:\n\n  BUG: KASAN: slab-use-after-free in mutex_lock+0x76/0xe0\n  Write of size 8 at addr ffff888015b50240 by task poc/1219\n\nBug found and triaged by OpenAI Security Research and\nvalidated by Trail of Bits.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-74631": {
-                "cve_id": "CVE-2026-74631",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -215093,6 +215109,20 @@
                     }
                 ]
             },
+            "CVE-2026-53236": {
+                "cve_id": "CVE-2026-53236",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-53359": {
                 "cve_id": "CVE-2026-53359",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -215107,6 +215137,62 @@
                     }
                 ]
             },
+            "CVE-2026-64027": {
+                "cve_id": "CVE-2026-64027",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-64109": {
+                "cve_id": "CVE-2026-64109",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-68136": {
+                "cve_id": "CVE-2026-68136",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-68338": {
+                "cve_id": "CVE-2026-68338",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-68480": {
                 "cve_id": "CVE-2026-68480",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -215118,6 +215204,34 @@
                         "introduced": "6.17.1-300.fc43",
                         "identifier": "fc43",
                         "fixed": "7.1.7-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-72083": {
+                "cve_id": "CVE-2026-72083",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-74631": {
+                "cve_id": "CVE-2026-74631",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
                     }
                 ]
             },
@@ -241735,20 +241849,6 @@
                     }
                 ]
             },
-            "CVE-2026-53236": {
-                "cve_id": "CVE-2026-53236",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntcp: restrict SO_ATTACH_FILTER to priv users\n\nThis patch restricts the use of SO_ATTACH_FILTER (cBPF) on TCP sockets\nto users with CAP_NET_ADMIN capability.\n\nThis blocks potential side-channel attack where an unprivileged application\nattaches a filter to leak TCP sequence/acknowledgment numbers.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-53238": {
                 "cve_id": "CVE-2026-53238",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -243835,20 +243935,6 @@
                     }
                 ]
             },
-            "CVE-2026-64027": {
-                "cve_id": "CVE-2026-64027",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-64028": {
                 "cve_id": "CVE-2026-64028",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -244050,20 +244136,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Reject restored DTE with out-of-range num_eventid_bits\n\nUserspace can restore an ITS Device Table Entry whose Size field encodes\nmore EventID bits than the virtual ITS supports.  The live MAPD path\nrejects that state, but vgic_its_restore_dte() accepts it and stores the\nout-of-range value in dev->num_eventid_bits.\n\nReject restored DTEs with num_eventid_bits > VITS_TYPER_IDBITS before\nallocating the device.  This mirrors the MAPD check and prevents the\nrestored state from reaching vgic_its_restore_itt(), where the unchecked\nvalue can be converted into an oversized scan_its_table() range.",
                 "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-64109": {
-                "cve_id": "CVE-2026-64109",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
-                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -247125,20 +247197,6 @@
                     }
                 ]
             },
-            "CVE-2026-68136": {
-                "cve_id": "CVE-2026-68136",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68138": {
                 "cve_id": "CVE-2026-68138",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -248404,20 +248462,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject redirect helpers without a bpf_net_context\n\nThe bpf_redirect*() helpers and skb_do_redirect() obtain the per-task\nbpf_redirect_info via bpf_net_ctx_get_ri(), which dereferences the\ncurrent->bpf_net_context unconditionally. That context is established\non the paths that run tc BPF such as sch_handle_{ingress,egress}(),\n*except* for the case where {cls,act}_bpf was attached to a proper\nqdisc. A program running from there reaches the NULL deref in two ways:\n\n* It calls bpf_redirect() directly, which dereferences the context at\n  the top of the helper:\n\n     tc qdisc add dev eth0 root handle 1: red limit 1MB min 10KB max 20KB \\\n        avpkt 1000 burst 100 qevent early_drop block 10\n     tc filter add block 10 pref 1 bpf obj redirect.o\n\n* It simply returns TC_ACT_REDIRECT without helper call: tcf_qevent_handle()\n  then dispatches to skb_do_redirect(), which dereferences the context\n\nRather than extending bpf_net_context management into the qdisc path,\nmake the redirect helpers refuse to operate when no context exists, and\nhave tcf_qevent_handle() drop a TC_ACT_REDIRECT verdict instead of\ncalling skb_do_redirect(). Previous behaviour was a crash, so nothing\nregresses by not supporting it.",
                 "severity": "LOW",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-68338": {
-                "cve_id": "CVE-2026-68338",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: avoid fanout hook re-registration after unregister\n\npacket_set_ring() temporarily detaches a socket from packet delivery while\nreconfiguring its ring. It records the previous running state, clears\npo->num, unregisters the protocol hook when needed, drops po->bind_lock,\nand later restores po->num and re-registers the hook from the saved\nwas_running value.\n\nThat unlocked window can race with NETDEV_UNREGISTER. The notifier can\nobserve the socket as not running, skip __unregister_prot_hook(), and\ninvalidate the per-socket binding by setting po->ifindex to -1 and clearing\npo->prot_hook.dev. A one-member fanout group can still retain its shared\nfanout hook device pointer. When packet_set_ring() resumes, re-registering\nsolely from the stale was_running state can re-add the fanout hook after\nthe device has been unregistered.\n\nTreat po->ifindex == -1 as an invalidated binding after reacquiring\npo->bind_lock. This is distinct from ifindex 0, the normal\nunbound/wildcard state: ifindex -1 marks an existing device binding that\nwas invalidated when the device was unregistered. Restore po->num as\nbefore, but do not re-register the hook if device unregister already\ndetached the socket.",
-                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -249748,20 +249792,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/resctrl: Fix use-after-free during unmount\n\nDuring unmount or failure teardown all mon_data structures that contain\nmonitoring event file private data are freed after which kernfs nodes are\nremoved. However, the RDT_DELETED flag is never set for the statically\nallocated default resource group.\n\nA concurrent reader of an event file associated with the default resource\ngroup may, after dropping kernfs active protection, block on rdtgroup_mutex\nwhile unmount proceeds to free the file private data and destroy the kernfs\nnode without waiting for the reader.\n\nWhen the mutex is released, the reader wakes up, observes that RDT_DELETED\nis not set for the default group, and dereferences the already-freed\nfile private data.\n\nThe scenario can be depicted as follows:\n  CPU0                                      CPU1\n   /*\n    * Default resource group's\n    * monitoring data accessible via\n    * kernfs file with kernfs_node::priv\n    * pointing to a struct mon_data.\n    * User opens the file for reading.\n    */\n   rdtgroup_mondata_show()                 /* arch encounters fatal error */\n    rdtgroup_kn_lock_live()                 resctrl_exit()\n     atomic_inc(&rdtgroup_default.waitcount) cpus_read_lock()\n     kernfs_break_active_protection(kn)      mutex_lock(&rdtgroup_mutex)\n     cpus_read_lock()                        resctrl_fs_teardown()\n     mutex_lock(&rdtgroup_mutex)              rmdir_all_sub()\n                                              mon_put_kn_priv()\n                                               /* Delete all mon_data structures */\n                                              rdtgroup_destroy_root()\n                                               kernfs_destroy_root()\n                                               rdtgroup_default.kn = NULL\n                                             mutex_unlock(&rdtgroup_mutex)\n     /*\n      * rdtgroup_default.flags is empty so\n      * rdtgroup_kn_lock_live() returns\n      * &rdtgroup_default\n      */\n     md = of->kn->priv;\n\n     /* md points to freed mon_data */\n\nSet RDT_DELETED for the default group unconditionally since the flag does\nnot lead to the freeing of this statically allocated group.\n\nDo not allow a new resctrl mount if there are any waiters on default group\nof previous mount. A new mount will re-initialize the default group that\nwould appear to waiters from previous mount as though the default group is\naccessible causing them to access the mon_data structures from the previous\nmount that have been removed.",
                 "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-72083": {
-                "cve_id": "CVE-2026-72083",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
-                "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
                     {
@@ -255403,20 +255433,6 @@
                 "cve_id": "CVE-2026-74630",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: prevent in6_dev_get() from resurrecting inet6_dev\n\nin6_dev_get() reads dev->ip6_ptr under RCU and then unconditionally\nincrements its refcount. Device teardown can clear the pointer and drop\nthe last reference between these operations. The increment then\nresurrects an object whose RCU free has already been queued, so callers\ncan use it after it is freed.\n\nUse refcount_inc_not_zero() and return NULL when the object has already\nreached zero. RCU keeps the memory accessible through the attempted\nreference acquisition, and a successful increment pins the object for\nthe caller.\n\nAn independent run on the exact unpatched 6f5156d7a31a (v7.2-rc3)\nkernel reproduced the invalid reference acquisition as UID 1000:\n\n  refcount_t: addition on 0; use-after-free.\n  ip6_mc_source+0xef4/0x17e0\n\nIt was followed by the corresponding reference underflow in\nip6_mc_source(). The supplied trace from the same unpatched revision\nadditionally shows the access after the RCU read-side section ends:\n\n  BUG: KASAN: slab-use-after-free in mutex_lock+0x76/0xe0\n  Write of size 8 at addr ffff888015b50240 by task poc/1219\n\nBug found and triaged by OpenAI Security Research and\nvalidated by Trail of Bits.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-74631": {
-                "cve_id": "CVE-2026-74631",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
