@@ -77629,7 +77629,7 @@
                 "cve_id": "CVE-2026-98110",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: btintel: bound firmware ID by TLV length\n\nThe firmware ID is treated as a NUL-terminated string even though the\nTLV length is its only boundary. If the value does not contain a NUL\nterminator, snprintf() can read beyond the received response.\n\nLimit the conversion to the advertised TLV value length.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -77642,7 +77642,7 @@
                 "cve_id": "CVE-2026-98111",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: btintel: validate version TLV value lengths\n\nbtintel_parse_version_tlv() verifies that a complete TLV is present in\nthe response, but it does not ensure that the value is long enough for\nthe specific TLV type. A short value can therefore cause an\nout-of-bounds read through get_unaligned_le16(), get_unaligned_le32(),\nor memcpy().\n\nReject values shorter than the minimum required by each known TLV type.\nAlso reject responses that do not contain the Command Complete Status\nfield.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -83163,10 +83163,36 @@
                     }
                 ]
             },
+            "CVE-2026-98927": {
+                "cve_id": "CVE-2026-98927",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: nv: Fix life cycle of the nested_mmus array\n\nThe nested_mmus array holds the shadow page tables that are used when\na guest is running a nested context. These structures are allocated on\nVCPU_INIT for whole guest, which implies that they may have to be\nrelocated as the array grows.\n\nShould a VCPU_INIT occur whilst a vcpu is actively running an L2 and\nthat the allocation requires relocation, that vcpu will still be\nrunning with a pointer to the previous structure, which will have been\nfreed.\n\nFix this by turning the array of structures to an array of pointers,\nwhich is now allocated at VM creation, sized to the absolute maximum\nthat KVM can handle.\n\nIn turn, each VCPU_INIT contributes S2_MMU_PER_VCPU to the pool. No\nreallocation is ever performed, and the life cycle of each object is\nmuch clearer:\n\n- the nested_mmus array is allocated in kvm_init_nested(), and freed\n  in kvm_arch_destroy_vm()\n\n- s2_mmu structures are allocated in kvm_vcpu_init_nested(), and freed\n  on kvm_arch_flush_shadow_all()\n\nFinally, the freeing of vcpu->arch.vncr_array is made consistent\nrather than being done on some failure paths, but not others.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-98974": {
                 "cve_id": "CVE-2026-98974",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix exchange-range-to-eof file size exchange\n\nNorbert Szetei posted a patch containing an incomplete description of a\nbug in XFS_IOC_EXCHANGE_RANGE's TO_EOF flag.  The bug tricks\nexchange-range into modifying a file so that it has shared blocks\nstarting beyond EOF, which is never allowed because files never have\nwritten data beyond EOF, and you can only share written data blocks.\nThis is key to all the incorrect behavior that follows.\n\nEventually I got from Norbert a description of what's going wrong:\n\n> Fair. Here it is with physical block numbers, 4k blocks. peer is the file\n> that gets rewritten and file1 is the one that ends up with the flag\n> cleared.\n>\n> Start, nothing shared:\n>\n>\tpeer size 4096   -> [100]\n>\tfile1 size 12288 -> [200] [201] [202]\n>\tdonor1 size 4096 -> [300]\n>\tdonor2 size 4096 -> [400]\n>\n> 1. FICLONERANGE peer's block into file1's middle slot:\n>\n>\tpeer size 4096   -> [100]\n>\tfile1 size 12288 -> [200] [100] [202] reflink flag set\n>                             ^^^^^ both files own block 100\n>\n> 2. XFS_IOC_EXCHANGE_RANGE file1 against donor1, file1_offset 0,\n> file2_offset 8192, length 0, TO_EOF. One block is exchanged, and the sizes\n> are exchanged with it:\n>\n>\tfile1 size 4096   -> [200] [100] [300] reflink flag set\n>                              ^^^^^^^^^^^ still owned, now past the size\n>\tdonor1 size 12288 -> [202]\n>\n> file1 says it is one block long while it still owns three. Nothing was\n> unmapped. file2_offset is block 2, so this exchange cannot clear a flag.\n>\n> 3. XFS_IOC_EXCHANGE_RANGE file1 against donor2, both offsets 0, length 4096.\n> By i_disk_size this is two one-block files exchanging everything, so\n> xmi_can_exchange_reflink_flags() agrees and the flag is cleared:\n>\n>\tfile1 size 4096   -> [400] [100] [300] reflink flag CLEARED\n>\tdonor2 size 4096  -> [200]\n>\n> Block 100 is still shared with peer.\n>\n> 4. pwrite(file1, 4096, 4096), which is file1's second slot, block 100.\n> xfs_is_cow_inode(file1) is false, so no CoW:\n>\n>\tpeer size 4096 -> [100] same block, new contents\n>\n> Block 100 is the only one that matters here. PoC below, it reads a file\n> called peer in the current directory. The filesystem needs reflink and\n> exchange-range, which mkfs.xfs 7.x turns on by default.\n\nSo yes, TO_EOF is screwing up the file size even if it's actually\nexchanging the data block correctly.  The following is the intended\nbehavior of XFS_EXCHANGE_RANGE_TO_EOF, as described by its manpage:\n\n\"Ignore the length parameter.  All bytes in file1_fd from file1_offset\n to EOF are moved to file2_fd, and file2's size is set to\n (file2_offset+(file1_length-file1_offset)).  Meanwhile, all bytes in\n file2 from file2_offset to EOF are moved to file1 and file1's size is\n set to (file1_offset+(file2_length-file2_offset)).\"\n\nIn other words, if we only exchange a portion of the file data, then we\nshould only exchange the portion of the file size that relates to the\nexchanged data.  Unfortunately, the code swaps the ondisk file size and\nthe incore file sizes, which is incorrect if the caller passes in a\nnonzero offset.\n\nHaving confused the file sizes, the PoC uses a second exchange-range\ncall on what looks like a non-reflinked single-block file.  Because the\nfile size is set incorrectly, exchange-range thinks it's exchanging the\nfull contents of two files and clears the reflink flag on the broken\nfile.  That enables an extending write of the broken file to rewrite the\nshared block that's just past EOF.  This has become known colloquially\nas refluxfs.\n\nOnce the file sizes are set correctly, the second exchange-range no\nlonger thinks that it's doing a full-contents swap, so it won't clear\nthe reflink flag on either of its file arguments.\n\nNorbert followed up to an earlier version of this patch with a second\ncomplaint about us not handling the i_disk_size state correctly:\n\n> The offsets are bounded against the incore i_size but subtracted from\n>\n---truncated---",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98999": {
+                "cve_id": "CVE-2026-98999",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/xe: Fix stale pinned_link entry when fb-pin performs the final unpin\n\nxe_bo_pin_external() and xe_bo_unpin_external() maintain the bo's\npinned_link list membership in xe->pinned.late.external, based on\nwhether the current call is the outermost pin or the final unpin.\nHowever, the same external bo's pin_count can also be raised and\nlowered directly by __xe_pin_fb_vma()/__xe_unpin_fb_vma(), which pin\nthe bo as a display scanout buffer without going through\nxe_bo_pin_external()/xe_bo_unpin_external() at all, and have no\nnotion of, or ownership over, pinned_link.\n\nIf a bo is pinned both externally (e.g. dma-buf export) and as an fb,\nand the external unpin happens first, xe_bo_unpin_external() correctly\nobserves pin_count > 1 and leaves the bo on pinned_link. When the fb\nunpin later performs the true last unpin (pin_count 1 -> 0), it never\ntouches pinned_link, leaving the bo linked on xe->pinned.late.external\nindefinitely. Once the bo is subsequently freed, this stale list entry\npoints into freed memory, corrupting the list and risking a\nuse-after-free the next time the list is walked or spliced.\n\nThe backup object pin/unpin sites in xe_bo_notifier_prepare_pinned()/\nxe_bo_notifier_unprepare_pinned() have the same bypass characteristic,\nthough they never add their bo to a pinned list, so are not affected\nby this particular list-corruption issue.\n\nMove the pinned_link removal into xe_bo_account_unpin(), which already\nruns on every unpin path (kernel, external, framebuffer, backup\nobject) right before the true 1 -> 0 pin_count transition. Since\nlist_del_init() only operates on the node itself, this removal is\nlist-agnostic and safe to perform regardless of which list (external\nor kernel_bo_present) the bo happens to be linked on, or which code\npath is performing the final unpin. Drop the now-redundant explicit\nlist_del_init() calls in xe_bo_unpin_external() and xe_bo_unpin().\n\nv2:\n- New patch\n\nv3:\n- Rebased on changes to previous patch.\n\n(cherry picked from commit ca58d36a1f93af586ee93b340c9f9fd81312cc01)",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -127382,7 +127408,7 @@
                 "cve_id": "CVE-2026-98111",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: btintel: validate version TLV value lengths\n\nbtintel_parse_version_tlv() verifies that a complete TLV is present in\nthe response, but it does not ensure that the value is long enough for\nthe specific TLV type. A short value can therefore cause an\nout-of-bounds read through get_unaligned_le16(), get_unaligned_le32(),\nor memcpy().\n\nReject values shorter than the minimum required by each known TLV type.\nAlso reject responses that do not contain the Command Complete Status\nfield.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {

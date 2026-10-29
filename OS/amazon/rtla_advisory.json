@@ -32034,20 +32034,6 @@
                     }
                 ]
             },
-            "CVE-2026-68136": {
-                "cve_id": "CVE-2026-68136",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: gro: fix double aggregation of flush-marked skbs\n\nCommit 0ab03f353d36 (\"net-gro: Fix GRO flush when receiving a GSO\npacket.\") added a flush check to skb_gro_receive(), but\nskb_gro_receive_list() lacks the same validation.\n\nAs a result, packets marked with NAPI_GRO_CB(skb)->flush may still be\nre-aggregated.\n\nThis allows already-GRO'd packets with existing frag_list to be\nre-aggregated into a new GRO session, corrupting the frag_list chain\nstructure. When skb_segment() attempts to unpack these malformed packets,\nit encounters invalid state and triggers a kernel panic.\n\nScenario (Tethering/Device forwarding):\n  1. Driver: Generated aggregated packet P1 via LRO with frag_list\n  2. Dev A: Receives aggregated fraglist packet and flush flag set\n  3. Dev A: Re-enters GRO, skb_gro_receive_list() is called\n  4. Missing flush check allows re-aggregation despite flush flag\n  5. Frag_list chain becomes corrupted (loops or dangling refs)\n  6. Dev B: TX path calls skb_segment(), crashes on corrupted frag_list\n\nRoot cause in skb_segment():\n  The check at line ~4891:\n    if (hsize <= 0 && i >= nfrags && skb_headlen(list_skb) &&\n        (skb_headlen(list_skb) == len || sg)) {\n\n  When frag_list is corrupted by double aggregation, when list_skb is\n  a NULL pointer from skb->next, skb_headlen(list_skb) dereference\n  NULL/corrupted pointers occurs.\n\nCall Trace:\n skb_headlen(NULL skb)\n skb_segment\n tcp_gso_segment\n tcp4_gso_segment\n inet_gso_segment\n skb_mac_gso_segment\n __skb_gso_segment\n skb_gso_segment\n validate_xmit_skb\n validate_xmit_skb_list\n sch_direct_xmit\n qdisc_restart\n __qdisc_run\n qdisc_run\n net_tx_action\n\nFix: Add NAPI_GRO_CB(skb)->flush validation to the early-return check in\nskb_gro_receive_list(), matching the defensive programming pattern of\nskb_gro_receive().",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-68138": {
                 "cve_id": "CVE-2026-68138",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -34671,20 +34657,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/resctrl: Fix use-after-free during unmount\n\nDuring unmount or failure teardown all mon_data structures that contain\nmonitoring event file private data are freed after which kernfs nodes are\nremoved. However, the RDT_DELETED flag is never set for the statically\nallocated default resource group.\n\nA concurrent reader of an event file associated with the default resource\ngroup may, after dropping kernfs active protection, block on rdtgroup_mutex\nwhile unmount proceeds to free the file private data and destroy the kernfs\nnode without waiting for the reader.\n\nWhen the mutex is released, the reader wakes up, observes that RDT_DELETED\nis not set for the default group, and dereferences the already-freed\nfile private data.\n\nThe scenario can be depicted as follows:\n  CPU0                                      CPU1\n   /*\n    * Default resource group's\n    * monitoring data accessible via\n    * kernfs file with kernfs_node::priv\n    * pointing to a struct mon_data.\n    * User opens the file for reading.\n    */\n   rdtgroup_mondata_show()                 /* arch encounters fatal error */\n    rdtgroup_kn_lock_live()                 resctrl_exit()\n     atomic_inc(&rdtgroup_default.waitcount) cpus_read_lock()\n     kernfs_break_active_protection(kn)      mutex_lock(&rdtgroup_mutex)\n     cpus_read_lock()                        resctrl_fs_teardown()\n     mutex_lock(&rdtgroup_mutex)              rmdir_all_sub()\n                                              mon_put_kn_priv()\n                                               /* Delete all mon_data structures */\n                                              rdtgroup_destroy_root()\n                                               kernfs_destroy_root()\n                                               rdtgroup_default.kn = NULL\n                                             mutex_unlock(&rdtgroup_mutex)\n     /*\n      * rdtgroup_default.flags is empty so\n      * rdtgroup_kn_lock_live() returns\n      * &rdtgroup_default\n      */\n     md = of->kn->priv;\n\n     /* md points to freed mon_data */\n\nSet RDT_DELETED for the default group unconditionally since the flag does\nnot lead to the freeing of this statically allocated group.\n\nDo not allow a new resctrl mount if there are any waiters on default group\nof previous mount. A new mount will re-initialize the default group that\nwould appear to waiters from previous mount as though the default group is\naccessible causing them to access the mon_data structures from the previous\nmount that have been removed.",
                 "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-72083": {
-                "cve_id": "CVE-2026-72083",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: core: Fix iSCSI ISID use-after-free in REGISTER AND MOVE\n\ncore_scsi3_emulate_pro_register_and_move() maps the PERSISTENT RESERVE OUT\nparameter list with transport_kmap_data_sg() and parses the destination\nTransportID with target_parse_pr_out_transport_id(). For an iSCSI\nTransportID (FORMAT CODE 01b), iscsi_parse_pr_out_transport_id() returns\nthe ISID in iport_ptr as a raw pointer into that mapped buffer.\n\nThe function then unmaps the buffer with transport_kunmap_data_sg() before\ndereferencing iport_ptr in strcmp(), __core_scsi3_locate_pr_reg() and\ncore_scsi3_alloc_registration(). When the parameter list spans more than\none page (PARAMETER LIST LENGTH > 4096), transport_kmap_data_sg() uses\nvmap() and transport_kunmap_data_sg() does vunmap(), so the kernel virtual\naddress backing iport_ptr is torn down and every subsequent dereference is\na use-after-free read of the unmapped region.\n\nKeep the parameter list mapped until iport_ptr is no longer needed: drop\nthe early transport_kunmap_data_sg() and unmap once on the success path,\nright before returning. The error paths already unmap through the existing\n\"if (buf) transport_kunmap_data_sg(cmd)\" at the out: label, which now runs\non every post-map error exit because buf is no longer cleared early. Only\nreads of the mapping happen while spinlocks are held; the map and unmap\ncalls remain outside any lock. The sibling caller\ncore_scsi3_decode_spec_i_port() already uses the buffer before unmapping it\nand is left unchanged.",
-                "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
                     {
@@ -40326,20 +40298,6 @@
                 "cve_id": "CVE-2026-74630",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: prevent in6_dev_get() from resurrecting inet6_dev\n\nin6_dev_get() reads dev->ip6_ptr under RCU and then unconditionally\nincrements its refcount. Device teardown can clear the pointer and drop\nthe last reference between these operations. The increment then\nresurrects an object whose RCU free has already been queued, so callers\ncan use it after it is freed.\n\nUse refcount_inc_not_zero() and return NULL when the object has already\nreached zero. RCU keeps the memory accessible through the attempted\nreference acquisition, and a successful increment pins the object for\nthe caller.\n\nAn independent run on the exact unpatched 6f5156d7a31a (v7.2-rc3)\nkernel reproduced the invalid reference acquisition as UID 1000:\n\n  refcount_t: addition on 0; use-after-free.\n  ip6_mc_source+0xef4/0x17e0\n\nIt was followed by the corresponding reference underflow in\nip6_mc_source(). The supplied trace from the same unpatched revision\nadditionally shows the access after the RCU read-side section ends:\n\n  BUG: KASAN: slab-use-after-free in mutex_lock+0x76/0xe0\n  Write of size 8 at addr ffff888015b50240 by task poc/1219\n\nBug found and triaged by OpenAI Security Research and\nvalidated by Trail of Bits.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.13-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-74631": {
-                "cve_id": "CVE-2026-74631",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: smc: fix splice entry lifetime imbalance in smc_rx_splice\n\nsmc_rx_splice() passes pages to splice_to_pipe() before taking the\nreferences that cover the lifetime of each splice entry. In the\nVM-backed RMB path, splice_to_pipe() may drop unqueued entries through\nsmc_rx_spd_release(), while queued entries are released later via the\npipe buffer callback.\n\nThe old post-splice accounting also derives the number of queued VM pages\nfrom an offset mutated while building the descriptor, and a multi-page\nsplice pairs one sock_hold() with multiple sock_put() calls.\n\nTake the page and socket references for every candidate entry before\nsplice_to_pipe(), and drop the matching private state, page reference,\nand socket reference from smc_rx_spd_release() for entries that never\nget queued. This fixes a refcount imbalance that can underflow page\nrefcounts and trigger a use-after-free.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -55418,7 +55376,7 @@
                 "cve_id": "CVE-2026-98110",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: btintel: bound firmware ID by TLV length\n\nThe firmware ID is treated as a NUL-terminated string even though the\nTLV length is its only boundary. If the value does not contain a NUL\nterminator, snprintf() can read beyond the received response.\n\nLimit the conversion to the advertised TLV value length.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -55432,7 +55390,7 @@
                 "cve_id": "CVE-2026-98111",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: btintel: validate version TLV value lengths\n\nbtintel_parse_version_tlv() verifies that a complete TLV is present in\nthe response, but it does not ensure that the value is long enough for\nthe specific TLV type. A short value can therefore cause an\nout-of-bounds read through get_unaligned_le16(), get_unaligned_le32(),\nor memcpy().\n\nReject values shorter than the minimum required by each known TLV type.\nAlso reject responses that do not contain the Command Complete Status\nfield.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -61252,10 +61210,38 @@
                     }
                 ]
             },
+            "CVE-2026-98927": {
+                "cve_id": "CVE-2026-98927",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: nv: Fix life cycle of the nested_mmus array\n\nThe nested_mmus array holds the shadow page tables that are used when\na guest is running a nested context. These structures are allocated on\nVCPU_INIT for whole guest, which implies that they may have to be\nrelocated as the array grows.\n\nShould a VCPU_INIT occur whilst a vcpu is actively running an L2 and\nthat the allocation requires relocation, that vcpu will still be\nrunning with a pointer to the previous structure, which will have been\nfreed.\n\nFix this by turning the array of structures to an array of pointers,\nwhich is now allocated at VM creation, sized to the absolute maximum\nthat KVM can handle.\n\nIn turn, each VCPU_INIT contributes S2_MMU_PER_VCPU to the pool. No\nreallocation is ever performed, and the life cycle of each object is\nmuch clearer:\n\n- the nested_mmus array is allocated in kvm_init_nested(), and freed\n  in kvm_arch_destroy_vm()\n\n- s2_mmu structures are allocated in kvm_vcpu_init_nested(), and freed\n  on kvm_arch_flush_shadow_all()\n\nFinally, the freeing of vcpu->arch.vncr_array is made consistent\nrather than being done on some failure paths, but not others.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-98974": {
                 "cve_id": "CVE-2026-98974",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix exchange-range-to-eof file size exchange\n\nNorbert Szetei posted a patch containing an incomplete description of a\nbug in XFS_IOC_EXCHANGE_RANGE's TO_EOF flag.  The bug tricks\nexchange-range into modifying a file so that it has shared blocks\nstarting beyond EOF, which is never allowed because files never have\nwritten data beyond EOF, and you can only share written data blocks.\nThis is key to all the incorrect behavior that follows.\n\nEventually I got from Norbert a description of what's going wrong:\n\n> Fair. Here it is with physical block numbers, 4k blocks. peer is the file\n> that gets rewritten and file1 is the one that ends up with the flag\n> cleared.\n>\n> Start, nothing shared:\n>\n>\tpeer size 4096   -> [100]\n>\tfile1 size 12288 -> [200] [201] [202]\n>\tdonor1 size 4096 -> [300]\n>\tdonor2 size 4096 -> [400]\n>\n> 1. FICLONERANGE peer's block into file1's middle slot:\n>\n>\tpeer size 4096   -> [100]\n>\tfile1 size 12288 -> [200] [100] [202] reflink flag set\n>                             ^^^^^ both files own block 100\n>\n> 2. XFS_IOC_EXCHANGE_RANGE file1 against donor1, file1_offset 0,\n> file2_offset 8192, length 0, TO_EOF. One block is exchanged, and the sizes\n> are exchanged with it:\n>\n>\tfile1 size 4096   -> [200] [100] [300] reflink flag set\n>                              ^^^^^^^^^^^ still owned, now past the size\n>\tdonor1 size 12288 -> [202]\n>\n> file1 says it is one block long while it still owns three. Nothing was\n> unmapped. file2_offset is block 2, so this exchange cannot clear a flag.\n>\n> 3. XFS_IOC_EXCHANGE_RANGE file1 against donor2, both offsets 0, length 4096.\n> By i_disk_size this is two one-block files exchanging everything, so\n> xmi_can_exchange_reflink_flags() agrees and the flag is cleared:\n>\n>\tfile1 size 4096   -> [400] [100] [300] reflink flag CLEARED\n>\tdonor2 size 4096  -> [200]\n>\n> Block 100 is still shared with peer.\n>\n> 4. pwrite(file1, 4096, 4096), which is file1's second slot, block 100.\n> xfs_is_cow_inode(file1) is false, so no CoW:\n>\n>\tpeer size 4096 -> [100] same block, new contents\n>\n> Block 100 is the only one that matters here. PoC below, it reads a file\n> called peer in the current directory. The filesystem needs reflink and\n> exchange-range, which mkfs.xfs 7.x turns on by default.\n\nSo yes, TO_EOF is screwing up the file size even if it's actually\nexchanging the data block correctly.  The following is the intended\nbehavior of XFS_EXCHANGE_RANGE_TO_EOF, as described by its manpage:\n\n\"Ignore the length parameter.  All bytes in file1_fd from file1_offset\n to EOF are moved to file2_fd, and file2's size is set to\n (file2_offset+(file1_length-file1_offset)).  Meanwhile, all bytes in\n file2 from file2_offset to EOF are moved to file1 and file1's size is\n set to (file1_offset+(file2_length-file2_offset)).\"\n\nIn other words, if we only exchange a portion of the file data, then we\nshould only exchange the portion of the file size that relates to the\nexchanged data.  Unfortunately, the code swaps the ondisk file size and\nthe incore file sizes, which is incorrect if the caller passes in a\nnonzero offset.\n\nHaving confused the file sizes, the PoC uses a second exchange-range\ncall on what looks like a non-reflinked single-block file.  Because the\nfile size is set incorrectly, exchange-range thinks it's exchanging the\nfull contents of two files and clears the reflink flag on the broken\nfile.  That enables an extending write of the broken file to rewrite the\nshared block that's just past EOF.  This has become known colloquially\nas refluxfs.\n\nOnce the file sizes are set correctly, the second exchange-range no\nlonger thinks that it's doing a full-contents swap, so it won't clear\nthe reflink flag on either of its file arguments.\n\nNorbert followed up to an earlier version of this patch with a second\ncomplaint about us not handling the i_disk_size state correctly:\n\n> The offsets are bounded against the incore i_size but subtracted from\n>\n---truncated---",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.13-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-98999": {
+                "cve_id": "CVE-2026-98999",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/xe: Fix stale pinned_link entry when fb-pin performs the final unpin\n\nxe_bo_pin_external() and xe_bo_unpin_external() maintain the bo's\npinned_link list membership in xe->pinned.late.external, based on\nwhether the current call is the outermost pin or the final unpin.\nHowever, the same external bo's pin_count can also be raised and\nlowered directly by __xe_pin_fb_vma()/__xe_unpin_fb_vma(), which pin\nthe bo as a display scanout buffer without going through\nxe_bo_pin_external()/xe_bo_unpin_external() at all, and have no\nnotion of, or ownership over, pinned_link.\n\nIf a bo is pinned both externally (e.g. dma-buf export) and as an fb,\nand the external unpin happens first, xe_bo_unpin_external() correctly\nobserves pin_count > 1 and leaves the bo on pinned_link. When the fb\nunpin later performs the true last unpin (pin_count 1 -> 0), it never\ntouches pinned_link, leaving the bo linked on xe->pinned.late.external\nindefinitely. Once the bo is subsequently freed, this stale list entry\npoints into freed memory, corrupting the list and risking a\nuse-after-free the next time the list is walked or spliced.\n\nThe backup object pin/unpin sites in xe_bo_notifier_prepare_pinned()/\nxe_bo_notifier_unprepare_pinned() have the same bypass characteristic,\nthough they never add their bo to a pinned list, so are not affected\nby this particular list-corruption issue.\n\nMove the pinned_link removal into xe_bo_account_unpin(), which already\nruns on every unpin path (kernel, external, framebuffer, backup\nobject) right before the true 1 -> 0 pin_count transition. Since\nlist_del_init() only operates on the node itself, this removal is\nlist-agnostic and safe to perform regardless of which list (external\nor kernel_bo_present) the bo happens to be linked on, or which code\npath is performing the final unpin. Drop the now-redundant explicit\nlist_del_init() calls in xe_bo_unpin_external() and xe_bo_unpin().\n\nv2:\n- New patch\n\nv3:\n- Rebased on changes to previous patch.\n\n(cherry picked from commit ca58d36a1f93af586ee93b340c9f9fd81312cc01)",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
