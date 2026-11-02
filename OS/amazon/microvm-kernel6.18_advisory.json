@@ -3996,7 +3996,7 @@
                 "cve_id": "CVE-2026-68095",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfuse-uring: fix race between registration and connection abortion\n\nThis fixes this race:\n- thread a: io_uring_enter -> register sqe ->\n  fuse_uring_create_ring_ent -> allocate ent but doesn't grab queue_ref\n  yet\n- thread b: fuse_conn_destroy() -> fuse_chan_abort() ->\n  fuse_uring_abort() is a no-op due to queue ref being 0\n- thread a: grabs the queue_ref, queue_ref is now 1, rest of\n  fuse_uring_do_register() logic executes\n- thread b: fuse_chan_abort() returns, fuse_chan_wait_aborted() now runs\n  and calls\n  \"wait_event(ring->stop_waitq, atomic_read(&ring->queue_refs) == 0);\"\nThe abort/unmount thread will hang indefinitely in unkillable state as\nnothing will decrement queue_refs or wake stop_waitq, and the ring,\nqueue, and ent are leaked.\n\nFix this by checking fch->connected under fch->lock after the created\nent has grabbed a ref count on the queue. This ensures that in the\nscenario above, it is guaranteed that we either release the queue ref\nand wake up stop_waitq (in case fuse_chan_wait_aborted() is already\nwaiting) in fuse_uring_do_register() when we detect !fch->connected, or\nif the connection is aborted after the check, it is guaranteed that the\nasync teardown worker will be running in the background cleaning up ents\nand decrementing the ent's ref on the queue, which will unblock the\neventual queue and ring teardown.",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -5900,7 +5900,7 @@
                 "cve_id": "CVE-2026-72097",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndm-verity: fix a possible NULL pointer dereference\n\nFix a possible NULL pointer dereference dm_verity_loadpin_is_bdev_trusted\nif the device has no table.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -11402,7 +11402,7 @@
                 "cve_id": "CVE-2026-80620",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRevert \"PCI/MSI: Unmap MSI-X region on error\"\n\nThis reverts commit 1a8d4c6ecb4c81261bcdf13556abd4a958eca202.\n\nCommit 1a8d4c6ecb4c (\"PCI/MSI: Unmap MSI-X region on error\") added an\niounmap(dev->msix_base) on the error path of msix_capability_init() to\nrelease the MSI-X region when msix_setup_interrupts() fails.\n\nWhen msix_setup_interrupts() fails, the call chain is:\n\n  msix_setup_interrupts()\n    -> __msix_setup_interrupts()\n         struct pci_dev *dev __free(free_msi_irqs) = __dev;\n         ...\n         return ret;  // __free cleanup fires on error\n\nThe __free(free_msi_irqs) cleanup calls pci_free_msi_irqs(), which\nalready handles the unmap:\n\n  void pci_free_msi_irqs(struct pci_dev *dev)\n  {\n      pci_msi_teardown_msi_irqs(dev);\n      if (dev->msix_base) {\n          iounmap(dev->msix_base);   // already unmapped here\n          dev->msix_base = NULL;     // and set to NULL\n      }\n  }\n\nSo dev->msix_base is unmapped and set to NULL before\nmsix_setup_interrupts() returns to msix_capability_init(). The\n\"goto out_unmap\" introduced by commit 1a8d4c6ecb4c (\"PCI/MSI: Unmap\nMSI-X region on error\") then calls iounmap() a second time on a NULL\npointer.\n\nThis was reproduced on Intel Emerald Rapids (192 CPUs) while\nrunning tools/testing/selftests/kexec/test_kexec_jump.sh:\n\n  WARNING: CPU#44 at iounmap+0x2a/0xe0\n  RIP: 0010:iounmap+0x2a/0xe0\n  RDI: 0000000000000000\n  Call Trace:\n   msix_capability_init+0x317/0x3f0\n   __pci_enable_msix_range+0x21d/0x2c0\n   pci_alloc_irq_vectors_affinity+0xa9/0x130\n   nvme_setup_io_queues+0x2a8/0x420 [nvme]\n   nvme_reset_work+0x151/0x340 [nvme]\n   ...\n\nRDI=0 confirms iounmap() is called with NULL.\n\nRestore the original \"goto out_disable\" and leave the unmap to the\nexisting __free(free_msi_irqs) cleanup.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -11416,7 +11416,7 @@
                 "cve_id": "CVE-2026-80621",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI: dwc: Avoid dwc_pcie_rasdes_debugfs_deinit() NULL dereference when no RAS DES capability\n\ndwc_pcie_rasdes_debugfs_init() returns success when the controller has no\nRAS DES capability, leaving pci->debugfs->rasdes_info unset. The common\ndebugfs teardown path still calls dwc_pcie_rasdes_debugfs_deinit(), which\ndereferences rasdes_info unconditionally.\n\nReturn early when no RAS DES state was allocated. In that case no RAS DES\nmutex was initialized, so there is nothing to destroy.\n\n[mani: reworded subject]",
-                "severity": "LOW",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -16162,7 +16162,7 @@
                 "cve_id": "CVE-2026-90063",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvirtio-net: Ensure that TCP packets don't overflow gso_segs\n\nThe user can specify any gso_size in a packet crafted with an AF_PACKET\nPACKET_VNET_HDR socket, even smaller than TCP_MIN_GSO_SIZE = 8. At the\nsame time, GSO_MAX_SIZE = 8 * GSO_MAX_SEGS = 8 * 65535. When the user\ncrafts a packet with gso_size < 8, there is a risk for partial GSO to\noverflow the 16-bit gso_segs field when dividing the SKB length by\ngso_size.\n\nAdjust gso_size of TCP packets to be at least TCP_MIN_GSO_SIZE = 8. Keep\ngso_size of UDP GSO packets, as gso_size=1 is valid and explicitly\ntested at tools/testing/selftests/net/tun.c:649.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -16778,7 +16778,7 @@
                 "cve_id": "CVE-2026-90200",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/ntfs3: fix integer overflow in MFT cluster validation\n\nIn ntfs_init_from_boot(), the boot sector's MFT cluster numbers are\nvalidated against the volume size with:\n\n\tif (mlcn  * sct_per_clst >= sectors ||\n\t    mlcn2 * sct_per_clst >= sectors)\n\t\tgoto out;\n\nmlcn and mlcn2 are u64 fields read directly from the boot sector.\nsct_per_clst is bounded above by 4096 (true_sectors_per_clst() plus\nthe is_power_of_2() check below it), but the multiplication is done\nin u64 and wraps when mlcn (or mlcn2) is large enough -- e.g. mlcn\nnear 2^62 with sct_per_clst == 4 wraps to 0, which compares below\nany non-zero 'sectors', so the check is bypassed and the malformed\nrecord is accepted.\n\nThe accepted mlcn is then used unchanged in\n\n\tsbi->mft.lbo = mlcn << cluster_bits;\n\nIn practice the resulting reads fail at the block layer (sb_bread()\nreturns NULL via grow_buffers()'s check_mul_overflow() guard), so\ntoday this manifests as mount failing in odd places rather than as\nsomething more dangerous, but the validation step is still wrong\nand there is no reason for callers to rely on the block layer to\ncatch a value that should never have been accepted in the first\nplace.\n\nUse check_mul_overflow() to compute the two sector positions and\nfail the mount if either multiplication wraps; this preserves the\nexisting semantics (mlcn * sct_per_clst >= sectors) instead of\nswitching to division (mlcn >= sectors / sct_per_clst), which\nwould tighten the check at edge cases where 'sectors' is not a\nmultiple of sct_per_clst.  The check_*_overflow() style is the\none ntfs3 already uses for similar on-disk arithmetic in\nfs/ntfs3/run.c.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -18864,7 +18864,7 @@
                 "cve_id": "CVE-2026-97439",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs/ntfs3: preserve non-DOS attribute bits in system.dos_attrib\n\n[BUG]\nA corrupted ntfs3 image can hit a NULL function pointer call in\ngeneric_perform_write() after toggling system.ntfs_attrib and then\noverwriting system.dos_attrib on the same file.\n\nBUG: kernel NULL pointer dereference, address: 0000000000000000\n\\#PF: supervisor instruction fetch in kernel mode\n\\#PF: error_code(0x0010) - not-present page\nPGD bed5067 P4D bed5067 PUD 0\nOops: Oops: 0010 [#1] SMP KASAN NOPTI\nRIP: 0010:0x0\nCode: Unable to access opcode bytes at 0xffffffffffffffd6.\nRSP: 0018:ffff88801025f988 EFLAGS: 00010246\nCall Trace:\n generic_perform_write+0x409/0x8c0 mm/filemap.c:4255\n __generic_file_write_iter+0x1bb/0x200 mm/filemap.c:4372\n ntfs_file_write_iter+0xcd9/0x1c20 fs/ntfs3/file.c:1253\n new_sync_write fs/read_write.c:593 [inline]\n vfs_write+0x63b/0xf70 fs/read_write.c:686\n ksys_write+0x133/0x250 fs/read_write.c:738\n __do_sys_write fs/read_write.c:749 [inline]\n __se_sys_write fs/read_write.c:746 [inline]\n __x64_sys_write+0x77/0xc0 fs/read_write.c:746\n ...\n\n[CAUSE]\nsystem.ntfs_attrib updates ATTR_DATA flags via ni_new_attr_flags()\nand switches i_mapping->a_ops to ntfs_aops_cmpr when\nFILE_ATTRIBUTE_COMPRESSED is set. system.dos_attrib then overwrites\nni->std_fa from a one-byte DOS attribute value, clearing the compression\nbit without updating ATTR_DATA or the mapping operations.\n\nOld buffered writes use is_compressed(ni) to choose\n__generic_file_write_iter(). That leaves generic_perform_write() calling\na NULL write_begin callback from ntfs_aops_cmpr.\n\n[FIX]\nTreat system.dos_attrib as a low-byte DOS attribute update and preserve the\nexisting non-DOS attribute bits in ni->std_fa. This keeps compressed and\nsparse state consistent with ATTR_DATA and the mapping operations while\nkeeping the existing DOS attribute semantics intact.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -18976,7 +18976,7 @@
                 "cve_id": "CVE-2026-97449",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nACPICA: Add package limit checks in parser functions\n\nAdd package limit checks in parser functions to prevent out-of-bounds\naccess.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -20740,7 +20740,7 @@
                 "cve_id": "CVE-2026-98077",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nf_conntrack_sip: fix OOB read in sip_skip_whitespace()\n\nsip_skip_whitespace() returns dptr unchanged when its own loop\nexhausts the buffer (dptr == limit), instead of NULL like its sibling\nsip_follow_continuation() returns on its own \"no more data\" path.\n\nct_sip_get_header() only checks for NULL after calling it:\n\n  dptr = sip_skip_whitespace(dptr, limit);\n  if (dptr == NULL)\n          break;\n  if (*dptr != ':' || ++dptr >= limit)\n          break;\n\nso a recognized header name followed only by spaces/tabs running to\nthe exact end of the SIP payload, with no colon, makes the very next\nstatement read one byte past the buffer.\n\nMake both \"no more data\" outcomes return NULL, matching the\nconvention sip_follow_continuation() already uses and that both\nexisting callers already check for.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -20838,7 +20838,7 @@
                 "cve_id": "CVE-2026-98084",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: backtracking shouldn't clear outer frame R1-R5 for callbacks\n\nWhen processing calls to bpf_loop() verifier marks R1 (and R4) as\nprecise. R1 tracks loop iterations number and because of the\n'callback_depth < R1' mechanics in check_helper_call() must be marked\nprecise. However, precision propagation for R1 was broken,\nwhen bpf_loop() call was verified on a second iteration.\n\nConsider the following verification trace:\n- main: bpf_loop(nr_loops, callback ...)\n- callback: BPF_EXIT\n- main: bpf_loop(nr_loops, callback ...)\n- ...\n\nWhile the first visit of the call to bpf_loop() propagated R1\nprecision as expected, the second call to mark_chain_precision() in\nthe check_helper_call() set R1, but it was immediately reset when\nbacktrack_insn() processed preceding BPF_EXIT in the loop deleted in\nthis patch.\n\nBecause of that, the second visit of the call to bpf_loop() injected\ncheckpoint with R1 not marked as precise. Which could trick the\nverifier into accepting unsafe programs. See the next patch for an\nexample of such program.\n\nCommit is structured in a way to minimize conflicts when\n'bpf' would be eventually merged with 'bpf-next'.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -21622,7 +21622,7 @@
                 "cve_id": "CVE-2026-98244",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbtrfs: clear free space tree creation state on rebuild failure\n\nbtrfs_rebuild_free_space_tree() sets BTRFS_FS_CREATING_FREE_SPACE_TREE\nbefore rebuilding the free space tree.  Several error paths return\nwithout clearing this flag.\n\nThe transaction restart failure path can leave the flag set on a live\nfilesystem, causing delayed reference processing to be skipped. Clear it\non all free space tree rebuild failure paths. Keep\nBTRFS_FS_FREE_SPACE_TREE_UNTRUSTED set, since a failed rebuild leaves\nthe free space tree untrusted. Callers must fall back to extent-tree\ncaching.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -21650,7 +21650,7 @@
                 "cve_id": "CVE-2026-98248",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm64: percpu: Fix LSE operations on {8,16}-bit types\n\nThe assembly for __percpu_##name##_case_##sz() and\n__percpu_##name##_return_case_##sz() doesn't use the 'sfx' macro\nargument to form the LSE instruction. Without 'sfx', a W register\nargument will imply a 32-bit memory location, and consequently\n{8,16}-bit ops will erroneously read and write 32 bits of memory when\nthe LSE instruction is used.\n\nFix this by appending 'sfx' to 'op_lse' to LSE instruction. It is not\nnecessary (and not valid) to append 'sfx' to 'op_llsc', as 'op_llsc' is\na register-register operation which does not access memory (and does not\ntake a size suffix).",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -24618,7 +24618,7 @@
                 "cve_id": "CVE-2026-98880",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nntfs3: handle set_blocksize failures\n\nntfs3 uses buffer_heads, which don't handle block size > PAGE_SIZE well.\nWithout this, mounting we will hit the\n\n        BUG_ON(offset >= folio_size(folio));\n\nin folio_set_bh on the first __bread_gfp call.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -24646,7 +24646,7 @@
                 "cve_id": "CVE-2026-98883",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nserial: 8250_port: recognize UPIO_AU\n\nMy MIPS Alchemy systems generate the following warning during\nprobe of the 8250 driver:\n\nWARNING: drivers/tty/serial/8250/8250_port.c:462 at set_io_from_upio+0xfc/0x124, CPU#0: swapper/0/1\nUnsupported UART type 4\n[...]\n[<80521d40>] set_io_from_upio+0xfc/0x124\n[<80521dfc>] serial8250_set_defaults+0x94/0xe0\n[<80520fb4>] serial8250_register_8250_port+0x288/0x51c\n[<805214ec>] serial8250_probe+0x160/0x1e8\n[<8053b5f0>] platform_probe+0x64/0x90\n\nThe least invasive fix is to recognize UPIO_AU (type 4) in set_io_from_upio()\nand do nothing, since all parameters have already been set up in\n8250_rt288x.c::au_platform_setup().\n\nRun-tested on Alchemy Au1300 platform.",
-                "severity": "LOW",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -24758,7 +24758,7 @@
                 "cve_id": "CVE-2026-98923",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm64: io: Reject non-user protection in ioremap_prot()\n\nMapping a stack-top page via /dev/mem with PROT_NONE and then\nreading that process's /proc/<pid>/cmdline triggers a spurious WARN\nin ioremap_prot() through generic_access_phys():\n\n  WARNING: ./arch/arm64/include/asm/io.h:275 at generic_access_phys\n  Call trace:\n    generic_access_phys+0x1c8/0x228 (P)\n    __access_remote_vm+0x2b4/0x398\n    access_remote_vm+0x14/0x30\n    get_mm_cmdline+0xf8/0x2a0\n    proc_pid_cmdline_read+0x68/0x120\n\ngeneric_access_phys() passes the protection derived from the user PTE\nto ioremap_prot(). On arm64, a PROT_NONE mapping is represented by a\npresent-invalid PTE, so pte_present() still returns true and the\nprotection reaches ioremap_prot().\n\nA PROT_NONE mapping does not have PTE_USER, causing the existing\nWARN_ON_ONCE() in ioremap_prot() to fire even though this is a valid\nuser mapping. Execute-only mappings have the same issue and must not\nbe readable through this path either.\n\nioremap_prot() should therefore reject protection values without\nPTE_USER without warning. This makes the access fail cleanly for\nPROT_NONE and execute-only mappings while retaining the existing\nuser-protection contract.",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
