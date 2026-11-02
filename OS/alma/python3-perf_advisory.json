@@ -8083,6 +8083,20 @@
                     }
                 ]
             },
+            "CVE-2026-98432": {
+                "cve_id": "CVE-2026-98432",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-687.64.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-99999": {
                 "cve_id": "CVE-2026-99999",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -89986,6 +90000,24 @@
                     }
                 ]
             },
+            "CVE-2026-99181": {
+                "cve_id": "CVE-2026-99181",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nautofs: ignore notification errors from a replaced pipe\n\nautofs_notify_daemon() takes a reference to the current notification\npipe under wq_mutex, then drops the mutex before writing the request. The\nwrite can block while the daemon enters catatonic mode and installs a\nreplacement pipe.\n\nIf the old pipe's reader is then closed, the delayed write returns -EPIPE\nand the generic error path enters catatonic mode again. That transition\nacts on the current superblock state, closes the replacement pipe, and\nreleases the new daemon generation's wait queues.\n\nOnly enter catatonic mode when the pipe which failed is still the current\npipe. Factor the already-locked transition so the identity check and state\nchange are atomic with respect to another replacement.\n\nThis was reproduced on v7.3-rc5-337-gff47652a4b66c in a local QEMU guest.\nAn unprivileged UID 65534 lookup filled the old packet pipe before a\nnormal CATATONIC/SETPIPEFD restart. On the unmodified kernel, the new pipe\nreceived HUP and both a pending victim lookup and a later lookup failed\nwith ENOENT in two out of two fresh-mount runs.\n\nWith this change, the new pipe remained active, received an intact\n304-byte request, and both victim lookups completed in two out of two\nruns. Normal lookup and restart-without-a-blocked-writer controls passed.\nNo KASAN, oops, refcount, or lock diagnostic was observed. A source\nreproducer and complete local logs are available privately on request.\n\nThe demonstrated impact is limited to denial of a shared autofs service\nduring a legitimate daemon restart. No memory corruption, information leak,\nprivilege escalation, or code execution primitive was observed.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99182": {
                 "cve_id": "CVE-2026-99182",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -90004,10 +90036,100 @@
                     }
                 ]
             },
+            "CVE-2026-99186": {
+                "cve_id": "CVE-2026-99186",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/insn-eval: Fix shadowed segment index in get_seg_reg_override_idx()\n\nCommit 45e1dccc0653 (\"x86/insn: Simplify for_each_insn_prefix()\") made\nfor_each_insn_prefix() declare its own loop counter named idx.\nget_seg_reg_override_idx() keeps its result in a local of the same name,\nso the assignments in the loop body now write the loop counter:\n\n - the function always returns INAT_SEG_REG_DEFAULT, so FS and GS\n   overrides are ignored;\n\n - a CS override sets the counter to INAT_SEG_REG_CS (2), the increment\n   makes it 3, and prefixes.bytes[3] holds the last prefix, 0x2e again,\n   so the loop never terminates.\n\nThe UMIP emulation reaches this from the #GP handler for user space: an\nSGDT, SIDT or SMSW with a memory operand and a CS prefix leaves the task\nspinning in the kernel, never returning to user space, with a SIGKILL\nthat is never delivered.  Any user can thus tie up CPUs until reboot.\nWith an FS or GS prefix, the emulated result is written to the wrong\naddress.\n\nRename the internal macro iterator variable.\n\n[ Lukas' original patch renamed the use site, I changed it to rename the\n  iterator in the macro instead, but left Lukas' commit message and\n  authorship   - Linus ]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99187": {
+                "cve_id": "CVE-2026-99187",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Fix perf_pmu_migrate_context() leaving events behind\n\n__perf_pmu_remove() walks the group leaders of a CPU and PMU with\nperf_event_groups_for_cpu_pmu(), removing each one as it goes.\nperf_remove_from_context() takes the leader out of the groups rbtree,\nafter which rb_next() on that node returns NULL, prematurely ending the\nwalk. Other groups stay behind in the source context.\n\nOn CPU hotplug, they are then torn down with the dying CPU. They keep\nrunning until teardown, while the PMU's interrupt and migrated events\nare on a new CPU, which drivers rely on never happening.\n\nWalk ctx->event_list instead and pick out the PMU's events by their\npmu_ctx.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99189": {
+                "cve_id": "CVE-2026-99189",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ngpio: mxc: fix race between chained IRQ handler install and probe completion\n\nmxc_update_irq_chained_handler() is called before the IRQ domain, the\ngeneric IRQ chip, and the port list entry are set up. If an interrupt\narrives in that window:\n\n - mx3_gpio_irq_handler() calls generic_handle_domain_irq() with\n   port->domain still NULL.\n - mx2_gpio_irq_handler() walks mxc_gpio_ports, but the port has not\n   been added to the list yet.\n\nAdditionally, if any of the subsequent probe steps\n(gpio_generic_chip_init(), devm_gpiochip_add_data(),\nirq_domain_create_legacy(), or mxc_gpio_init_gc()) fail, the error\npaths never unregister the chained handler, leaving a dangling handler\nthat points at freed memory.\n\nMove the handler installation after all its dependencies are ready and\nafter list_add_tail(), so the handler is never live while the data\nstructures it touches are incomplete, and is never installed if probe\nfails.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99192": {
+                "cve_id": "CVE-2026-99192",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bcmgenet: unshare the skb before writing the control block\n\nbcmgenet stores first_cb, last_cb and bytes_sent in the skb control\nblock and reads them back on completion to free the skb and credit BQL.\nether_setup() leaves IFF_TX_SKB_SHARING set, so the stack can resubmit\na shared skb that is still in the ring. The next transmit overwrites\nlast_cb, so the earlier slots complete without crediting their bytes\nand BQL stalls the queue until the watchdog resets it.\n\nUnshare the skb before writing the control block.\n\nReproduce with pktgen in clone_skb mode, which hands the driver the same\nskb while earlier copies are still in the ring:\n\n  modprobe pktgen\n  pg=/proc/net/pktgen\n  echo \"add_device eth0\" > $pg/kpktgend_0\n  echo \"dst_mac AA:BB:CC:DD:EE:FF\" > $pg/eth0\n  echo \"dst 192.0.2.1\" > $pg/eth0\n  echo \"clone_skb 8\" > $pg/eth0\n  echo \"count 0\" > $pg/eth0\n  echo start > $pg/pgctrl &\n  sleep 5\n  echo stop > $pg/pgctrl\n  wait\n  cat /sys/class/net/eth0/queues/tx-0/byte_queue_limits/inflight\n\ninflight stays nonzero on the now idle queue. clone_skb 0 leaves it at\nzero.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99194": {
                 "cve_id": "CVE-2026-99194",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: ethernet: aeroflex: move setting of netops to fix crash\n\ngreth_of_probe() calls greth_mdio_init(), which connects the PHY,\nbefore dev->netdev_ops is assigned. phy_attach_direct() ->\nphy_link_topo_add_phy() reads dev->netdev_ops through\nnetdev_need_ops_lock() since the commit in question, so probing crashes\nwith a NULL pointer dereference when CONFIG_NET_SHAPER is enabled.\n\nAssign netdev_ops before the PHY attach, as was done for emac in commit\n7c9f391ec89c (\"net: emac: move setting of netops to fix crash\").",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99202": {
+                "cve_id": "CVE-2026-99202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libsas: Fix SMP IO deadlock during HA resume\n\nsmp_execute_task_sg() calls pm_runtime_get_sync() on the host before\nissuing an SMP command. When that command is itself issued from the HA\nresume path, the get_sync() deadlocks: it waits for the ongoing resume\n(the device is RPM_RESUMING), while the resume is blocked in\nsas_drain_work() waiting for that same SMP IO to complete.\n\nThe deadlock needs an expander-attached SATA disk. During\nsas_resume_ha() -> sas_drain_work(), DISCE_RESUME -> sas_resume_sata()\n-> ata_sas_port_resume() requests ATA_EH_RESET, and the hard reset for\nsuch a disk is done via SMP PHY CONTROL (sas_ata_hard_reset() ->\nsas_phy_reset() -> sas_smp_phy_control() ->\nsmp_execute_task_sg()). Direct-attached SATA resets through\nlldd_control_phy() and SSP devices use TMFs, so neither hits this.\n\nReplace the get_sync()/put_sync() pair with\npm_runtime_get_noresume()/pm_runtime_put(). smp_execute_task_sg() only\nneeds to hold off autosuspend while the SMP is in flight, and it must\nnot try to resume the host: a sync resume issued from the HA resume path\nitself is what deadlocks, and by the time sas_resume_ha() runs, hw_init\nhas already reinitialized the hardware, so the device is accessible\nwithout one.\n\nThe usage reference is still required. Discovery work normally runs\ninside an event worker's PM reference, taken at sas_notify_port_event()\nnotify time and held until the handler has flushed the disco\nqueue. sas_rediscover_ex_phy() however requeues DISCE_REVALIDATE_DOMAIN\nfrom within the revalidation worker itself, and flush_workqueue() does\nnot wait for work items queued during execution, so that chained\nrevalidation runs with no outer PM reference - without the\nget_noresume(), its SMP could race autosuspend.\n\nFor the BSG path, sas_smp_handler() is the only caller which may find\nthe host autosuspended: expander SMP requests do not go through any SCSI\ndevice request queue, so nothing else in that path holds the host\nawake. Resume it there with pm_runtime_resume_and_get() and check the\nresult.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -115469,20 +115591,6 @@
                     }
                 ]
             },
-            "CVE-2026-98432": {
-                "cve_id": "CVE-2026-98432",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-687.64.1.el9_8",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-98466": {
                 "cve_id": "CVE-2026-98466",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -118542,8 +118650,8 @@
                 "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.47.1.el10_2",
+                        "introduced": "6.12.0-211.7.1.el10_2",
+                        "fixed": "6.12.0-211.47.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -123321,6 +123429,20 @@
                 "events": [
                     {
                         "introduced": "0",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-98432": {
+                "cve_id": "CVE-2026-98432",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.72.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -205150,6 +205272,24 @@
                     }
                 ]
             },
+            "CVE-2026-99181": {
+                "cve_id": "CVE-2026-99181",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nautofs: ignore notification errors from a replaced pipe\n\nautofs_notify_daemon() takes a reference to the current notification\npipe under wq_mutex, then drops the mutex before writing the request. The\nwrite can block while the daemon enters catatonic mode and installs a\nreplacement pipe.\n\nIf the old pipe's reader is then closed, the delayed write returns -EPIPE\nand the generic error path enters catatonic mode again. That transition\nacts on the current superblock state, closes the replacement pipe, and\nreleases the new daemon generation's wait queues.\n\nOnly enter catatonic mode when the pipe which failed is still the current\npipe. Factor the already-locked transition so the identity check and state\nchange are atomic with respect to another replacement.\n\nThis was reproduced on v7.3-rc5-337-gff47652a4b66c in a local QEMU guest.\nAn unprivileged UID 65534 lookup filled the old packet pipe before a\nnormal CATATONIC/SETPIPEFD restart. On the unmodified kernel, the new pipe\nreceived HUP and both a pending victim lookup and a later lookup failed\nwith ENOENT in two out of two fresh-mount runs.\n\nWith this change, the new pipe remained active, received an intact\n304-byte request, and both victim lookups completed in two out of two\nruns. Normal lookup and restart-without-a-blocked-writer controls passed.\nNo KASAN, oops, refcount, or lock diagnostic was observed. A source\nreproducer and complete local logs are available privately on request.\n\nThe demonstrated impact is limited to denial of a shared autofs service\nduring a legitimate daemon restart. No memory corruption, information leak,\nprivilege escalation, or code execution primitive was observed.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99182": {
                 "cve_id": "CVE-2026-99182",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -205168,10 +205308,100 @@
                     }
                 ]
             },
+            "CVE-2026-99186": {
+                "cve_id": "CVE-2026-99186",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/insn-eval: Fix shadowed segment index in get_seg_reg_override_idx()\n\nCommit 45e1dccc0653 (\"x86/insn: Simplify for_each_insn_prefix()\") made\nfor_each_insn_prefix() declare its own loop counter named idx.\nget_seg_reg_override_idx() keeps its result in a local of the same name,\nso the assignments in the loop body now write the loop counter:\n\n - the function always returns INAT_SEG_REG_DEFAULT, so FS and GS\n   overrides are ignored;\n\n - a CS override sets the counter to INAT_SEG_REG_CS (2), the increment\n   makes it 3, and prefixes.bytes[3] holds the last prefix, 0x2e again,\n   so the loop never terminates.\n\nThe UMIP emulation reaches this from the #GP handler for user space: an\nSGDT, SIDT or SMSW with a memory operand and a CS prefix leaves the task\nspinning in the kernel, never returning to user space, with a SIGKILL\nthat is never delivered.  Any user can thus tie up CPUs until reboot.\nWith an FS or GS prefix, the emulated result is written to the wrong\naddress.\n\nRename the internal macro iterator variable.\n\n[ Lukas' original patch renamed the use site, I changed it to rename the\n  iterator in the macro instead, but left Lukas' commit message and\n  authorship   - Linus ]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99187": {
+                "cve_id": "CVE-2026-99187",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Fix perf_pmu_migrate_context() leaving events behind\n\n__perf_pmu_remove() walks the group leaders of a CPU and PMU with\nperf_event_groups_for_cpu_pmu(), removing each one as it goes.\nperf_remove_from_context() takes the leader out of the groups rbtree,\nafter which rb_next() on that node returns NULL, prematurely ending the\nwalk. Other groups stay behind in the source context.\n\nOn CPU hotplug, they are then torn down with the dying CPU. They keep\nrunning until teardown, while the PMU's interrupt and migrated events\nare on a new CPU, which drivers rely on never happening.\n\nWalk ctx->event_list instead and pick out the PMU's events by their\npmu_ctx.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99189": {
+                "cve_id": "CVE-2026-99189",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ngpio: mxc: fix race between chained IRQ handler install and probe completion\n\nmxc_update_irq_chained_handler() is called before the IRQ domain, the\ngeneric IRQ chip, and the port list entry are set up. If an interrupt\narrives in that window:\n\n - mx3_gpio_irq_handler() calls generic_handle_domain_irq() with\n   port->domain still NULL.\n - mx2_gpio_irq_handler() walks mxc_gpio_ports, but the port has not\n   been added to the list yet.\n\nAdditionally, if any of the subsequent probe steps\n(gpio_generic_chip_init(), devm_gpiochip_add_data(),\nirq_domain_create_legacy(), or mxc_gpio_init_gc()) fail, the error\npaths never unregister the chained handler, leaving a dangling handler\nthat points at freed memory.\n\nMove the handler installation after all its dependencies are ready and\nafter list_add_tail(), so the handler is never live while the data\nstructures it touches are incomplete, and is never installed if probe\nfails.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99192": {
+                "cve_id": "CVE-2026-99192",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bcmgenet: unshare the skb before writing the control block\n\nbcmgenet stores first_cb, last_cb and bytes_sent in the skb control\nblock and reads them back on completion to free the skb and credit BQL.\nether_setup() leaves IFF_TX_SKB_SHARING set, so the stack can resubmit\na shared skb that is still in the ring. The next transmit overwrites\nlast_cb, so the earlier slots complete without crediting their bytes\nand BQL stalls the queue until the watchdog resets it.\n\nUnshare the skb before writing the control block.\n\nReproduce with pktgen in clone_skb mode, which hands the driver the same\nskb while earlier copies are still in the ring:\n\n  modprobe pktgen\n  pg=/proc/net/pktgen\n  echo \"add_device eth0\" > $pg/kpktgend_0\n  echo \"dst_mac AA:BB:CC:DD:EE:FF\" > $pg/eth0\n  echo \"dst 192.0.2.1\" > $pg/eth0\n  echo \"clone_skb 8\" > $pg/eth0\n  echo \"count 0\" > $pg/eth0\n  echo start > $pg/pgctrl &\n  sleep 5\n  echo stop > $pg/pgctrl\n  wait\n  cat /sys/class/net/eth0/queues/tx-0/byte_queue_limits/inflight\n\ninflight stays nonzero on the now idle queue. clone_skb 0 leaves it at\nzero.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99194": {
                 "cve_id": "CVE-2026-99194",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: ethernet: aeroflex: move setting of netops to fix crash\n\ngreth_of_probe() calls greth_mdio_init(), which connects the PHY,\nbefore dev->netdev_ops is assigned. phy_attach_direct() ->\nphy_link_topo_add_phy() reads dev->netdev_ops through\nnetdev_need_ops_lock() since the commit in question, so probing crashes\nwith a NULL pointer dereference when CONFIG_NET_SHAPER is enabled.\n\nAssign netdev_ops before the PHY attach, as was done for emac in commit\n7c9f391ec89c (\"net: emac: move setting of netops to fix crash\").",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99202": {
+                "cve_id": "CVE-2026-99202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libsas: Fix SMP IO deadlock during HA resume\n\nsmp_execute_task_sg() calls pm_runtime_get_sync() on the host before\nissuing an SMP command. When that command is itself issued from the HA\nresume path, the get_sync() deadlocks: it waits for the ongoing resume\n(the device is RPM_RESUMING), while the resume is blocked in\nsas_drain_work() waiting for that same SMP IO to complete.\n\nThe deadlock needs an expander-attached SATA disk. During\nsas_resume_ha() -> sas_drain_work(), DISCE_RESUME -> sas_resume_sata()\n-> ata_sas_port_resume() requests ATA_EH_RESET, and the hard reset for\nsuch a disk is done via SMP PHY CONTROL (sas_ata_hard_reset() ->\nsas_phy_reset() -> sas_smp_phy_control() ->\nsmp_execute_task_sg()). Direct-attached SATA resets through\nlldd_control_phy() and SSP devices use TMFs, so neither hits this.\n\nReplace the get_sync()/put_sync() pair with\npm_runtime_get_noresume()/pm_runtime_put(). smp_execute_task_sg() only\nneeds to hold off autosuspend while the SMP is in flight, and it must\nnot try to resume the host: a sync resume issued from the HA resume path\nitself is what deadlocks, and by the time sas_resume_ha() runs, hw_init\nhas already reinitialized the hardware, so the device is accessible\nwithout one.\n\nThe usage reference is still required. Discovery work normally runs\ninside an event worker's PM reference, taken at sas_notify_port_event()\nnotify time and held until the handler has flushed the disco\nqueue. sas_rediscover_ex_phy() however requeues DISCE_REVALIDATE_DOMAIN\nfrom within the revalidation worker itself, and flush_workqueue() does\nnot wait for work items queued during execution, so that chained\nrevalidation runs with no outer PM reference - without the\nget_noresume(), its SMP could race autosuspend.\n\nFor the BSG path, sas_smp_handler() is the only caller which may find\nthe host autosuspended: expander SMP requests do not go through any SCSI\ndevice request queue, so nothing else in that path holds the host\nawake. Resume it there with pm_runtime_resume_and_get() and check the\nresult.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -217426,20 +217656,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-98432": {
-                "cve_id": "CVE-2026-98432",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.72.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -293808,6 +294024,24 @@
                     }
                 ]
             },
+            "CVE-2026-99181": {
+                "cve_id": "CVE-2026-99181",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nautofs: ignore notification errors from a replaced pipe\n\nautofs_notify_daemon() takes a reference to the current notification\npipe under wq_mutex, then drops the mutex before writing the request. The\nwrite can block while the daemon enters catatonic mode and installs a\nreplacement pipe.\n\nIf the old pipe's reader is then closed, the delayed write returns -EPIPE\nand the generic error path enters catatonic mode again. That transition\nacts on the current superblock state, closes the replacement pipe, and\nreleases the new daemon generation's wait queues.\n\nOnly enter catatonic mode when the pipe which failed is still the current\npipe. Factor the already-locked transition so the identity check and state\nchange are atomic with respect to another replacement.\n\nThis was reproduced on v7.3-rc5-337-gff47652a4b66c in a local QEMU guest.\nAn unprivileged UID 65534 lookup filled the old packet pipe before a\nnormal CATATONIC/SETPIPEFD restart. On the unmodified kernel, the new pipe\nreceived HUP and both a pending victim lookup and a later lookup failed\nwith ENOENT in two out of two fresh-mount runs.\n\nWith this change, the new pipe remained active, received an intact\n304-byte request, and both victim lookups completed in two out of two\nruns. Normal lookup and restart-without-a-blocked-writer controls passed.\nNo KASAN, oops, refcount, or lock diagnostic was observed. A source\nreproducer and complete local logs are available privately on request.\n\nThe demonstrated impact is limited to denial of a shared autofs service\nduring a legitimate daemon restart. No memory corruption, information leak,\nprivilege escalation, or code execution primitive was observed.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99182": {
                 "cve_id": "CVE-2026-99182",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -293826,10 +294060,92 @@
                     }
                 ]
             },
+            "CVE-2026-99186": {
+                "cve_id": "CVE-2026-99186",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/insn-eval: Fix shadowed segment index in get_seg_reg_override_idx()\n\nCommit 45e1dccc0653 (\"x86/insn: Simplify for_each_insn_prefix()\") made\nfor_each_insn_prefix() declare its own loop counter named idx.\nget_seg_reg_override_idx() keeps its result in a local of the same name,\nso the assignments in the loop body now write the loop counter:\n\n - the function always returns INAT_SEG_REG_DEFAULT, so FS and GS\n   overrides are ignored;\n\n - a CS override sets the counter to INAT_SEG_REG_CS (2), the increment\n   makes it 3, and prefixes.bytes[3] holds the last prefix, 0x2e again,\n   so the loop never terminates.\n\nThe UMIP emulation reaches this from the #GP handler for user space: an\nSGDT, SIDT or SMSW with a memory operand and a CS prefix leaves the task\nspinning in the kernel, never returning to user space, with a SIGKILL\nthat is never delivered.  Any user can thus tie up CPUs until reboot.\nWith an FS or GS prefix, the emulated result is written to the wrong\naddress.\n\nRename the internal macro iterator variable.\n\n[ Lukas' original patch renamed the use site, I changed it to rename the\n  iterator in the macro instead, but left Lukas' commit message and\n  authorship   - Linus ]",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99187": {
+                "cve_id": "CVE-2026-99187",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nperf: Fix perf_pmu_migrate_context() leaving events behind\n\n__perf_pmu_remove() walks the group leaders of a CPU and PMU with\nperf_event_groups_for_cpu_pmu(), removing each one as it goes.\nperf_remove_from_context() takes the leader out of the groups rbtree,\nafter which rb_next() on that node returns NULL, prematurely ending the\nwalk. Other groups stay behind in the source context.\n\nOn CPU hotplug, they are then torn down with the dying CPU. They keep\nrunning until teardown, while the PMU's interrupt and migrated events\nare on a new CPU, which drivers rely on never happening.\n\nWalk ctx->event_list instead and pick out the PMU's events by their\npmu_ctx.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99189": {
+                "cve_id": "CVE-2026-99189",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ngpio: mxc: fix race between chained IRQ handler install and probe completion\n\nmxc_update_irq_chained_handler() is called before the IRQ domain, the\ngeneric IRQ chip, and the port list entry are set up. If an interrupt\narrives in that window:\n\n - mx3_gpio_irq_handler() calls generic_handle_domain_irq() with\n   port->domain still NULL.\n - mx2_gpio_irq_handler() walks mxc_gpio_ports, but the port has not\n   been added to the list yet.\n\nAdditionally, if any of the subsequent probe steps\n(gpio_generic_chip_init(), devm_gpiochip_add_data(),\nirq_domain_create_legacy(), or mxc_gpio_init_gc()) fail, the error\npaths never unregister the chained handler, leaving a dangling handler\nthat points at freed memory.\n\nMove the handler installation after all its dependencies are ready and\nafter list_add_tail(), so the handler is never live while the data\nstructures it touches are incomplete, and is never installed if probe\nfails.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99192": {
+                "cve_id": "CVE-2026-99192",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bcmgenet: unshare the skb before writing the control block\n\nbcmgenet stores first_cb, last_cb and bytes_sent in the skb control\nblock and reads them back on completion to free the skb and credit BQL.\nether_setup() leaves IFF_TX_SKB_SHARING set, so the stack can resubmit\na shared skb that is still in the ring. The next transmit overwrites\nlast_cb, so the earlier slots complete without crediting their bytes\nand BQL stalls the queue until the watchdog resets it.\n\nUnshare the skb before writing the control block.\n\nReproduce with pktgen in clone_skb mode, which hands the driver the same\nskb while earlier copies are still in the ring:\n\n  modprobe pktgen\n  pg=/proc/net/pktgen\n  echo \"add_device eth0\" > $pg/kpktgend_0\n  echo \"dst_mac AA:BB:CC:DD:EE:FF\" > $pg/eth0\n  echo \"dst 192.0.2.1\" > $pg/eth0\n  echo \"clone_skb 8\" > $pg/eth0\n  echo \"count 0\" > $pg/eth0\n  echo start > $pg/pgctrl &\n  sleep 5\n  echo stop > $pg/pgctrl\n  wait\n  cat /sys/class/net/eth0/queues/tx-0/byte_queue_limits/inflight\n\ninflight stays nonzero on the now idle queue. clone_skb 0 leaves it at\nzero.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-99194": {
                 "cve_id": "CVE-2026-99194",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: ethernet: aeroflex: move setting of netops to fix crash\n\ngreth_of_probe() calls greth_mdio_init(), which connects the PHY,\nbefore dev->netdev_ops is assigned. phy_attach_direct() ->\nphy_link_topo_add_phy() reads dev->netdev_ops through\nnetdev_need_ops_lock() since the commit in question, so probing crashes\nwith a NULL pointer dereference when CONFIG_NET_SHAPER is enabled.\n\nAssign netdev_ops before the PHY attach, as was done for emac in commit\n7c9f391ec89c (\"net: emac: move setting of netops to fix crash\").",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.15-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99202": {
+                "cve_id": "CVE-2026-99202",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libsas: Fix SMP IO deadlock during HA resume\n\nsmp_execute_task_sg() calls pm_runtime_get_sync() on the host before\nissuing an SMP command. When that command is itself issued from the HA\nresume path, the get_sync() deadlocks: it waits for the ongoing resume\n(the device is RPM_RESUMING), while the resume is blocked in\nsas_drain_work() waiting for that same SMP IO to complete.\n\nThe deadlock needs an expander-attached SATA disk. During\nsas_resume_ha() -> sas_drain_work(), DISCE_RESUME -> sas_resume_sata()\n-> ata_sas_port_resume() requests ATA_EH_RESET, and the hard reset for\nsuch a disk is done via SMP PHY CONTROL (sas_ata_hard_reset() ->\nsas_phy_reset() -> sas_smp_phy_control() ->\nsmp_execute_task_sg()). Direct-attached SATA resets through\nlldd_control_phy() and SSP devices use TMFs, so neither hits this.\n\nReplace the get_sync()/put_sync() pair with\npm_runtime_get_noresume()/pm_runtime_put(). smp_execute_task_sg() only\nneeds to hold off autosuspend while the SMP is in flight, and it must\nnot try to resume the host: a sync resume issued from the HA resume path\nitself is what deadlocks, and by the time sas_resume_ha() runs, hw_init\nhas already reinitialized the hardware, so the device is accessible\nwithout one.\n\nThe usage reference is still required. Discovery work normally runs\ninside an event worker's PM reference, taken at sas_notify_port_event()\nnotify time and held until the handler has flushed the disco\nqueue. sas_rediscover_ex_phy() however requeues DISCE_REVALIDATE_DOMAIN\nfrom within the revalidation worker itself, and flush_workqueue() does\nnot wait for work items queued during execution, so that chained\nrevalidation runs with no outer PM reference - without the\nget_noresume(), its SMP could race autosuspend.\n\nFor the BSG path, sas_smp_handler() is the only caller which may find\nthe host autosuspended: expander SMP requests do not go through any SCSI\ndevice request queue, so nothing else in that path holds the host\nawake. Resume it there with pm_runtime_resume_and_get() and check the\nresult.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
