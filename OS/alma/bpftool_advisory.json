@@ -1029,6 +1029,19 @@
                     }
                 ]
             },
+            "CVE-2026-64109": {
+                "cve_id": "CVE-2026-64109",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-64378": {
                 "cve_id": "CVE-2026-64378",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -52314,19 +52327,6 @@
                     }
                 ]
             },
-            "CVE-2026-64109": {
-                "cve_id": "CVE-2026-64109",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-64110": {
                 "cve_id": "CVE-2026-64110",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -65483,6 +65483,19 @@
                     }
                 ]
             },
+            "CVE-2026-80736": {
+                "cve_id": "CVE-2026-80736",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nthunderbolt: Fix bandwidth group reservation indexing\n\nValid bandwidth group IDs range from 1 through MAX_GROUPS, while Group\nID 0 is reserved. tb_consumed_dp_bandwidth() uses the Group ID directly\nto index its local group_reserved[] array.\n\nThe array currently has MAX_GROUPS entries, so its valid indices are 0\nthrough MAX_GROUPS - 1. Group ID MAX_GROUPS therefore accesses one\nelement past the end, and the final group's reserved bandwidth is not\nincluded when the array is summed.\n\nGive group_reserved[] MAX_GROUPS + 1 entries so direct Group ID\nindexing covers the reserved ID 0 and valid IDs 1 through MAX_GROUPS.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-80737": {
                 "cve_id": "CVE-2026-80737",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -70514,6 +70527,19 @@
                     }
                 ]
             },
+            "CVE-2026-89931": {
+                "cve_id": "CVE-2026-89931",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: nVMX: Ensure KVM_REQ_GET_NESTED_STATE_PAGES is cleared on VM-Exit\n\nAlways check and clear KVM_REQ_GET_NESTED_STATE_PAGES when emulating a\nnested VM-Exit to ensure the request is cleared, even when KVM was built\nwith CONFIG_KVM_HYPERV=n, as KVM subtly relies on the \"check\" to clear\nthe flag and thus avoid double-mapping the vmcs12 pages, e.g. if KVM\nmanages to bail from VM-Enter without processing the request, and then\nemulates VMLAUNCH or VMRESUME.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-89932": {
                 "cve_id": "CVE-2026-89932",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -75108,6 +75134,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: core: Do not block on tag allocation in scsi_eh_lock_door()\n\nscsi_eh_lock_door() is called from scsi_restart_operations() while the\nhost is still in the SHOST_RECOVERY state, i.e. before the host is\nswitched back to SHOST_RUNNING and scsi_run_host_queues() restarts the\nqueues. It allocates a request via scsi_alloc_request() with no flags,\nso blk_mq_get_tag() may block waiting for a free sched tag when all tags\nare already in use.\n\nThose tags can be held by commands that were just requeued by\nscsi_eh_flush_done_q() during error handling. Such commands cannot be\ndispatched until the host leaves SHOST_RECOVERY and\nscsi_run_host_queues() is called - which only happens *after*\nscsi_eh_lock_door() returns.\n\nThis forms a circular dependency:\n\n  - scsi_eh_lock_door(), running in the SCSI error handler thread, waits\n    for a sched tag held by a requeued command;\n\n  - the requeued command cannot complete and release its sched tag until\n    the error handler thread leaves scsi_restart_operations() and restart\n    the queues.\n\nFor devices with a single driver tag (e.g. USB storage) it is a\nguaranteed deadlock and I/O that can never be submitted. This problem\nhas also been reproduced in our environment.\n\nLocking the door is a best-effort operation, and scsi_eh_lock_door()\nalready returns silently when the request allocation fails. Pass\nBLK_MQ_REQ_NOWAIT to scsi_alloc_request() so the allocation fails\ninstead of blocking when no tag is available. This breaks the circular\ndependency and allows the error handler to finish restarting the queues,\nafter which the pending commands are dispatched normally.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-93783": {
+                "cve_id": "CVE-2026-93783",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: RFCOMM: validate skb length in rfcomm_recv_frame\n\nrfcomm_recv_frame() casts skb->data to struct rfcomm_hdr and dereferences\nhdr->addr and hdr->ctrl without validating skb->len first. A truncated\nframe with skb->len less than the minimum header size causes an\nout-of-bounds read of uninitialized memory. Additionally, a zero-length\nframe causes skb->len-- to underflow to UINT_MAX, making\nskb_tail_pointer() read far past the buffer.\n\nCommit 23882b828c3c (\"Bluetooth: RFCOMM: validate skb length in MCC\nhandlers\") fixed the same class of missing-length-check bugs in the MCC\nsub-handlers, but the top-level rfcomm_recv_frame() was left unfixed.\nKMSAN reports:\n\n  BUG: KMSAN: uninit-value in rfcomm_run\n  ...\n  Uninit was created at:\n    __alloc_skb+0x474/0xb60\n    vhci_write+0xe9/0x870\n\nFix this by rejecting frames smaller than sizeof(struct rfcomm_hdr) + 1\n(the minimum frame must have a 3-byte header and a 1-byte FCS).",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -92191,6 +92230,19 @@
                 "cve_id": "CVE-2023-37454",
                 "title": "An issue was discovered in the Linux kernel through 6.4.2. A craf ...",
                 "description": "An issue was discovered in the Linux kernel through 6.4.2. A crafted UDF filesystem image causes a use-after-free write operation in the udf_put_super and udf_close_lvid functions in fs/udf/super.c. NOTE: the suse.com reference has a different perspective about this.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2023-45862": {
+                "cve_id": "CVE-2023-45862",
+                "title": "An issue was discovered in drivers/usb/storage/ene_ub6250.c for t ...",
+                "description": "An issue was discovered in drivers/usb/storage/ene_ub6250.c for the ENE UB6250 reader driver in the Linux kernel before 6.2.5. An object could potentially extend beyond the end of an allocation.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -128501,6 +128553,19 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: core: Do not block on tag allocation in scsi_eh_lock_door()\n\nscsi_eh_lock_door() is called from scsi_restart_operations() while the\nhost is still in the SHOST_RECOVERY state, i.e. before the host is\nswitched back to SHOST_RUNNING and scsi_run_host_queues() restarts the\nqueues. It allocates a request via scsi_alloc_request() with no flags,\nso blk_mq_get_tag() may block waiting for a free sched tag when all tags\nare already in use.\n\nThose tags can be held by commands that were just requeued by\nscsi_eh_flush_done_q() during error handling. Such commands cannot be\ndispatched until the host leaves SHOST_RECOVERY and\nscsi_run_host_queues() is called - which only happens *after*\nscsi_eh_lock_door() returns.\n\nThis forms a circular dependency:\n\n  - scsi_eh_lock_door(), running in the SCSI error handler thread, waits\n    for a sched tag held by a requeued command;\n\n  - the requeued command cannot complete and release its sched tag until\n    the error handler thread leaves scsi_restart_operations() and restart\n    the queues.\n\nFor devices with a single driver tag (e.g. USB storage) it is a\nguaranteed deadlock and I/O that can never be submitted. This problem\nhas also been reproduced in our environment.\n\nLocking the door is a best-effort operation, and scsi_eh_lock_door()\nalready returns silently when the request allocation fails. Pass\nBLK_MQ_REQ_NOWAIT to scsi_alloc_request() so the allocation fails\ninstead of blocking when no tag is available. This breaks the circular\ndependency and allows the error handler to finish restarting the queues,\nafter which the pending commands are dispatched normally.",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    }
+                ]
+            },
+            "CVE-2026-93783": {
+                "cve_id": "CVE-2026-93783",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nBluetooth: RFCOMM: validate skb length in rfcomm_recv_frame\n\nrfcomm_recv_frame() casts skb->data to struct rfcomm_hdr and dereferences\nhdr->addr and hdr->ctrl without validating skb->len first. A truncated\nframe with skb->len less than the minimum header size causes an\nout-of-bounds read of uninitialized memory. Additionally, a zero-length\nframe causes skb->len-- to underflow to UINT_MAX, making\nskb_tail_pointer() read far past the buffer.\n\nCommit 23882b828c3c (\"Bluetooth: RFCOMM: validate skb length in MCC\nhandlers\") fixed the same class of missing-length-check bugs in the MCC\nsub-handlers, but the top-level rfcomm_recv_frame() was left unfixed.\nKMSAN reports:\n\n  BUG: KMSAN: uninit-value in rfcomm_run\n  ...\n  Uninit was created at:\n    __alloc_skb+0x474/0xb60\n    vhci_write+0xe9/0x870\n\nFix this by rejecting frames smaller than sizeof(struct rfcomm_hdr) + 1\n(the minimum frame must have a 3-byte header and a 1-byte FCS).",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
