@@ -77126,7 +77126,7 @@
                 "cve_id": "CVE-2025-40256",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: also call xfrm_state_delete_tunnel at destroy time for states that were never added\n\nIn commit b441cf3f8c4b (\"xfrm: delete x->tunnel as we delete x\"), I\nmissed the case where state creation fails between full\ninitialization (->init_state has been called) and being inserted on\nthe lists.\n\nIn this situation, ->init_state has been called, so for IPcomp\ntunnels, the fallback tunnel has been created and added onto the\nlists, but the user state never gets added, because we fail before\nthat. The user state doesn't go through __xfrm_state_delete, so we\ndon't call xfrm_state_delete_tunnel for those states, and we end up\nleaking the FB tunnel.\n\nThere are several codepaths affected by this: the add/update paths, in\nboth net/key and xfrm, and the migrate code (xfrm_migrate,\nxfrm_state_migrate). A \"proper\" rollback of the init_state work would\nprobably be doable in the add/update code, but for migrate it gets\nmore complicated as multiple states may be involved.\n\nAt some point, the new (not-inserted) state will be destroyed, so call\nxfrm_state_delete_tunnel during xfrm_state_gc_destroy. Most states\nwill have their fallback tunnel cleaned up during __xfrm_state_delete,\nwhich solves the issue that b441cf3f8c4b (and other patches before it)\naimed at. All states (including FB tunnels) will be removed from the\nlists once xfrm_state_fini has called flush_work(&xfrm_state_gc_work).",
-                "severity": "MEDIUM",
+                "severity": "LOW",
                 "status": "fixed",
                 "events": [
                     {
@@ -105842,7 +105842,7 @@
                 "cve_id": "CVE-2026-72138",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxen/gntdev: fix error handling in ioctl\n\nWhen gntdev_ioctl_map_grant_ref() fails to copy the operation result\nback to userspace after successfully adding the mapping to the list,\nthe error path returns -EFAULT without releasing the reference\nacquired by gntdev_alloc_map(). The mapping remains in priv->maps\nwith a refcount of 1, causing a memory leak and a dangling list\nentry.\n\nAdditionally, gntdev_add_map() may modify map->index to avoid overlap\nwith existing mappings. Therefore, the index returned to userspace\nmust be obtained after gntdev_add_map() completes.\n\nFix this by holding the mutex across gntdev_add_map(), retrieving\nthe correct index, and copy_to_user(). If copy_to_user() fails,\nremove the mapping from the list and release the reference while\nstill holding the lock.\n\n\nFix these issues by properly handling all error cases.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -106173,32 +106173,6 @@
                     {
                         "introduced": "0:5.14.0-70.13.1.0.3.el9_0",
                         "fixed": "0:5.15.0-324.217.5.2.el9uek",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-72221": {
-                "cve_id": "CVE-2026-72221",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsunrpc: wait for in-flight TLS handshake callback when cancel loses race\n\nWhen wait_for_completion_interruptible_timeout() in\nsvc_tcp_handshake() returns 0 (timeout) or -ERESTARTSYS (signal) and\ntls_handshake_cancel() then returns false, handshake_complete() has\nwon the cancellation race: it has set HANDSHAKE_F_REQ_COMPLETED and\nis about to invoke svc_tcp_handshake_done(), but the callback's\nside effects on xpt_flags and on svsk->sk_handshake_done have not\nyet committed.\n\nThe current code reads xpt_flags immediately to decide whether the\nsession succeeded. Two races result.\n\nIf the callback has executed set_bit(XPT_TLS_SESSION) but not yet\nclear_bit(XPT_HANDSHAKE), svc_tcp_handshake() sees a session,\nenqueues the transport, and returns. svc_xprt_received() then\nclears XPT_BUSY, a worker thread picks the transport up, the\ndispatcher in svc_handle_xprt() observes XPT_HANDSHAKE still set,\nand xpo_handshake is invoked a second time. That svc_tcp_handshake()\ncalls init_completion(&svsk->sk_handshake_done) while the original\ncallback concurrently calls complete_all() on it, corrupting the\nembedded swait_queue.\n\nIf the callback has set HANDSHAKE_F_REQ_COMPLETED but not yet\nentered svc_tcp_handshake_done(), svc_tcp_handshake() reads\nXPT_TLS_SESSION as clear and tears the connection down even though\nthe handshake is about to succeed.\n\nWait for the callback to commit before inspecting xpt_flags. The\ncompletion is guaranteed to fire because handshake_complete()\ninvokes svc_tcp_handshake_done() unconditionally once it has set\nHANDSHAKE_F_REQ_COMPLETED.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-72222": {
-                "cve_id": "CVE-2026-72222",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsunrpc: pin svc_xprt across the asynchronous TLS handshake callback\n\nsvc_tcp_handshake() stores the raw svc_xprt pointer in\ntls_handshake_args.ta_data and submits the request through\ntls_server_hello_x509(). The handshake core takes only\nsock_hold(req->hr_sk); nothing references the embedding struct\nsvc_sock that svc_tcp_handshake_done() reaches via container_of().\n\nTwo close races leave the in-flight callback writing through a freed\nsvc_sock. svc_sock_free() calls tls_handshake_cancel() and discards\nits return value: a false return means handshake_complete() has\nalready set HANDSHAKE_F_REQ_COMPLETED but hp_done() may not have\nfinished, yet svc_sock_free() proceeds to kfree(svsk). The\ncancel-loser fall-through inside svc_tcp_handshake() itself produces\nthe same window: when wait_for_completion_interruptible_timeout()\nreturns <= 0 (timeout or signal) and tls_handshake_cancel() returns\nfalse, the function does not drain, returns, and svc_handle_xprt()\ncalls svc_xprt_received(), which clears XPT_BUSY and can drop the\nlast reference. A concurrent close then runs svc_sock_free() while\nsvc_tcp_handshake_done() is still updating xpt_flags and walking\nsvsk->sk_handshake_done.\n\nThe corruption surfaces as set_bit/clear_bit RMW into the freed\nxpt_flags slab slot and as complete_all() walking and writing the\nfreed wait_queue_head_t list embedded in sk_handshake_done -- a\nslab-corruption primitive, not a benign read. The path is reachable\non any TLS-enabled NFS server whenever a connection close overlaps\nthe tlshd downcall delivery window; the interruptible wait means\nsignal delivery suffices, not just SVC_HANDSHAKE_TO expiry.\n\nTake svc_xprt_get(xprt) immediately before tls_server_hello_x509()\nso the in-flight callback owns its own reference. Release it on the\ntwo edges where the callback is guaranteed not to fire -- submission\nfailure from tls_server_hello_x509() and a successful\ntls_handshake_cancel() -- and at the tail of\nsvc_tcp_handshake_done() after complete_all().\n\n[cel: rewrote commit message to describe the actual change]",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
                         "identifier": "el9"
                     }
                 ]
@@ -112964,19 +112938,6 @@
                     }
                 ]
             },
-            "CVE-2026-74752": {
-                "cve_id": "CVE-2026-74752",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: validate cookie AUTH state before use\n\nWhen cookie authentication is disabled, COOKIE_ECHO restores fixed-size\nAUTH fields directly from peer-controlled cookie bytes.  A forged RANDOM\nlength, HMAC list, or CHUNKS list can then reach association consumers\nwith lengths or identifiers that were never validated against the local\nbacking arrays.\n\nA forged RANDOM length can cause out-of-bounds reads during key-vector\nconstruction.  A forged HMAC identifier also caused a 32-byte write past\na zero-length AUTH chunk, providing a primitive for a local privilege\nescalation chain.\n\nValidate the cookie's RANDOM, HMACS, and CHUNKS parameters at the cookie\ntrust boundary before copying them into the association.  Reject invalid\ntypes, malformed lengths, unsupported HMAC identifiers, HMAC lists\nwithout SHA1, and forbidden chunk ids.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-74754": {
                 "cve_id": "CVE-2026-74754",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -115875,7 +115836,7 @@
                 "cve_id": "CVE-2026-80916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nkcov: fix data corruption and race conditions on PREEMPT_RT\n\nsyzbot is reporting KCOV state corruption on PREEMPT_RT kernels, for the\ntemporary storage used for saving/restoring remote KCOV state is currently\nallocated as the per-CPU area.\n\nOn PREEMPT_RT kernels, softirq handlers run as preemptible task threads\n(e.g., ksoftirqd). If a softirq context preempts a task running a remote\nKCOV session, it safely saves the task's state into the per-CPU area.\nHowever, if that softirq thread is subsequently preempted by a higher-\npriority softirq thread on the same CPU, the second softirq will overwrite\nthe same per-CPU area, permanently destroying the original task's KCOV\nstate.\n\nFix this data corruption by moving the temporary storage from the per-CPU\narea to the per-thread area. Since each softirq thread now owns its own\ntask context, nested softirq preemption no longer causes data overwrites.\n\nNote that while the temporary storage is now on a per-thread basis, the\nper-CPU kcov_percpu_data.lock must be retained, for we need to ensure that\nkcov_remote_start() and kcov_remote_stop() operate atomically without\nracing against asynchronous interrupts that manipulate the current task's\nKCOV state.\n\nIt is likely that GFP_KERNEL allocation by vmalloc_node() in kcov_init()\nhas already called panic() before returning NULL, for there will be no\nOOM-killable userspace processes when __init function of built-in module\nruns. But this patch also fixes crashing the kernel when vmalloc_node()\nin kcov_init() returned NULL, for kcov_init() left per-CPU irq_area == NULL\nbut kcov_remote_start() depends on per-CPU irq_area != NULL, resulting in\n\n  (1) doing vmalloc() in kcov_remote_start() despite !in_task() context\n\n  (2) out-of-array-bounds access if (1) succeeded but\n      kcov->remote_size < CONFIG_KCOV_IRQ_AREA_SIZE\n\n  (3) always leak memory allocated by (1), eventually killing all\n      OOM-killable userspace processes\n\nproblems.",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -116838,19 +116799,6 @@
                     }
                 ]
             },
-            "CVE-2026-89479": {
-                "cve_id": "CVE-2026-89479",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: stop processing a packet once its association is deleted\n\nsctp_endpoint_bh_rcv() looks the association up only when chunk->asoc is\nNULL, and caches the result in chunk->asoc and chunk->transport without\ntaking a reference.\n\nA packet that matches no association is handed to the endpoint, so a peer\ncan bundle COOKIE ECHO, SHUTDOWN and SHUTDOWN ACK in one packet. The\nCOOKIE ECHO creates the association, the SHUTDOWN chunk caches it, and\nwith the outqueue empty the SHUTDOWN ACK reaches sctp_sf_do_9_2_final(),\nso the association and its transports are freed.\n\nThe endpoint loop has no counterpart to the asoc->base.dead check in\nsctp_assoc_bh_rcv(). The next chunk writes to last_time_heard in the freed\ntransport and is then passed to sctp_do_sm() with the freed association.\nThe transport is freed through RCU, so this needs the packet to come off\nthe socket backlog, where the loop runs in task context.\n\nThe endpoint loop cannot do the same check: it holds no reference on the\nassociation, so reading asoc->base.dead would itself be a use-after-free.\nMark the packet for discard in the command interpreter, just before it\ndeletes the association. That is also before sctp_inq_free() releases the\nchunk on the association receive path.\n\nsctp_sf_do_5_2_4_dupcook() issues SCTP_CMD_DELETE_TCB for the temporary\nassociation, while the one the packet belongs to stays alive. A restarting\npeer can bundle DATA behind its COOKIE ECHO, so compare against\nchunk->asoc and leave that case alone.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-89481": {
                 "cve_id": "CVE-2026-89481",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -116921,19 +116869,6 @@
                 "cve_id": "CVE-2026-89487",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nopenvswitch: only skb_tx_error() a packet we are about to drop\n\nqueue_userspace_packet() borrows the packet skb -- it only copies it into\na private netlink message (user_skb) and does not own it; on return\ndo_execute_actions() keeps forwarding it through the flow's remaining\nactions. Its error path nevertheless calls skb_tx_error(skb), which via\nskb_zcopy_clear() does skb_shinfo(skb)->flags &= ~SKBFL_ALL_ZEROCOPY,\nstripping SKBFL_SHARED_FRAG from that live skb (skb_tx_error()'s kerneldoc\nsays \"skb must be freed afterwards\").\n\nFor a MSG_ZEROCOPY skb carrying page-cache frags, SKBFL_SHARED_FRAG is\nwhat makes esp_input() skb_cow_data() before in-place AEAD; once it is\nstripped a later local ESP-in-UDP delivery decrypts in place over pages\nthe sender does not own -- an unprivileged page-cache write (the\n\"Fragnesia\" primitive).\ndo_execute_actions() ignores output_userspace()'s return value, so any\naction after a failed USERSPACE upcall inherits the stripped skb.\n\nMove the skb_tx_error() to the flow-miss drop path - the \"default\"\nbranch of ovs_dp_process_packet()'s switch(error), before kfree_skb().\n\nThe call has been here since commit 36d5fe6a0007 (\"core, nfqueue,\nopenvswitch: Orphan frags in skb_zerocopy and handle errors\") but was\nharmless until esp_input() began relying on SKBFL_SHARED_FRAG to gate\nin-place decrypt; only then did stripping it on a still-forwarded skb\nbecome a page-cache write primitive.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-89488": {
-                "cve_id": "CVE-2026-89488",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nopenvswitch: Fix CT limit teardown use-after-free\n\nPacket processing uses CT limit state under RCU, while netns teardown\nfrees that state under ovs_mutex. The CT limit pointer was neither removed\nfrom readers nor protected by a grace period, allowing packet processing to\ndereference the freed state.\n\nAn unprivileged user can trigger this bug from a user and network\nnamespace, causing a slab-use-after-free in ovs_ct_execute() when the\nnetns is torn down.\n\nPublish the CT limit pointer through RCU, remove it before teardown, and\nwait for readers before freeing its contents. Keep ovs_mutex around\nindividual CT limit updates, and use the RCU read-side lock while GET\ntraverses the RCU-protected limit lists.\n\nNetns teardown detaches the RCU-protected CT limit state in the pernet\n.pre_exit callback while holding ovs_mutex.  The pernet core guarantees an\nRCU grace period between the .pre_exit and .exit callbacks, so the .exit\ncallback completes the teardown without adding any extra synchronization.\n\nThe netlink command handlers do not need NULL checks because the userspace\nnetlink socket holds an active reference to its network namespace while a\nrequest is processed. The per-netns exit path therefore cannot run\nconcurrently with SET, DEL, or GET for that socket's namespace.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -125348,7 +125283,7 @@
                 "cve_id": "CVE-2026-97453",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nACPICA: validate byte_count in acpi_ps_get_next_package_length()\n\nValidate package length reading in acpi_ps_get_next_package_length().",
-                "severity": "HIGH",
+                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -134268,7 +134203,7 @@
                 "cve_id": "CVE-2026-98900",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxen/gntalloc: validate grant count before allocation\n\ngntalloc_ioctl_alloc() allocates the grant-id array before checking\nwhether the requested count fits within the global grant limit. Counts\nabove that limit cannot succeed, so reject them before the\nuser-controlled allocation reaches kcalloc().\n\nUse a subtraction-based check while holding gref_mutex so adding the\nrequested count cannot wrap. Also cast the count before advancing the\nper-file index so the page-size multiplication is performed in 64-bit\narithmetic.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
