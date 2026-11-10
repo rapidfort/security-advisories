@@ -2,16 +2,212 @@
     "package_name": "microvm-kernel",
     "advisory": {
         "2023": {
-            "CVE-2026-98432": {
-                "cve_id": "CVE-2026-98432",
+            "CVE-2026-74356": {
+                "cve_id": "CVE-2026-74356",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nvhost: fix vhost_get_avail_idx for a non empty ring\n\nvhost_get_avail_idx is supposed to report whether it has updated\nvq->avail_idx. Instead, it returns whether all entries have been\nconsumed, which is usually the same. But not always - in\ndrivers/vhost/net.c and when mergeable buffers have been enabled, the\ndriver checks whether the combined entries are big enough to store an\nincoming packet. If not, the driver re-enables notifications with\navailable entries still in the ring. The incorrect return value from\nvhost_get_avail_idx propagates through vhost_enable_notify and causes\nthe host to livelock if the guest is not making progress, as vhost will\nimmediately disable notifications and retry using the available entries.\n\nThis goes back to commit d3bb267bbdcb (\"vhost: cache avail index in\nvhost_enable_notify()\") which changed vhost_enable_notify() to compare\nthe freshly read avail index against vq->last_avail_idx instead of the\npreviously cached vq->avail_idx. Commit 7ad472397667 (\"vhost: move\nsmp_rmb() into vhost_get_avail_idx()\") then carried over the same\ncomparison when refactoring vhost_enable_notify() to call the unified\nvhost_get_avail_idx().\n\nThe obvious fix is to make vhost_get_avail_idx do what the comment\nsays it does and report whether new entries have been added.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-74752": {
+                "cve_id": "CVE-2026-74752",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: validate cookie AUTH state before use\n\nWhen cookie authentication is disabled, COOKIE_ECHO restores fixed-size\nAUTH fields directly from peer-controlled cookie bytes.  A forged RANDOM\nlength, HMAC list, or CHUNKS list can then reach association consumers\nwith lengths or identifiers that were never validated against the local\nbacking arrays.\n\nA forged RANDOM length can cause out-of-bounds reads during key-vector\nconstruction.  A forged HMAC identifier also caused a 32-byte write past\na zero-length AUTH chunk, providing a primitive for a local privilege\nescalation chain.\n\nValidate the cookie's RANDOM, HMACS, and CHUNKS parameters at the cookie\ntrust boundary before copying them into the association.  Reject invalid\ntypes, malformed lengths, unsupported HMAC identifiers, HMAC lists\nwithout SHA1, and forbidden chunk ids.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-89633": {
+                "cve_id": "CVE-2026-89633",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix OOB read/write from unvalidated DataOffset in coalesce_t2()\n\ncoalesce_t2() computes data pointers directly from server-supplied\nDataOffset fields with no validation against buffer bounds:\n\n  data_area_of_tgt = (char *)&pSMBt->hdr.Protocol +\n                     get_unaligned_le16(&pSMBt->t2_rsp.DataOffset);\n  data_area_of_src = (char *)&pSMBs->hdr.Protocol +\n                     get_unaligned_le16(&pSMBs->t2_rsp.DataOffset);\n  data_area_of_tgt += total_in_tgt;\n  ...\n  memcpy(data_area_of_tgt, data_area_of_src, total_in_src);\n\nA small DataOffset can push a pointer below the actual byte area,\noverwriting header fields; a large one can push it past the buffer\nend, causing out-of-bounds heap reads (source) or writes (target).\nThe BCC overflow guard does not prevent this: BCC reflects how much\ndata is present, while DataOffset controls where in the buffer it\nstarts.\n\nThe \"validate target area\" comment present since the function was\nfirst written in 2005 was a placeholder that was never implemented.\n\nAdd lower- and upper-bound checks for both data pointers before the\nmemcpy, and before any target header fields are modified.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-89659": {
+                "cve_id": "CVE-2026-89659",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during delegation revoke\n\nA delegation stateid holds only a bare pointer to its owning\nnfs4_client and does not keep it alive.  The client survives its\nstateids only because __destroy_client() drains cl_delegations and\ncl_revoked before free_client() runs.\n\nnfs4_laundromat() breaks that invariant: it unhashes an\nexpired delegation from cl_delegations, drops deleg_lock, then\nrevoke_delegation() relinks it onto cl_revoked under cl_lock.  In that\nwindow the delegation is on neither list, so client_has_state() can\nreport no remaining state.\n\nEvery teardown path first requires cl_rpc_users to be zero, but\nthe laundromat holds no such reference.  A client whose recalled\ndelegation has just timed out can therefore reach free_client()\nwhile revoke_delegation() is still about to dereference cl_lock,\na use-after-free.\n\nPin the client with cl_rpc_users across the revoke so teardown blocks\nuntil it completes, then reap the delegation from cl_revoked.  A client\nalready expiring reaps its own, so skip it and leave the delegation on\ndel_recall_lru.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-90036": {
+                "cve_id": "CVE-2026-90036",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during blocked-lock reaping\n\nA bare lock owner -- its only remaining reference a blocked lock on\nnn->blocked_locks_lru -- holds a raw pointer to its nfs4_client but\nno reference keeping the client alive. When the per-net laundromat\nreaps such a lock, freeing the nbl drops the owner reference\nheld through flc_owner, and the final nfs4_put_stateowner()\ntakes the client's cl_lock. Because the laundromat detaches the\nnbl first, __destroy_client() no longer finds it, so a concurrent\nforce_expire_client() can free the client before nfs4_put_stateowner()\nruns, dereferencing cl_lock in freed memory.\n\nPin the client with cl_rpc_users before dropping\nnn->blocked_locks_lock, and skip clients already expiring, whose\nblocked locks __destroy_client() frees while holding an owner\nreference. Take nn->client_lock outside nn->blocked_locks_lock.\nEvery other site holds nn->blocked_locks_lock as a leaf, acquiring\nno further lock, so placing nn->client_lock outside it cannot form\na lock-order cycle.",
                 "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
                     {
                         "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-97563": {
+                "cve_id": "CVE-2026-97563",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject out-of-bounds DataOffset in CIFSSMBRead()\n\nThe SMB1 synchronous read helper CIFSSMBRead() validates the server's\nDataLength against CIFSMaxBufSize and the caller's count, but never\nvalidates DataOffset. The copy source is formed as\n\n\t&pSMBr->hdr.Protocol + le16_to_cpu(pSMBr->DataOffset)\n\nand memcpy()'d for DataLength bytes with no check that the\n[DataOffset, DataOffset + DataLength) range lies within the response\nactually received from the server.\n\nA malicious or compromised SMB1 server can return a response carrying\nan in-range DataLength and a large DataOffset, driving the source\npointer past the end of the response buffer. The memcpy() then copies\nadjacent kernel heap into the caller's read buffer (information\ndisclosure), or reads unmapped memory and oopses (denial of service).\nSMB1 is not negotiated by default; reaching this code requires an\nexplicit vers=1.0 mount.\n\nBoth DataOffset and the received response length recorded in\nrsp_iov.iov_len are relative to the start of the SMB header, so reject\nthe response unless DataOffset + DataLength fits within that length,\nusing overflow-safe arithmetic, before forming the source pointer.\nThe response length has been validated by the previous patch, so the\nDataOffset and DataLength fields can be read safely here.\n\nWhile here, make data_length unsigned. It holds a length derived from\nunsigned on-the-wire fields and is only ever compared against unsigned\nquantities; print it with %u accordingly, and add __func__ to the\ncifs_dbg() calls in this function.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98033": {
+                "cve_id": "CVE-2026-98033",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Preserve inner map identity in callback frames\n\nCallback frame constructors initialize map-typed argument registers with\n__mark_reg_known_zero() and then restore map_ptr. This clears map_uid,\nwhich is the only field distinguishing inner maps that share an\ninner_map_meta template.\n\nWhen a timer callback invokes bpf_for_each_map_elem() on a second inner\nmap, both the saved first map and the second map value can reach the nested\ncallback as the same template with map_uid zero. bpf_timer_init() then\naccepts pairing the timer from the second map with the first map.\n\nThe runtime records the first map in the timer without taking a reference.\nFreeing that map does not find the timer stored in the second map, so a\nlater timer callback dereferences the freed map.\n\nCopy map_uid from the same caller register as map_ptr when constructing\nfor-each, timer/workqueue, and task-work callback arguments. The existing\nidentity check can then reject mismatched inner maps while allowing a\ncallback value to be paired with its actual map.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98432": {
+                "cve_id": "CVE-2026-98432",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
                         "fixed": "1:6.1.189-236.400.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98454": {
+                "cve_id": "CVE-2026-98454",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix create context out-of-bounds reads\n\nsmb2_parse_contexts() validates the complete create-context area but\ndoes not limit each record to its Next field before dispatching it.  A\nmalformed chain can therefore expose bytes beyond the current context to\na handler.  The QFid handler also used a full response-structure cast\nalthough it only reads DiskFileId.\n\nThe SMB2/SMB3 lease parsers made the same layout assumption: they read\nLeaseState and LeaseFlags at canonical offsets rather than at\nDataOffset.  A valid non-canonical DataOffset could therefore yield\nunrelated in-bounds data, while a short DataLength was still accepted.\n\nLimit each context to its Next value, reject offsets before the context\nheader, and reject malformed chains.  Bound the name range by the current\ncontext and do not dispatch a known handler when DataLength is zero.  Read\nthe QFid DiskFileId only when the context data covers that field.  Parse the\nlease context from DataOffset and require DataLength to match the v1 or v2\nlease_context size used by ksmbd.  A size mismatch skips lease parsing\nwithout failing the open.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98715": {
+                "cve_id": "CVE-2026-98715",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: SVM: Preserve TLB control (i.e. pending TLB flush) on failed VMRUN\n\nDon't reset the VMCB's TLB control back to \"do nothing\" on a failed VMRUN,\nas empirical testing shows that the CPU performs the requested TLB flush if\nand only if VMRUN is successful, i.e. clearing TLB control on a failed\nVMRUN effectively drops a TLB flush.\n\nExplicitly track the need to flush all ASIDs on a per-CPU basis, as the\nASID reuse condition is tied to the pCPU, not to the vCPU.  As a bonus,\nthis also obviates the need to avoid clobbering FLUSH_ALL_ASID with\nTLB_CONTROL_FLUSH_ASID, e.g. in svm_flush_tlb_asid().\n\nDeliberately don't bother saving/restoring the \"old\" tlb_ctl on failure,\nin quotes because it's not exactly the old tlb_ctl, it's the tlb_ctl from\nafter pre_svm_run(), but before updating tlb_ctl for flush_all_asids.  If\nVMRUN fails and TLB_CONTROL_FLUSH_ALL_ASID is forced, then the next\nsuccessful run of the VMCB *may* unnecessarily flush all ASIDs, which\nstrictly speaking could result in noisy neighbor issues.  However, the\nfact that new_asid() is already guest-triggerable, because of KVM's flawed\nbehavior of clearing the ASID on emulated INIT, means that a guest can\nalready trigger a flush of all ASIDs at roughly the same rate.  And once\nKVM stops clobbering the ASID on emulated INIT, *or* assigns a static ASID\nto each vCPU, this flaw goes away.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98805": {
+                "cve_id": "CVE-2026-98805",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntipc: prevent GCM nonce reuse on peer key changes\n\nTIPC can encrypt traffic between nodes using a different transmit key\nfor each node. In this mode, the AES-GCM nonce for a packet sent to a\nknown peer consists of a 32-bit prefix (a per-key salt XOR the peer's\naddress) followed by a 64-bit counter. That counter is stored in the\npeer's RX crypto object. When the peer reports a change in which key\nit uses to receive packets, TIPC resets this counter. The sender can\nstill be using the same TX key and salt, so subsequent packets reuse\nearlier nonces. This nonce reuse breaks confidentiality and exposes\nGCM's authentication key. This makes forgeries trivial: an attacker\ncan exploit CTR malleability to alter captured ciphertexts and use the\nrecovered authentication key to compute a valid tag for the modified\nciphertext, under the same key and nonce.\n\nUse the TX key's existing aead->seqno counter instead. All encryptions\nusing that key object share the same atomic counter, so concurrent\nencryptions get distinct nonce counter values. The counter survives\nkey activation and peer reconnection, and peer key-status reports\ncannot reset it. This prevents those transitions from causing nonce\nreuse while the same TX key remains installed.\n\nThe nonce format is unchanged, and receivers do not require consecutive\ncounter values, so sharing the counter across peers remains compatible\nwith existing receivers. A pre-existing check still invokes key\nrevocation in the unlikely event that the counter wraps to zero.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98846": {
+                "cve_id": "CVE-2026-98846",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: check RCV_SHUTDOWN after the sendmsg connect wait\n\nsctp_wait_for_connect() drops the socket lock while it sleeps. An\nout-of-the-blue ABORT can then be processed from the socket backlog and\nunlink the association. If a concurrent shutdown(fd, SHUT_RD) sets\nRCV_SHUTDOWN, the waiter breaks with err == 0 before checking\nasoc->base.dead. Its final sctp_association_put() can then free the\nassociation, leaving sctp_sendmsg_to_asoc() to continue with a dangling\npointer.\n\nCheck RCV_SHUTDOWN along with the wait error in sctp_sendmsg_to_asoc()\nbefore using the association again. The check only accesses the socket,\nso it needs no additional association reference. Return the existing\n-ESRCH so that sctp_sendmsg() skips freeing a new association that may\nalready have been destroyed.\n\nKeep sctp_wait_for_connect() unchanged to preserve its behavior for the\nconnect() caller.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-98857": {
+                "cve_id": "CVE-2026-98857",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipvs: bound LBLCR and LBLC cache growth\n\nip_vs_lblcr_new() and ip_vs_lblc_new() create cache entries for\nevery previously unseen destination address. The table max_size only\ntells the periodic collector to reclaim entries after the cache has\nalready exceeded the limit. It does not reclaim entries that the\nattacker continues to use.\n\nReject new cache entries once either table reaches max_size * 3 / 2.\nThe extra headroom lets the periodic collector catch up while the\nexisting scheduler fallback continues to use the selected destination\nwhen cache creation fails. New traffic therefore stays serviceable\nwithout growing the tables further.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-99053": {
+                "cve_id": "CVE-2026-99053",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntipc: hold a reference to nodes found by link name\n\ntipc_node_find_by_name() returns a node after dropping its RCU read lock\nwithout taking a reference.  The LINK_SET, LINK_GET and LINK_RESET_STATS\nhandlers then lock and access the node, racing with timer-driven cleanup of\na down peer.  Generic netlink serialization does not exclude the node\ntimer.\n\nThe following interleaving can leave a handler using a freed node:\n\n  CPU 0: find the node under RCU and release the node read lock\n  CPU 1: tipc_node_timeout() clears the links and unlinks the down node\n  CPU 1: drop the list and timer references, queuing tipc_node_free()\n  CPU 0: leave the RCU read-side critical section\n  CPU 1: complete the grace period and free the node\n  CPU 0: acquire the node lock through the stale pointer\n\nLINK_SET also uses the node's media address after releasing the node lock,\nwhen passing queued packets to tipc_bearer_xmit().\n\nKASAN on v7.3-rc5 reported:\n\n  BUG: KASAN: slab-use-after-free in _raw_read_lock_bh\n  Write of size 4 at addr ffff88807e06f008 by task poc/92\n  Call Trace:\n   _raw_read_lock_bh                 kernel/locking/spinlock.c:287\n   tipc_nl_node_set_link             net/tipc/node.c:2475\n   genl_family_rcv_msg_doit          net/netlink/genetlink.c:1114\n   genl_rcv_msg                      net/netlink/genetlink.c:1209\n   netlink_rcv_skb                   net/netlink/af_netlink.c:2575\n\n  Allocated by task 0:\n   tipc_node_create                  net/tipc/node.c:539\n   tipc_node_check_dest              net/tipc/node.c:1196\n   tipc_disc_rcv                     net/tipc/discover.c:252\n\n  Freed by task 92:\n   kfree                             mm/slub.c:6801\n   rcu_core                          kernel/rcu/tree.c:2919\n\n  Last potentially related work creation:\n   __call_rcu_common.constprop.0     kernel/rcu/tree.c:3181\n   tipc_node_timeout                 net/tipc/node.c:814\n\nAcquire a reference to the selected node with kref_get_unless_zero() before\nleaving RCU, returning NULL if the node has already been released.  Release\nthat reference on every caller exit after the last node access, including\ntransmission in LINK_SET.  Keep the existing link lookup order and locking\nso concurrent link removal still takes the existing error paths.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-99082": {
+                "cve_id": "CVE-2026-99082",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: x86: Use active memslots for the per-vCPU MMIO cache\n\nKVM tags the per-vCPU MMIO cache with a memslot generation so that a\nmemslot update invalidates cached MMIO information.  Both the fill and\nvalidation paths use kvm_memslots(), which unconditionally selects address\nspace 0, even when the vCPU is running in SMM and using address space 1.\n\nCommit 56f17dd3fbc4 (\"kvm: x86: fix stale mmio cache bug\") added the\nmemslot generation to the cache key so that a memslot update could not\nleave a stale entry valid.  When commit 699023e23965 (\"KVM: x86: add SMM\nto the MMU role, support SMRAM address space\") added the SMM address space,\nthese helpers were not converted to use the active memslots.\n\nConsequently, an update to the SMM memslots can leave an entry from the old\nSMM address space apparently valid after the vCPU returns to the normal\naddress space.  A guest can then cause an access to valid RAM at the same\nGFN to be returned to userspace as KVM_EXIT_MMIO.\n\nCompleting that exit through the VMM's RAM address space writes the backing\npage without going through KVM's write-tracking path.  If the page backs a\nnested EPT table, KVM can continue using shadow translations derived from\nthe old contents.  The WARN_ON_ONCE() in kvm_mmu_write_protect_fault()\ncatches this invalid cache and memslot combination.\n\nUse the vCPU's active memslots when caching and validating the entry.\nMemslot generations are unique across address spaces, so the generation\nalso distinguishes the normal and SMM views.  This matches the MMIO SPTE\ncache, which already uses kvm_vcpu_memslots().\n\nOn an unpatched current-mainline kernel, a regression test that fills the\ncache in SMM and updates only the SMM memslots fails the intended RAM write\nand triggers the kvm_mmu_write_protect_fault() warning.  With this change,\nthe same test completes the RAM write without a warning.  The x86/smm_test,\nset_memory_region_test, and memslot_modification_stress_test selftests also\npass.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.189-236.399.amzn2023",
+                        "fixed": "1:6.1.190-237.431.amzn2023",
                         "identifier": "amzn2023"
                     }
                 ]
