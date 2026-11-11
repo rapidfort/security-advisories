@@ -39132,32 +39132,6 @@
                     }
                 ]
             },
-            "CVE-2026-23239": {
-                "cve_id": "CVE-2026-23239",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nespintcp: Fix race condition in espintcp_close()\n\nThis issue was discovered during a code audit.\n\nAfter cancel_work_sync() is called from espintcp_close(),\nespintcp_tx_work() can still be scheduled from paths such as\nthe Delayed ACK handler or ksoftirqd.\nAs a result, the espintcp_tx_work() worker may dereference a\nfreed espintcp ctx or sk.\n\nThe following is a simple race scenario:\n\n           cpu0                             cpu1\n\n  espintcp_close()\n    cancel_work_sync(&ctx->work);\n                                     espintcp_write_space()\n                                       schedule_work(&ctx->work);\n\nTo prevent this race condition, cancel_work_sync() is\nreplaced with disable_work_sync().",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-23240": {
-                "cve_id": "CVE-2026-23240",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntls: Fix race condition in tls_sw_cancel_work_tx()\n\nThis issue was discovered during a code audit.\n\nAfter cancel_delayed_work_sync() is called from tls_sk_proto_close(),\ntx_work_handler() can still be scheduled from paths such as the\nDelayed ACK handler or ksoftirqd.\nAs a result, the tx_work_handler() worker may dereference a freed\nTLS object.\n\nThe following is a simple race scenario:\n\n          cpu0                         cpu1\n\ntls_sk_proto_close()\n  tls_sw_cancel_work_tx()\n                                 tls_write_space()\n                                   tls_sw_write_space()\n                                     if (!test_and_set_bit(BIT_TX_SCHEDULED, &tx_ctx->tx_bitmask))\n    set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask);\n    cancel_delayed_work_sync(&ctx->tx_work.work);\n                                     schedule_delayed_work(&tx_ctx->tx_work.work, 0);\n\nTo prevent this race condition, cancel_delayed_work_sync() is\nreplaced with disable_delayed_work_sync().",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-23241": {
                 "cve_id": "CVE-2026-23241",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -48206,19 +48180,6 @@
                     }
                 ]
             },
-            "CVE-2026-52945": {
-                "cve_id": "CVE-2026-52945",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRevert \"wireguard: device: enable threaded NAPI\"\n\nThis reverts commit 933466fc50a8e4eb167acbd0d8ec96a078462e9c which is\ncommit db9ae3b6b43c79b1ba87eea849fd65efa05b4b2e upstream.\n\nWe have had three independent production user reports in combination\nwith Cilium utilizing WireGuard as encryption underneath that k8s Pod\nE/W traffic to certain peer nodes fully stalled. The situation appears\nas follows:\n\n  - Occurs very rarely but at random times under heavy networking load.\n  - Once the issue triggers the decryption side stops working completely\n    for that WireGuard peer, other peers keep working fine. The stall\n    happens also for newly initiated connections towards that particular\n    WireGuard peer.\n  - Only the decryption side is affected, never the encryption side.\n  - Once it triggers, it never recovers and remains in this state,\n    the CPU/mem on that node looks normal, no leak, busy loop or crash.\n  - bpftrace on the affected system shows that wg_prev_queue_enqueue\n    fails, thus the MAX_QUEUED_PACKETS (1024 skbs!) for the peer's\n    rx_queue is reached.\n  - Also, bpftrace shows that wg_packet_rx_poll for that peer is never\n    called again after reaching this state for that peer. For other\n    peers wg_packet_rx_poll does get called normally.\n  - Commit db9ae3b (\"wireguard: device: enable threaded NAPI\")\n    switched WireGuard to threaded NAPI by default. The default has\n    not been changed for triggering the issue, neither did CPU\n    hotplugging occur (i.e. 5bd8de2 (\"wireguard: queueing: always\n    return valid online CPU in wg_cpumask_choose_online()\")).\n  - The issue has been observed with stable kernels of v5.15 as well as\n    v6.1. It was reported to us that v5.10 stable is working fine, and\n    no report on v6.6 stable either (somewhat related discussion in [0]\n    though).\n  - In the WireGuard driver the only material difference between v5.10\n    stable and v5.15 stable is the switch to threaded NAPI by default.\n\n    [0] https://lore.kernel.org/netdev/CA+wXwBTT74RErDGAnj98PqS=wvdh8eM1pi4q6tTdExtjnokKqA@mail.gmail.com/\n\nBreakdown of the problem:\n\n  1) skbs arriving for decryption are enqueued to the peer->rx_queue in\n     wg_packet_consume_data via wg_queue_enqueue_per_device_and_peer.\n  2) The latter only moves the skb into the MPSC peer queue if it does\n     not surpass MAX_QUEUED_PACKETS (1024) which is kept track in an\n     atomic counter via wg_prev_queue_enqueue.\n  3) In case enqueueing was successful, the skb is also queued up\n     in the device queue, round-robin picks a next online CPU, and\n     schedules the decryption worker.\n  4) The wg_packet_decrypt_worker, once scheduled, picks these up\n     from the queue, decrypts the packets and once done calls into\n     wg_queue_enqueue_per_peer_rx.\n  5) The latter updates the state to PACKET_STATE_CRYPTED on success\n     and calls napi_schedule on the per peer->napi instance.\n  6) NAPI then polls via wg_packet_rx_poll. wg_prev_queue_peek checks\n     on the peer->rx_queue. It will wg_prev_queue_dequeue if the\n     queue->peeked skb was not cached yet, or just return the latter\n     otherwise. (wg_prev_queue_drop_peeked later clears the cache.)\n  7) From an ordering perspective, the peer->rx_queue has skbs in order\n     while the device queue with the per-CPU worker threads from a\n     global ordering PoV can finish the decryption and signal the skb\n     PACKET_STATE_CRYPTED out of order.\n  8) A situation can be observed that the first packet coming in will\n     be stuck waiting for the decryption worker to be scheduled for\n     a longer time when the system is under pressure.\n  9) While this is the case, the other CPUs in the meantime finish\n     decryption and call into napi_schedule.\n 10) Now in wg_packet_rx_poll it picks up the first in-order skb\n     from the peer->rx_queue and sees that its state is still\n     PACKET_STATE_UNCRYPTED. The NAPI poll routine then exits e\n---truncated---",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-52946": {
                 "cve_id": "CVE-2026-52946",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -48977,19 +48938,6 @@
                 "cve_id": "CVE-2026-53074",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: reject short IPv4/IPv6 inputs in bpf_prog_test_run_skb\n\nbpf_prog_test_run_skb() calls eth_type_trans() first and then uses\nskb->protocol to initialize sk family and address fields for the test\nrun.\n\nFor IPv4 and IPv6 packets, it may access ip_hdr(skb) or ipv6_hdr(skb)\neven when the provided test input only contains an Ethernet header.\n\nReject the input earlier if the Ethernet frame carries IPv4/IPv6\nEtherType but the L3 header is too short.\n\nFold the IPv4/IPv6 header length checks into the existing protocol\nswitch and return -EINVAL before accessing the network headers.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-53075": {
-                "cve_id": "CVE-2026-53075",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nppp: require CAP_NET_ADMIN in target netns for unattached ioctls\n\n/dev/ppp open is currently authorized against file->f_cred->user_ns,\nwhile unattached administrative ioctls operate on current->nsproxy->net_ns.\n\nAs a result, a local unprivileged user can create a new user namespace\nwith CLONE_NEWUSER, gain CAP_NET_ADMIN only in that new user namespace,\nand still issue PPPIOCNEWUNIT, PPPIOCATTACH, or PPPIOCATTCHAN against\nan inherited network namespace.\n\nRequire CAP_NET_ADMIN in the user namespace that owns the target network\nnamespace before handling unattached PPP administrative ioctls.\n\nThis preserves normal pppd operation in the network namespace it is\nactually privileged in, while rejecting the userns-only inherited-netns\ncase.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -51469,19 +51417,6 @@
                     }
                 ]
             },
-            "CVE-2026-63914": {
-                "cve_id": "CVE-2026-63914",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: route MIGRATE notifications to caller's netns\n\nxfrm_send_migrate() in net/xfrm/xfrm_user.c and pfkey_send_migrate()\nin net/key/af_key.c both hardcode &init_net for the multicast that\nannounces a successful XFRM_MSG_MIGRATE / SADB_X_MIGRATE.\n\nXFRM_MSG_MIGRATE arrives on a per-netns NETLINK_XFRM socket, and the\nrest of the xfrm/af_key netlink path was made netns-aware in 2008.\nThe other 14 multicast paths in xfrm_user.c route their event using\nxs_net(x), xp_net(xp) or sock_net(skb->sk); only the migrate path\nwas missed.\n\nTwo consequences of the init_net hardcoding:\n\n  1. The notification (selector, old/new endpoint addresses, and the\n     km_address) is delivered to listeners on init_net's\n     XFRMNLGRP_MIGRATE / pfkey BROADCAST_ALL groups rather than on\n     the issuing netns. An IKE daemon running in init_net therefore\n     receives migration notifications originating from any other\n     netns on the host.\n\n  2. An IKE daemon running inside a non-init netns and subscribed\n     to its own XFRMNLGRP_MIGRATE / pfkey groups never receives the\n     notification of its own migration. IKEv2 MOBIKE / address-update\n     handling inside a netns is silently broken.\n\nThread struct net through km_migrate() and the xfrm_mgr.migrate\nfunction pointer, drop the &init_net override in xfrm_send_migrate()\nand pfkey_send_migrate(), and pass the caller's net (already in\nscope in xfrm_migrate() via sock_net(skb->sk)) all the way down.\nstruct xfrm_mgr is in-tree only and not exported as a stable API,\nso the function-pointer signature change is internal.\n\npfkey_broadcast() is already netns-aware via net_generic(net,\npfkey_net_id) since the pernet conversion. The five other\npfkey_broadcast() callers in af_key.c already pass xs_net(x),\nsock_net(sk) or a per-netns net, so this only removes the\n&init_net outlier.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-63916": {
                 "cve_id": "CVE-2026-63916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -51846,19 +51781,6 @@
                     }
                 ]
             },
-            "CVE-2026-64000": {
-                "cve_id": "CVE-2026-64000",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: hsr: fix potential OOB access in supervision frame handling\n\nEnsure the entire TLV header is linearized before access by adding\nsizeof(struct hsr_sup_tlv) to the pskb_may_pull() calls. Without this,\na truncated frame could cause an out-of-bounds access.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-64001": {
                 "cve_id": "CVE-2026-64001",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -51968,19 +51890,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrxrpc: Fix DATA decrypt vs splice() by copying data to buffer in recvmsg\n\nThis improves the fix for CVE-2026-43500.\n\nFix the pagecache corruption from in-place decryption of a DATA packet\ntransmitted locally by splice() by getting rid of the packet sharing in the\nI/O thread and unconditionally extracting the packet content into a bounce\nbuffer in which the buffer is decrypted.  recvmsg() (or the kernel\nequivalent) then copies the data from the bounce buffer to the destination\nbuffer.  The sk_buff then remains unmodified.\n\nThis has an additional advantage in that the packet is then arranged in the\nbuffer with the correct alignment required for the crypto algorithms to\nprocess directly.  The performance of the crypto does seem to be a little\nfaster and, surprisingly, the unencrypted performance doesn't seem to\nchange much - possibly due to removing complexity from the I/O thread.\n\nYet another advantage is that the I/O thread doesn't have to copy packets\nwhich would slow down packet distribution, ACK generation, etc..\n\nThe buffer belongs to the call and is allocated initially at 2K,\nsufficiently large to hold a whole jumbo subpacket, but the buffer will be\nincreased in size if needed.  However, to take this work, MSG_PEEK may\ncause a later packet to be decrypted into the buffer, in which case the\nearlier one will need re-decrypting for a subsequent recvmsg().\n\nNote that rx_pkt_offset may legitimately see 0 as a valid offset now, so\nswitch to using USHRT_MAX to indicate an invalid offset.\n\nNote also that I would generally prefer to replace the buffers of the\ncurrent sk_buff with a new kmalloc'd buffer of the right size, ditching the\nold data and frags as this makes the handling of MSG_PEEK easier and\nremoves the re-decryption issue, but this looks like quite a complicated\nthing to achieve.  skb_morph() looks half way to what I want, but I don't\nwant to have to allocate a new sk_buff.",
                 "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-64027": {
-                "cve_id": "CVE-2026-64027",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
-                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -52175,19 +52084,6 @@
                 "cve_id": "CVE-2026-64106",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: arm64: vgic-its: Reject restored DTE with out-of-range num_eventid_bits\n\nUserspace can restore an ITS Device Table Entry whose Size field encodes\nmore EventID bits than the virtual ITS supports.  The live MAPD path\nrejects that state, but vgic_its_restore_dte() accepts it and stores the\nout-of-range value in dev->num_eventid_bits.\n\nReject restored DTEs with num_eventid_bits > VITS_TYPER_IDBITS before\nallocating the device.  This mirrors the MAPD check and prevents the\nrestored state from reaching vgic_its_restore_itt(), where the unchecked\nvalue can be converted into an oversized scan_its_table() range.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-64109": {
-                "cve_id": "CVE-2026-64109",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -52860,19 +52756,6 @@
                     }
                 ]
             },
-            "CVE-2026-64279": {
-                "cve_id": "CVE-2026-64279",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: core: fix adapter deregistration race\n\nAdapters can be looked up by their id using i2c_get_adapter() which\ntakes a reference to the embedded struct device.\n\nRemove the adapter from the IDR before tearing it down during\nderegistration (and on registration failure) to make sure its resources\nare not accessed after having been freed (e.g. the device name).",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-64284": {
                 "cve_id": "CVE-2026-64284",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -53419,19 +53302,6 @@
                     }
                 ]
             },
-            "CVE-2026-64355": {
-                "cve_id": "CVE-2026-64355",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject fragmented frames in devmap\n\nDevmap broadcast redirects clone the packet for all but the last\ndestination.\n\nFor native XDP, that clone path copies only the linear xdp_frame data,\nwhile fragmented frames keep skb_shared_info in tailroom outside the\nlinear area. Cloning such a frame leaves XDP_FLAGS_HAS_FRAGS set but\nwithout valid frag metadata, and the later free path can interpret\nuninitialized tail data as skb_shared_info, leading to an out-of-bounds\naccess during frame return.\n\nReject fragmented native XDP frames in dev_map_enqueue_clone().\n\nAdd the same restriction to the generic XDP clone path in\ndev_map_redirect_clone(). Generic XDP represents fragmented packets as\nnonlinear skbs, and rejecting them here keeps clone-based broadcast\nsupport aligned between native and generic XDP.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-64356": {
                 "cve_id": "CVE-2026-64356",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -53553,19 +53423,6 @@
                 "cve_id": "CVE-2026-64373",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncpufreq: Fix hotplug-suspend race during reboot\n\nDuring system reboot, cpufreq_suspend() is called via the\nkernel_restart() -> device_shutdown() path. Unlike the normal system\nsuspend path, the reboot path does not call freeze_processes(), so\nuserspace processes and kernel threads remain active.\n\nThis allows CPU hotplug operations to run concurrently with\ncpufreq_suspend(). The original code has no synchronization with CPU\nhotplug, leading to a race condition where governor_data can be freed\nby the hotplug path while cpufreq_suspend() is still accessing it,\nresulting in a null pointer dereference:\n\n  Unable to handle kernel NULL pointer dereference\n  Call Trace:\n   do_kernel_fault+0x28/0x3c\n   cpufreq_suspend+0xdc/0x160\n   device_shutdown+0x18/0x200\n   kernel_restart+0x40/0x80\n   arm64_sys_reboot+0x1b0/0x200\n\nFix this by adding cpus_read_lock()/cpus_read_unlock() to\ncpufreq_suspend() to block CPU hotplug operations while suspend is in\nprogress.\n\n[ rjw: Changelog edits ]",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-64375": {
-                "cve_id": "CVE-2026-64375",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nproc: protect ptrace_may_access() with exec_update_lock (FD links)\n\nproc_pid_get_link() and proc_pid_readlink() currently look up the task from\nthe pid once, then do the ptrace access check on that task, then look up\nthe task from the pid a second time to do the actual access.\nThat's racy in several ways.\n\nTo fix it, pass the task to the ->proc_get_link() handler, and instead of\nproc_fd_access_allowed(), introduce a new helper call_proc_get_link() that\nlooks up and locks the task, does the access check, and calls\n->proc_get_link().",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -54849,19 +54706,6 @@
                     }
                 ]
             },
-            "CVE-2026-68103": {
-                "cve_id": "CVE-2026-68103",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: reject mapping a reserved doorbell to a new queue\n\nWhen creating an user-queue, the user space\nprovides a doorbell BO handle and an offset within\nthe bo to obtain a doorbell.\n\nHowever current implementation using xa_store_irq()\nto store a doorbell, which allows a later queue created\nwith the same BO and offset parameters to overwrite an\nexisting queue and doorbell mapping.\n\nThis can cause problems like misrouting fence IRQ\nprocessing to a wrong queue, and mislead the cleanup\nprocess of one queue erasing the mapping of another queue.\n\nThis commit fixes this issue by replacing xa_store_irq with\nxa_insert_irq, which rejects mapping a reserved\ndoorbell to a newly created queue\n\n(cherry picked from commit 6244eae22966350db52faf9c1369d3b2ffc5de4e)",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-68104": {
                 "cve_id": "CVE-2026-68104",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -55348,19 +55192,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntracing: Fix mmiotrace possible NULL dereferencing of hiter->dev\n\nIf the mmio_pipe_open() fails to find a PCI device, the hiter->dev\nwill be assigned to NULL. The mmiotrace read() function dereferences the\nhiter->dev if hiter exists.\n\nChange the test of the read to not only check hiter being NULL, but also\nthe hiter->dev before dereferencing it.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-68181": {
-                "cve_id": "CVE-2026-68181",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmei: bus: access mei_device under device_lock on cleanup\n\nFix couple of problems in mei_cl_bus_dev_release():\n\nmei_cl_flush_queues() is running without lock.\nbus->file_list access after mei_dev_bus_put(bus) can become a\nuse-after-free if this was the last reference to bus.\n\nProtect queues cleanup and WARN traversal by device lock there\nto avoid the concurrent access problems.\nMove WARN traversal before mei_dev_bus_put(bus).\n\nThis file uses bus variable name for mei_device, adjust\ncode of mei_cl_bus_dev_release() to use bus variable too.",
-                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -56752,19 +56583,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/iucv: take a reference on the socket found in afiucv_hs_rcv()\n\nafiucv_hs_rcv() looks up the destination socket under iucv_sk_list.lock,\ndrops the lock, and then passes the socket to the afiucv_hs_callback_*()\nhandlers without holding a reference. AF_IUCV sockets are not\nRCU-protected and are freed synchronously by iucv_sock_kill() ->\nsock_put(), so a concurrent close can free the socket in the window\nbetween read_unlock() and the handler, which then dereferences freed\nmemory (for example sk->sk_data_ready() in afiucv_hs_callback_syn()).\n\nTake a reference with sock_hold() while the socket is still on the list\nand release it with sock_put() once the handler has run.",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-68398": {
-                "cve_id": "CVE-2026-68398",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nppp: defer channel free to an RCU grace period to fix pppol2tp RX UAF\n\npppol2tp_recv() runs in the L2TP UDP-encap softirq RX path:\n\n l2tp_udp_encap_recv() -> l2tp_recv_common() -> pppol2tp_recv()\n   -> ppp_input(&po->chan)\n\nIt runs under rcu_read_lock() holding only an l2tp_session reference and\ntakes NO reference on the internal PPP channel (struct channel,\nchan->ppp) that ppp_input() dereferences.\n\nThe pppox socket is SOCK_RCU_FREE, so 'po' and the embedded ppp_channel\nare RCU-safe.  But the internal struct channel is a separate allocation\nthat ppp_release_channel() frees with a plain kfree():\n\n close(data socket) -> pppol2tp_release() -> pppox_unbind_sock()\n   -> ppp_unregister_channel() -> ppp_release_channel() -> kfree(pch)\n\nFor a channel that is bound (PPPIOCGCHAN) but not attached to a ppp unit\n(no PPPIOCCONNECT, pch->ppp == NULL) and not bridged, teardown skips\nboth ppp_disconnect_channel()'s synchronize_net() and\nppp_unbridge_channels()'s synchronize_rcu(), so the kfree() has no grace\nperiod.  rcu_read_lock() in pppol2tp_recv() does not protect against a\nplain kfree(), so an in-flight ppp_input() on one CPU can dereference\nthe channel just freed by close() on another CPU.\n\nThe bug is reachable by an unprivileged user.\n\nDefer the channel free to an RCU callback via call_rcu() so the grace\nperiod fences any in-flight ppp_input(). The disconnect and unbridge\nteardown paths already fence with synchronize_net()/synchronize_rcu();\ncall_rcu() does the same here without stalling the close() path.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -108060,32 +107878,6 @@
                     }
                 ]
             },
-            "CVE-2026-23239": {
-                "cve_id": "CVE-2026-23239",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nespintcp: Fix race condition in espintcp_close()\n\nThis issue was discovered during a code audit.\n\nAfter cancel_work_sync() is called from espintcp_close(),\nespintcp_tx_work() can still be scheduled from paths such as\nthe Delayed ACK handler or ksoftirqd.\nAs a result, the espintcp_tx_work() worker may dereference a\nfreed espintcp ctx or sk.\n\nThe following is a simple race scenario:\n\n           cpu0                             cpu1\n\n  espintcp_close()\n    cancel_work_sync(&ctx->work);\n                                     espintcp_write_space()\n                                       schedule_work(&ctx->work);\n\nTo prevent this race condition, cancel_work_sync() is\nreplaced with disable_work_sync().",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-23240": {
-                "cve_id": "CVE-2026-23240",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntls: Fix race condition in tls_sw_cancel_work_tx()\n\nThis issue was discovered during a code audit.\n\nAfter cancel_delayed_work_sync() is called from tls_sk_proto_close(),\ntx_work_handler() can still be scheduled from paths such as the\nDelayed ACK handler or ksoftirqd.\nAs a result, the tx_work_handler() worker may dereference a freed\nTLS object.\n\nThe following is a simple race scenario:\n\n          cpu0                         cpu1\n\ntls_sk_proto_close()\n  tls_sw_cancel_work_tx()\n                                 tls_write_space()\n                                   tls_sw_write_space()\n                                     if (!test_and_set_bit(BIT_TX_SCHEDULED, &tx_ctx->tx_bitmask))\n    set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask);\n    cancel_delayed_work_sync(&ctx->tx_work.work);\n                                     schedule_delayed_work(&tx_ctx->tx_work.work, 0);\n\nTo prevent this race condition, cancel_delayed_work_sync() is\nreplaced with disable_delayed_work_sync().",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-23241": {
                 "cve_id": "CVE-2026-23241",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -115860,19 +115652,6 @@
                     }
                 ]
             },
-            "CVE-2026-63914": {
-                "cve_id": "CVE-2026-63914",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: route MIGRATE notifications to caller's netns\n\nxfrm_send_migrate() in net/xfrm/xfrm_user.c and pfkey_send_migrate()\nin net/key/af_key.c both hardcode &init_net for the multicast that\nannounces a successful XFRM_MSG_MIGRATE / SADB_X_MIGRATE.\n\nXFRM_MSG_MIGRATE arrives on a per-netns NETLINK_XFRM socket, and the\nrest of the xfrm/af_key netlink path was made netns-aware in 2008.\nThe other 14 multicast paths in xfrm_user.c route their event using\nxs_net(x), xp_net(xp) or sock_net(skb->sk); only the migrate path\nwas missed.\n\nTwo consequences of the init_net hardcoding:\n\n  1. The notification (selector, old/new endpoint addresses, and the\n     km_address) is delivered to listeners on init_net's\n     XFRMNLGRP_MIGRATE / pfkey BROADCAST_ALL groups rather than on\n     the issuing netns. An IKE daemon running in init_net therefore\n     receives migration notifications originating from any other\n     netns on the host.\n\n  2. An IKE daemon running inside a non-init netns and subscribed\n     to its own XFRMNLGRP_MIGRATE / pfkey groups never receives the\n     notification of its own migration. IKEv2 MOBIKE / address-update\n     handling inside a netns is silently broken.\n\nThread struct net through km_migrate() and the xfrm_mgr.migrate\nfunction pointer, drop the &init_net override in xfrm_send_migrate()\nand pfkey_send_migrate(), and pass the caller's net (already in\nscope in xfrm_migrate() via sock_net(skb->sk)) all the way down.\nstruct xfrm_mgr is in-tree only and not exported as a stable API,\nso the function-pointer signature change is internal.\n\npfkey_broadcast() is already netns-aware via net_generic(net,\npfkey_net_id) since the pernet conversion. The five other\npfkey_broadcast() callers in af_key.c already pass xs_net(x),\nsock_net(sk) or a per-netns net, so this only removes the\n&init_net outlier.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-63916": {
                 "cve_id": "CVE-2026-63916",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -116432,19 +116211,6 @@
                     }
                 ]
             },
-            "CVE-2026-64279": {
-                "cve_id": "CVE-2026-64279",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: core: fix adapter deregistration race\n\nAdapters can be looked up by their id using i2c_get_adapter() which\ntakes a reference to the embedded struct device.\n\nRemove the adapter from the IDR before tearing it down during\nderegistration (and on registration failure) to make sure its resources\nare not accessed after having been freed (e.g. the device name).",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-64299": {
                 "cve_id": "CVE-2026-64299",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -116679,19 +116445,6 @@
                     }
                 ]
             },
-            "CVE-2026-64355": {
-                "cve_id": "CVE-2026-64355",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject fragmented frames in devmap\n\nDevmap broadcast redirects clone the packet for all but the last\ndestination.\n\nFor native XDP, that clone path copies only the linear xdp_frame data,\nwhile fragmented frames keep skb_shared_info in tailroom outside the\nlinear area. Cloning such a frame leaves XDP_FLAGS_HAS_FRAGS set but\nwithout valid frag metadata, and the later free path can interpret\nuninitialized tail data as skb_shared_info, leading to an out-of-bounds\naccess during frame return.\n\nReject fragmented native XDP frames in dev_map_enqueue_clone().\n\nAdd the same restriction to the generic XDP clone path in\ndev_map_redirect_clone(). Generic XDP represents fragmented packets as\nnonlinear skbs, and rejecting them here keeps clone-based broadcast\nsupport aligned between native and generic XDP.",
-                "severity": "CRITICAL",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
             "CVE-2026-64362": {
                 "cve_id": "CVE-2026-64362",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -116749,19 +116502,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncpufreq: Fix hotplug-suspend race during reboot\n\nDuring system reboot, cpufreq_suspend() is called via the\nkernel_restart() -> device_shutdown() path. Unlike the normal system\nsuspend path, the reboot path does not call freeze_processes(), so\nuserspace processes and kernel threads remain active.\n\nThis allows CPU hotplug operations to run concurrently with\ncpufreq_suspend(). The original code has no synchronization with CPU\nhotplug, leading to a race condition where governor_data can be freed\nby the hotplug path while cpufreq_suspend() is still accessing it,\nresulting in a null pointer dereference:\n\n  Unable to handle kernel NULL pointer dereference\n  Call Trace:\n   do_kernel_fault+0x28/0x3c\n   cpufreq_suspend+0xdc/0x160\n   device_shutdown+0x18/0x200\n   kernel_restart+0x40/0x80\n   arm64_sys_reboot+0x1b0/0x200\n\nFix this by adding cpus_read_lock()/cpus_read_unlock() to\ncpufreq_suspend() to block CPU hotplug operations while suspend is in\nprogress.\n\n[ rjw: Changelog edits ]",
                 "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-64375": {
-                "cve_id": "CVE-2026-64375",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nproc: protect ptrace_may_access() with exec_update_lock (FD links)\n\nproc_pid_get_link() and proc_pid_readlink() currently look up the task from\nthe pid once, then do the ptrace access check on that task, then look up\nthe task from the pid a second time to do the actual access.\nThat's racy in several ways.\n\nTo fix it, pass the task to the ->proc_get_link() handler, and instead of\nproc_fd_access_allowed(), introduce a new helper call_proc_get_link() that\nlooks up and locks the task, does the access check, and calls\n->proc_get_link().",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -117425,19 +117165,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: fix aperture mapping leak\n\namdgpu_pci_remove() calls drm_dev_unplug() before invoking the driver\nfini routines. This causes drm_dev_enter() in amdgpu_ttm_fini() to\nalways return false, so iounmap(aper_base_kaddr) never runs on normal\ndriver unload, leaving an orphaned entry in the x86 PAT interval tree.\n\nOn connected_to_cpu hardware, the aperture is mapped write-back (WB) via\nioremap_cache(). On reload, IP discovery calls memremap(..., MEMREMAP_WC)\nover the same range. The WC vs WB conflict causes:\n\n  ioremap error for 0x..., requested 0x1, got 0x0\n  amdgpu: discovery failed: -2\n\nFix by switching to devres-managed mappings so cleanup is guaranteed\nregardless of drm_dev_enter() state:\n\n- connected_to_cpu path: devm_memremap(MEMREMAP_WB). For\n  IORESOURCE_SYSTEM_RAM ranges this takes the try_ram_remap() shortcut,\n  returning __va(offset) from the existing kernel direct map. No new\n  ioremap VA or PAT entry is created, so there is nothing to orphan.\n\n- dGPU path: devm_ioremap_wc() registers iounmap() as a devres action,\n  guaranteeing cleanup at device_del() time.\n\nAlso remove iounmap(aper_base_kaddr) from amdgpu_device_unmap_mmio()\nsince the mapping is now devres-owned.\n\nv2: Remove redundant x86_64 guard (Lijo)\n\n(cherry picked from commit d871e99879cb5fd1fa798b006b4888887e63a17a)",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-68103": {
-                "cve_id": "CVE-2026-68103",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: reject mapping a reserved doorbell to a new queue\n\nWhen creating an user-queue, the user space\nprovides a doorbell BO handle and an offset within\nthe bo to obtain a doorbell.\n\nHowever current implementation using xa_store_irq()\nto store a doorbell, which allows a later queue created\nwith the same BO and offset parameters to overwrite an\nexisting queue and doorbell mapping.\n\nThis can cause problems like misrouting fence IRQ\nprocessing to a wrong queue, and mislead the cleanup\nprocess of one queue erasing the mapping of another queue.\n\nThis commit fixes this issue by replacing xa_store_irq with\nxa_insert_irq, which rejects mapping a reserved\ndoorbell to a newly created queue\n\n(cherry picked from commit 6244eae22966350db52faf9c1369d3b2ffc5de4e)",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -118633,19 +118360,6 @@
                 "cve_id": "CVE-2026-68397",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/iucv: take a reference on the socket found in afiucv_hs_rcv()\n\nafiucv_hs_rcv() looks up the destination socket under iucv_sk_list.lock,\ndrops the lock, and then passes the socket to the afiucv_hs_callback_*()\nhandlers without holding a reference. AF_IUCV sockets are not\nRCU-protected and are freed synchronously by iucv_sock_kill() ->\nsock_put(), so a concurrent close can free the socket in the window\nbetween read_unlock() and the handler, which then dereferences freed\nmemory (for example sk->sk_data_ready() in afiucv_hs_callback_syn()).\n\nTake a reference with sock_hold() while the socket is still on the list\nand release it with sock_put() once the handler has run.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-68398": {
-                "cve_id": "CVE-2026-68398",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nppp: defer channel free to an RCU grace period to fix pppol2tp RX UAF\n\npppol2tp_recv() runs in the L2TP UDP-encap softirq RX path:\n\n l2tp_udp_encap_recv() -> l2tp_recv_common() -> pppol2tp_recv()\n   -> ppp_input(&po->chan)\n\nIt runs under rcu_read_lock() holding only an l2tp_session reference and\ntakes NO reference on the internal PPP channel (struct channel,\nchan->ppp) that ppp_input() dereferences.\n\nThe pppox socket is SOCK_RCU_FREE, so 'po' and the embedded ppp_channel\nare RCU-safe.  But the internal struct channel is a separate allocation\nthat ppp_release_channel() frees with a plain kfree():\n\n close(data socket) -> pppol2tp_release() -> pppox_unbind_sock()\n   -> ppp_unregister_channel() -> ppp_release_channel() -> kfree(pch)\n\nFor a channel that is bound (PPPIOCGCHAN) but not attached to a ppp unit\n(no PPPIOCCONNECT, pch->ppp == NULL) and not bridged, teardown skips\nboth ppp_disconnect_channel()'s synchronize_net() and\nppp_unbridge_channels()'s synchronize_rcu(), so the kfree() has no grace\nperiod.  rcu_read_lock() in pppol2tp_recv() does not protect against a\nplain kfree(), so an in-flight ppp_input() on one CPU can dereference\nthe channel just freed by close() on another CPU.\n\nThe bug is reachable by an unprivileged user.\n\nDefer the channel free to an RCU callback via call_rcu() so the grace\nperiod fences any in-flight ppp_input(). The disconnect and unbridge\nteardown paths already fence with synchronize_net()/synchronize_rcu();\ncall_rcu() does the same here without stalling the close() path.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [

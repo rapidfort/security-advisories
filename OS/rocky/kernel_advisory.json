@@ -39420,10 +39420,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrxrpc: Fix recvmsg() unconditional requeue\n\nIf rxrpc_recvmsg() fails because MSG_DONTWAIT was specified but the call at\nthe front of the recvmsg queue already has its mutex locked, it requeues\nthe call - whether or not the call is already queued.  The call may be on\nthe queue because MSG_PEEK was also passed and so the call was not dequeued\nor because the I/O thread requeued it.\n\nThe unconditional requeue may then corrupt the recvmsg queue, leading to\nthings like UAFs or refcount underruns.\n\nFix this by only requeuing the call if it isn't already on the queue - and\nmoving it to the front if it is already queued.  If we don't queue it, we\nhave to put the ref we obtained by dequeuing it.\n\nAlso, MSG_PEEK doesn't dequeue the call so shouldn't call\nrxrpc_notify_socket() for the call if we didn't use up all the data on the\nqueue, so fix that also.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -40269,10 +40270,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nespintcp: Fix race condition in espintcp_close()\n\nThis issue was discovered during a code audit.\n\nAfter cancel_work_sync() is called from espintcp_close(),\nespintcp_tx_work() can still be scheduled from paths such as\nthe Delayed ACK handler or ksoftirqd.\nAs a result, the espintcp_tx_work() worker may dereference a\nfreed espintcp ctx or sk.\n\nThe following is a simple race scenario:\n\n           cpu0                             cpu1\n\n  espintcp_close()\n    cancel_work_sync(&ctx->work);\n                                     espintcp_write_space()\n                                       schedule_work(&ctx->work);\n\nTo prevent this race condition, cancel_work_sync() is\nreplaced with disable_work_sync().",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -40282,10 +40284,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntls: Fix race condition in tls_sw_cancel_work_tx()\n\nThis issue was discovered during a code audit.\n\nAfter cancel_delayed_work_sync() is called from tls_sk_proto_close(),\ntx_work_handler() can still be scheduled from paths such as the\nDelayed ACK handler or ksoftirqd.\nAs a result, the tx_work_handler() worker may dereference a freed\nTLS object.\n\nThe following is a simple race scenario:\n\n          cpu0                         cpu1\n\ntls_sk_proto_close()\n  tls_sw_cancel_work_tx()\n                                 tls_write_space()\n                                   tls_sw_write_space()\n                                     if (!test_and_set_bit(BIT_TX_SCHEDULED, &tx_ctx->tx_bitmask))\n    set_bit(BIT_TX_SCHEDULED, &ctx->tx_bitmask);\n    cancel_delayed_work_sync(&ctx->tx_work.work);\n                                     schedule_delayed_work(&tx_ctx->tx_work.work, 0);\n\nTo prevent this race condition, cancel_delayed_work_sync() is\nreplaced with disable_delayed_work_sync().",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -49556,10 +49559,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: ipv6: fix NOREF dst use in seg6 and rpl lwtunnels\n\nseg6_input_core() and rpl_input() call ip6_route_input() which sets a\nNOREF dst on the skb, then pass it to dst_cache_set_ip6() invoking\ndst_hold() unconditionally.\nOn PREEMPT_RT, ksoftirqd is preemptible and a higher-priority task can\nrelease the underlying pcpu_rt between the lookup and the caching\nthrough a concurrent FIB lookup on a shared nexthop.\nSimplified race sequence:\n\n  ksoftirqd/X                       higher-prio task (same CPU X)\n  -----------                       --------------------------------\n  seg6_input_core(,skb)/rpl_input(skb)\n    dst_cache_get()\n      -> miss\n    ip6_route_input(skb)\n      -> ip6_pol_route(,skb,flags)\n         [RT6_LOOKUP_F_DST_NOREF in flags]\n        -> FIB lookup resolves fib6_nh\n           [nhid=N route]\n        -> rt6_make_pcpu_route()\n           [creates pcpu_rt, refcount=1]\n             pcpu_rt->sernum = fib6_sernum\n             [fib6_sernum=W]\n           -> cmpxchg(fib6_nh.rt6i_pcpu,\n                      NULL, pcpu_rt)\n              [slot was empty, store succeeds]\n      -> skb_dst_set_noref(skb, dst)\n         [dst is pcpu_rt, refcount still 1]\n\n                                    rt_genid_bump_ipv6()\n                                      -> bumps fib6_sernum\n                                         [fib6_sernum from W to Z]\n                                    ip6_route_output()\n                                      -> ip6_pol_route()\n                                        -> FIB lookup resolves fib6_nh\n                                           [nhid=N]\n                                        -> rt6_get_pcpu_route()\n                                             pcpu_rt->sernum != fib6_sernum\n                                             [W <> Z, stale]\n                                          -> prev = xchg(rt6i_pcpu, NULL)\n                                          -> dst_release(prev)\n                                             [prev is pcpu_rt,\n                                              refcount 1->0, dead]\n\n    dst = skb_dst(skb)\n    [dst is the dead pcpu_rt]\n    dst_cache_set_ip6(dst)\n      -> dst_hold() on dead dst\n      -> WARN / use-after-free\n\nFor the race to occur, ksoftirqd must be preemptible (PREEMPT_RT without\nPREEMPT_RT_NEEDS_BH_LOCK) and a concurrent task must be able to release\nthe pcpu_rt. Shared nexthop objects provide such a path, as two routes\npointing to the same nhid share the same fib6_nh and its rt6i_pcpu\nentry.\n\nFix seg6_input_core() and rpl_input() by calling skb_dst_force() after\nip6_route_input() to force the NOREF dst into a refcounted one before\ncaching.\nThe output path is not affected as ip6_route_output() already returns a\nrefcounted dst.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -51339,10 +51343,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRevert \"wireguard: device: enable threaded NAPI\"\n\nThis reverts commit 933466fc50a8e4eb167acbd0d8ec96a078462e9c which is\ncommit db9ae3b6b43c79b1ba87eea849fd65efa05b4b2e upstream.\n\nWe have had three independent production user reports in combination\nwith Cilium utilizing WireGuard as encryption underneath that k8s Pod\nE/W traffic to certain peer nodes fully stalled. The situation appears\nas follows:\n\n  - Occurs very rarely but at random times under heavy networking load.\n  - Once the issue triggers the decryption side stops working completely\n    for that WireGuard peer, other peers keep working fine. The stall\n    happens also for newly initiated connections towards that particular\n    WireGuard peer.\n  - Only the decryption side is affected, never the encryption side.\n  - Once it triggers, it never recovers and remains in this state,\n    the CPU/mem on that node looks normal, no leak, busy loop or crash.\n  - bpftrace on the affected system shows that wg_prev_queue_enqueue\n    fails, thus the MAX_QUEUED_PACKETS (1024 skbs!) for the peer's\n    rx_queue is reached.\n  - Also, bpftrace shows that wg_packet_rx_poll for that peer is never\n    called again after reaching this state for that peer. For other\n    peers wg_packet_rx_poll does get called normally.\n  - Commit db9ae3b (\"wireguard: device: enable threaded NAPI\")\n    switched WireGuard to threaded NAPI by default. The default has\n    not been changed for triggering the issue, neither did CPU\n    hotplugging occur (i.e. 5bd8de2 (\"wireguard: queueing: always\n    return valid online CPU in wg_cpumask_choose_online()\")).\n  - The issue has been observed with stable kernels of v5.15 as well as\n    v6.1. It was reported to us that v5.10 stable is working fine, and\n    no report on v6.6 stable either (somewhat related discussion in [0]\n    though).\n  - In the WireGuard driver the only material difference between v5.10\n    stable and v5.15 stable is the switch to threaded NAPI by default.\n\n    [0] https://lore.kernel.org/netdev/CA+wXwBTT74RErDGAnj98PqS=wvdh8eM1pi4q6tTdExtjnokKqA@mail.gmail.com/\n\nBreakdown of the problem:\n\n  1) skbs arriving for decryption are enqueued to the peer->rx_queue in\n     wg_packet_consume_data via wg_queue_enqueue_per_device_and_peer.\n  2) The latter only moves the skb into the MPSC peer queue if it does\n     not surpass MAX_QUEUED_PACKETS (1024) which is kept track in an\n     atomic counter via wg_prev_queue_enqueue.\n  3) In case enqueueing was successful, the skb is also queued up\n     in the device queue, round-robin picks a next online CPU, and\n     schedules the decryption worker.\n  4) The wg_packet_decrypt_worker, once scheduled, picks these up\n     from the queue, decrypts the packets and once done calls into\n     wg_queue_enqueue_per_peer_rx.\n  5) The latter updates the state to PACKET_STATE_CRYPTED on success\n     and calls napi_schedule on the per peer->napi instance.\n  6) NAPI then polls via wg_packet_rx_poll. wg_prev_queue_peek checks\n     on the peer->rx_queue. It will wg_prev_queue_dequeue if the\n     queue->peeked skb was not cached yet, or just return the latter\n     otherwise. (wg_prev_queue_drop_peeked later clears the cache.)\n  7) From an ordering perspective, the peer->rx_queue has skbs in order\n     while the device queue with the per-CPU worker threads from a\n     global ordering PoV can finish the decryption and signal the skb\n     PACKET_STATE_CRYPTED out of order.\n  8) A situation can be observed that the first packet coming in will\n     be stuck waiting for the decryption worker to be scheduled for\n     a longer time when the system is under pressure.\n  9) While this is the case, the other CPUs in the meantime finish\n     decryption and call into napi_schedule.\n 10) Now in wg_packet_rx_poll it picks up the first in-order skb\n     from the peer->rx_queue and sees that its state is still\n     PACKET_STATE_UNCRYPTED. The NAPI poll routine then exits e\n---truncated---",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -52454,10 +52459,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nppp: require CAP_NET_ADMIN in target netns for unattached ioctls\n\n/dev/ppp open is currently authorized against file->f_cred->user_ns,\nwhile unattached administrative ioctls operate on current->nsproxy->net_ns.\n\nAs a result, a local unprivileged user can create a new user namespace\nwith CLONE_NEWUSER, gain CAP_NET_ADMIN only in that new user namespace,\nand still issue PPPIOCNEWUNIT, PPPIOCATTACH, or PPPIOCATTCHAN against\nan inherited network namespace.\n\nRequire CAP_NET_ADMIN in the user namespace that owns the target network\nnamespace before handling unattached PPP administrative ioctls.\n\nThis preserves normal pppd operation in the network namespace it is\nactually privileged in, while rejecting the userns-only inherited-netns\ncase.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -55842,10 +55848,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: route MIGRATE notifications to caller's netns\n\nxfrm_send_migrate() in net/xfrm/xfrm_user.c and pfkey_send_migrate()\nin net/key/af_key.c both hardcode &init_net for the multicast that\nannounces a successful XFRM_MSG_MIGRATE / SADB_X_MIGRATE.\n\nXFRM_MSG_MIGRATE arrives on a per-netns NETLINK_XFRM socket, and the\nrest of the xfrm/af_key netlink path was made netns-aware in 2008.\nThe other 14 multicast paths in xfrm_user.c route their event using\nxs_net(x), xp_net(xp) or sock_net(skb->sk); only the migrate path\nwas missed.\n\nTwo consequences of the init_net hardcoding:\n\n  1. The notification (selector, old/new endpoint addresses, and the\n     km_address) is delivered to listeners on init_net's\n     XFRMNLGRP_MIGRATE / pfkey BROADCAST_ALL groups rather than on\n     the issuing netns. An IKE daemon running in init_net therefore\n     receives migration notifications originating from any other\n     netns on the host.\n\n  2. An IKE daemon running inside a non-init netns and subscribed\n     to its own XFRMNLGRP_MIGRATE / pfkey groups never receives the\n     notification of its own migration. IKEv2 MOBIKE / address-update\n     handling inside a netns is silently broken.\n\nThread struct net through km_migrate() and the xfrm_mgr.migrate\nfunction pointer, drop the &init_net override in xfrm_send_migrate()\nand pfkey_send_migrate(), and pass the caller's net (already in\nscope in xfrm_migrate() via sock_net(skb->sk)) all the way down.\nstruct xfrm_mgr is in-tree only and not exported as a stable API,\nso the function-pointer signature change is internal.\n\npfkey_broadcast() is already netns-aware via net_generic(net,\npfkey_net_id) since the pernet conversion. The five other\npfkey_broadcast() callers in af_key.c already pass xs_net(x),\nsock_net(sk) or a per-netns net, so this only removes the\n&init_net outlier.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -56597,10 +56604,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: hsr: fix potential OOB access in supervision frame handling\n\nEnsure the entire TLV header is linearized before access by adding\nsizeof(struct hsr_sup_tlv) to the pskb_may_pull() calls. Without this,\na truncated frame could cause an out-of-bounds access.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -56825,10 +56833,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: shaper: rework the VALID marking (again)\n\nRecent commit changed the semantics from NOT_VALID to VALID.\nI didn't realize that the flags are not stored atomically\nwith the entry in XArray. There's still a race of reader\nobserving a VALID mark for a slot, getting interrupted,\nwriter replacing the entry with a different one, reader\ncontinuing, fetching the entry which is now a different\npointer than the pointer for which VALID was meant.\n\nThe biggest consequence of this is that we may see a UAF\nsince net_shaper_rollback() assumed that entries without\nVALID can be freed without observing RCU.\n\nLooks like the XArray marks are buying us nothing at this\npoint. Let's convert the code to an explicit valid field.\nThe smp_load_acquire() / smp_store_release() barriers are\nmarginally cleaner.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -57173,10 +57182,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\naf_unix: Fix UAF read of tail->len in unix_stream_data_wait()\n\nunix_stream_data_wait() does skb_peek_tail(&sk->sk_receive_queue) without\nholding any lock that prevents SKBs on that queue from being dequeued and\nfreed.\nThis has been the case since commit 79f632c71bea (\"unix/stream: fix\npeeking with an offset larger than data in queue\").\nThe first consequence of this is that the pointer comparison\n`tail != last` can be false even if `last` semantically refers to an\nalready-freed SKB while `tail` is a new SKB allocated at the same address;\nwhich can cause unix_stream_data_wait() to wrongly keep blocking after new\ndata has arrived, but only in a weird scenario where a peeking recv() and\na normal recv() on the same socket are racing, which is probably not a\nreal problem.\n\nBut since commit 2b514574f7e8 (\"net: af_unix: implement splice for stream\naf_unix sockets\"), `tail` is actually dereferenced, which can cause UAF in\nthe following race scenario (where test_setup() runs single-threaded,\nand afterwards, test_thread1() and test_thread2() run concurrently in\ntwo threads:\n```\nstatic int socks[2];\nvoid test_setup(void) {\n  socketpair(AF_UNIX, SOCK_STREAM, 0, socks);\n  send(socks[1], \"A\", 1, 0);\n  int peekoff = 1;\n  setsockopt(socks[0], SOL_SOCKET, SO_PEEK_OFF, &peekoff, sizeof(peekoff));\n}\nvoid test_thread1(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, MSG_PEEK);\n}\nvoid test_thread2(void) {\n  char dummy;\n  recv(socks[0], &dummy, 1, 0);\n  shutdown(socks[1], SHUT_WR);\n}\n```\n\nwhen racing like this:\n```\nthread1                       thread2\nunix_stream_read_generic\n  mutex_lock(&u->iolock)\n  skb_peek(&sk->sk_receive_queue)\n  skb_peek_next(skb, &sk->sk_receive_queue)\n  mutex_unlock(&u->iolock)\n                              unix_stream_read_generic\n                                unix_state_lock(sk)\n                                skb_peek(&sk->sk_receive_queue)\n                                unix_state_unlock(sk)\n  unix_stream_data_wait\n    unix_state_lock(sk)\n    tail = skb_peek_tail(&sk->sk_receive_queue)\n                                spin_lock(&sk->sk_receive_queue.lock)\n                                __skb_unlink(skb, &sk->sk_receive_queue)\n                                spin_unlock(&sk->sk_receive_queue.lock)\n                                consume_skb(skb) [frees the SKB]\n    `tail != last`: false\n    `tail`: true\n    `tail->len != last_len` ***UAF***\n```\n\nFix the UAF by removing the read of tail->len; checking tail->len would\nonly make sense if SKBs in the receive queue of a UNIX socket could grow,\nwhich can no longer happen.\n\nKuniyuki explained:\n\n> When commit 869e7c62486e (\"net: af_unix: implement stream sendpage\n> support\") added sendpage() support, data could be appended to the last\n> skb in the receiver's queue.\n>\n> That's why we needed to check if the length of the last skb was changed\n> while waiting for new data in unix_stream_data_wait().\n>\n> However, commit a0dbf5f818f9 (\"af_unix: Support MSG_SPLICE_PAGES\") and\n> commit 57d44a354a43 (\"unix: Convert unix_stream_sendpage() to use\n> MSG_SPLICE_PAGES\") refactored sendmsg(), and now data is always added\n> to a new skb.\n\nThat means this fix is not suitable for kernels before 6.5.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -58087,10 +58097,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ni2c: core: fix adapter deregistration race\n\nAdapters can be looked up by their id using i2c_get_adapter() which\ntakes a reference to the embedded struct device.\n\nRemove the adapter from the IDR before tearing it down during\nderegistration (and on registration failure) to make sure its resources\nare not accessed after having been freed (e.g. the device name).",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -58730,10 +58741,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Reject fragmented frames in devmap\n\nDevmap broadcast redirects clone the packet for all but the last\ndestination.\n\nFor native XDP, that clone path copies only the linear xdp_frame data,\nwhile fragmented frames keep skb_shared_info in tailroom outside the\nlinear area. Cloning such a frame leaves XDP_FLAGS_HAS_FRAGS set but\nwithout valid frag metadata, and the later free path can interpret\nuninitialized tail data as skb_shared_info, leading to an out-of-bounds\naccess during frame return.\n\nReject fragmented native XDP frames in dev_map_enqueue_clone().\n\nAdd the same restriction to the generic XDP clone path in\ndev_map_redirect_clone(). Generic XDP represents fragmented packets as\nnonlinear skbs, and rejecting them here keeps clone-based broadcast\nsupport aligned between native and generic XDP.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -58887,10 +58899,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nproc: protect ptrace_may_access() with exec_update_lock (FD links)\n\nproc_pid_get_link() and proc_pid_readlink() currently look up the task from\nthe pid once, then do the ptrace access check on that task, then look up\nthe task from the pid a second time to do the actual access.\nThat's racy in several ways.\n\nTo fix it, pass the task to the ->proc_get_link() handler, and instead of\nproc_fd_access_allowed(), introduce a new helper call_proc_get_link() that\nlooks up and locks the task, does the access check, and calls\n->proc_get_link().",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -60593,10 +60606,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: reject mapping a reserved doorbell to a new queue\n\nWhen creating an user-queue, the user space\nprovides a doorbell BO handle and an offset within\nthe bo to obtain a doorbell.\n\nHowever current implementation using xa_store_irq()\nto store a doorbell, which allows a later queue created\nwith the same BO and offset parameters to overwrite an\nexisting queue and doorbell mapping.\n\nThis can cause problems like misrouting fence IRQ\nprocessing to a wrong queue, and mislead the cleanup\nprocess of one queue erasing the mapping of another queue.\n\nThis commit fixes this issue by replacing xa_store_irq with\nxa_insert_irq, which rejects mapping a reserved\ndoorbell to a newly created queue\n\n(cherry picked from commit 6244eae22966350db52faf9c1369d3b2ffc5de4e)",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -61315,10 +61329,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmei: bus: access mei_device under device_lock on cleanup\n\nFix couple of problems in mei_cl_bus_dev_release():\n\nmei_cl_flush_queues() is running without lock.\nbus->file_list access after mei_dev_bus_put(bus) can become a\nuse-after-free if this was the last reference to bus.\n\nProtect queues cleanup and WARN traversal by device lock there\nto avoid the concurrent access problems.\nMove WARN traversal before mei_dev_bus_put(bus).\n\nThis file uses bus variable name for mei_device, adjust\ncode of mei_cl_bus_dev_release() to use bus variable too.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -63041,10 +63056,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nppp: defer channel free to an RCU grace period to fix pppol2tp RX UAF\n\npppol2tp_recv() runs in the L2TP UDP-encap softirq RX path:\n\n l2tp_udp_encap_recv() -> l2tp_recv_common() -> pppol2tp_recv()\n   -> ppp_input(&po->chan)\n\nIt runs under rcu_read_lock() holding only an l2tp_session reference and\ntakes NO reference on the internal PPP channel (struct channel,\nchan->ppp) that ppp_input() dereferences.\n\nThe pppox socket is SOCK_RCU_FREE, so 'po' and the embedded ppp_channel\nare RCU-safe.  But the internal struct channel is a separate allocation\nthat ppp_release_channel() frees with a plain kfree():\n\n close(data socket) -> pppol2tp_release() -> pppox_unbind_sock()\n   -> ppp_unregister_channel() -> ppp_release_channel() -> kfree(pch)\n\nFor a channel that is bound (PPPIOCGCHAN) but not attached to a ppp unit\n(no PPPIOCCONNECT, pch->ppp == NULL) and not bridged, teardown skips\nboth ppp_disconnect_channel()'s synchronize_net() and\nppp_unbridge_channels()'s synchronize_rcu(), so the kfree() has no grace\nperiod.  rcu_read_lock() in pppol2tp_recv() does not protect against a\nplain kfree(), so an in-flight ppp_input() on one CPU can dereference\nthe channel just freed by close() on another CPU.\n\nThe bug is reachable by an unprivileged user.\n\nDefer the channel free to an RCU callback via call_rcu() so the grace\nperiod fences any in-flight ppp_input(). The disconnect and unbridge\nteardown paths already fence with synchronize_net()/synchronize_rcu();\ncall_rcu() does the same here without stalling the close() path.",
                 "severity": "HIGH",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -73533,10 +73549,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: Fix OOB in free_rd_atomic_resources()\n\nfree_rd_atomic_resources() iterates using qp->attr.max_dest_rd_atomic.\nUpdating max_dest_rd_atomic before freeing the old array can make the\nfree path walk past the old allocation and trigger a slab out-of-bounds\nwrite catched by KASAN:\n==================================================================\nBUG: KASAN: slab-out-of-bounds in free_rd_atomic_resource drivers/infiniband/sw/rxe/rxe_qp.c:180 [inline]\nBUG: KASAN: slab-out-of-bounds in free_rd_atomic_resources drivers/infiniband/sw/rxe/rxe_qp.c:171 [inline]\nBUG: KASAN: slab-out-of-bounds in free_rd_atomic_resources drivers/infiniband/sw/rxe/rxe_qp.c:163 [inline]\nBUG: KASAN: slab-out-of-bounds in rxe_qp_from_attr+0x1e88/0x2150 drivers/infiniband/sw/rxe/rxe_qp.c:712\nWrite of size 4 at addr ffff88802b8dddb8 by task syz.3.451/11063\n\nCPU: 0 UID: 0 PID: 11063 Comm: syz.3.451 Not tainted 7.1.0 #2 PREEMPT(full)\nHardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\nCall Trace:\n <TASK>\n __dump_stack lib/dump_stack.c:94 [inline]\n dump_stack_lvl+0x10e/0x1f0 lib/dump_stack.c:120\n print_address_description mm/kasan/report.c:378 [inline]\n print_report+0xf7/0x600 mm/kasan/report.c:482\n kasan_report+0xe4/0x120 mm/kasan/report.c:595\n free_rd_atomic_resource drivers/infiniband/sw/rxe/rxe_qp.c:180 [inline]\n free_rd_atomic_resources drivers/infiniband/sw/rxe/rxe_qp.c:171 [inline]\n free_rd_atomic_resources drivers/infiniband/sw/rxe/rxe_qp.c:163 [inline]\n rxe_qp_from_attr+0x1e88/0x2150 drivers/infiniband/sw/rxe/rxe_qp.c:712\n rxe_modify_qp+0x1e2/0x530 drivers/infiniband/sw/rxe/rxe_verbs.c:623\n ib_security_modify_qp+0x223/0xfa0 drivers/infiniband/core/security.c:625\n _ib_modify_qp+0x333/0xec0 drivers/infiniband/core/verbs.c:1915\n modify_qp+0x13ca/0x1940 drivers/infiniband/core/uverbs_cmd.c:1932\n ib_uverbs_modify_qp+0xcb/0x120 drivers/infiniband/core/uverbs_cmd.c:1958\n ib_uverbs_write+0xb86/0x1030 drivers/infiniband/core/uverbs_main.c:680\n vfs_write+0x2aa/0x1070 fs/read_write.c:686\n ksys_write+0x1f8/0x250 fs/read_write.c:740\n do_syscall_x64 arch/x86/entry/syscall_64.c:63 [inline]\n do_syscall_64+0x116/0x800 arch/x86/entry/syscall_64.c:94\n entry_SYSCALL_64_after_hwframe+0x77/0x7f\nRIP: 0033:0x7fefc75a70cd\nCode: ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa 48 89 f8 48 89 f7 48 89 d6 48 89 ca 4d 89 c2 4d 89 c8 4c 8b 4c 24 08 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 c7 c1 b0 ff ff ff f7 d8 64 89 01 48\nRSP: 002b:00007fefc8495018 EFLAGS: 00000246 ORIG_RAX: 0000000000000001\nRAX: ffffffffffffffda RBX: 00007fefc7835fa0 RCX: 00007fefc75a70cd\nRDX: 0000000000000078 RSI: 0000200000000240 RDI: 0000000000000007\nRBP: 00007fefc764f10f R08: 0000000000000000 R09: 0000000000000000\nR10: 0000000000000000 R11: 0000000000000246 R12: 0000000000000000\nR13: 00007fefc7836038 R14: 00007fefc7835fa0 R15: 00007ffcf0586aa0\n </TASK>\n\nAllocated by task 11063:\n kasan_save_stack+0x33/0x60 mm/kasan/common.c:57\n kasan_save_track+0x14/0x30 mm/kasan/common.c:78\n poison_kmalloc_redzone mm/kasan/common.c:398 [inline]\n __kasan_kmalloc+0xaa/0xb0 mm/kasan/common.c:415\n kasan_kmalloc include/linux/kasan.h:263 [inline]\n __do_kmalloc_node mm/slub.c:5296 [inline]\n __kmalloc_noprof+0x32a/0x850 mm/slub.c:5308\n kmalloc_noprof include/linux/slab.h:954 [inline]\n kzalloc_noprof include/linux/slab.h:1188 [inline]\n alloc_rd_atomic_resources drivers/infiniband/sw/rxe/rxe_qp.c:155 [inline]\n rxe_qp_from_attr+0x3f8/0x2150 drivers/infiniband/sw/rxe/rxe_qp.c:714\n rxe_modify_qp+0x1e2/0x530 drivers/infiniband/sw/rxe/rxe_verbs.c:623\n ib_security_modify_qp+0x223/0xfa0 drivers/infiniband/core/security.c:625\n _ib_modify_qp+0x333/0xec0 drivers/infiniband/core/verbs.c:1915\n modify_qp+0x13ca/0x1940 drivers/infiniband/core/uverbs_cmd.c:1932\n ib_uverbs_modify_qp+0xcb/0x120 drivers/infiniband/core/uverbs_cmd.c:1958\n ib_uverbs_write+0xb86/0x1030 drivers/infiniband/core/uverbs_ma\n---truncated---",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -73546,10 +73563,11 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/rxe: Fix responder UAF on IB_QP_MAX_DEST_RD_ATOMIC modify_qp\n\nrxe_qp_from_attr() handles IB_QP_MAX_DEST_RD_ATOMIC outside the\nIB_QP_STATE path, so it holds no state_lock and runs while the responder\ntask rxe_receiver() (recv_task on rxe_wq) is live. A modify_qp() setting\nonly that attribute calls free_rd_atomic_resources() then\nalloc_rd_atomic_resources(), swapping qp->resp.resources[] while\nrxe_prepare_res()/find_resource() walk it; free_rd_atomic_resources()\nalso leaves the cached pointer qp->resp.res dangling. A local\nunprivileged user can race the free/realloc into a use-after-free in\nrxe_receiver() (local DoS).\n\nDrain recv_task around the swap with rxe_disable_task()/rxe_enable_task(),\nas rxe_qp_reset() already does when tearing this array down, re-enabling\nonly after alloc_rd_atomic_resources() succeeds so the responder never\nresumes against a NULL qp->resp.resources on the ENOMEM path. Also clear\nqp->resp.res in free_rd_atomic_resources(), like the rxe_resp.c\ncompletion paths.\n\nReproduced under KASAN; the slab-use-after-free in rxe_receiver() is gone.",
                 "severity": "MEDIUM",
-                "status": "open",
+                "status": "fixed",
                 "events": [
                     {
-                        "introduced": "0",
+                        "introduced": "0:5.14.0-687.10.1.el9_8.0.1",
+                        "fixed": "0:5.14.0-741.14.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -94750,6 +94768,358 @@
                 ]
             }
         },
+        "8": {
+            "CVE-2024-57994": {
+                "cve_id": "CVE-2024-57994",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nptr_ring: do not block hard interrupts in ptr_ring_resize_multiple()\n\nJakub added a lockdep_assert_no_hardirq() check in __page_pool_put_page()\nto increase test coverage.\n\nsyzbot found a splat caused by hard irq blocking in\nptr_ring_resize_multiple() [1]\n\nAs current users of ptr_ring_resize_multiple() do not require\nhard irqs being masked, replace it to only block BH.\n\nRename helpers to better reflect they are safe against BH only.\n\n- ptr_ring_resize_multiple() to ptr_ring_resize_multiple_bh()\n- skb_array_resize_multiple() to skb_array_resize_multiple_bh()\n\n[1]\n\nWARNING: CPU: 1 PID: 9150 at net/core/page_pool.c:709 __page_pool_put_page net/core/page_pool.c:709 [inline]\nWARNING: CPU: 1 PID: 9150 at net/core/page_pool.c:709 page_pool_put_unrefed_netmem+0x157/0xa40 net/core/page_pool.c:780\nModules linked in:\nCPU: 1 UID: 0 PID: 9150 Comm: syz.1.1052 Not tainted 6.11.0-rc3-syzkaller-00202-gf8669d7b5f5d #0\nHardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 08/06/2024\nRIP: 0010:__page_pool_put_page net/core/page_pool.c:709 [inline]\nRIP: 0010:page_pool_put_unrefed_netmem+0x157/0xa40 net/core/page_pool.c:780\nCode: 74 0e e8 7c aa fb f7 eb 43 e8 75 aa fb f7 eb 3c 65 8b 1d 38 a8 6a 76 31 ff 89 de e8 a3 ae fb f7 85 db 74 0b e8 5a aa fb f7 90 <0f> 0b 90 eb 1d 65 8b 1d 15 a8 6a 76 31 ff 89 de e8 84 ae fb f7 85\nRSP: 0018:ffffc9000bda6b58 EFLAGS: 00010083\nRAX: ffffffff8997e523 RBX: 0000000000000000 RCX: 0000000000040000\nRDX: ffffc9000fbd0000 RSI: 0000000000001842 RDI: 0000000000001843\nRBP: 0000000000000000 R08: ffffffff8997df2c R09: 1ffffd40003a000d\nR10: dffffc0000000000 R11: fffff940003a000e R12: ffffea0001d00040\nR13: ffff88802e8a4000 R14: dffffc0000000000 R15: 00000000ffffffff\nFS:  00007fb7aaf716c0(0000) GS:ffff8880b9300000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 00007fa15a0d4b72 CR3: 00000000561b0000 CR4: 00000000003506f0\nDR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000\nDR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400\nCall Trace:\n <TASK>\n tun_ptr_free drivers/net/tun.c:617 [inline]\n __ptr_ring_swap_queue include/linux/ptr_ring.h:571 [inline]\n ptr_ring_resize_multiple_noprof include/linux/ptr_ring.h:643 [inline]\n tun_queue_resize drivers/net/tun.c:3694 [inline]\n tun_device_event+0xaaf/0x1080 drivers/net/tun.c:3714\n notifier_call_chain+0x19f/0x3e0 kernel/notifier.c:93\n call_netdevice_notifiers_extack net/core/dev.c:2032 [inline]\n call_netdevice_notifiers net/core/dev.c:2046 [inline]\n dev_change_tx_queue_len+0x158/0x2a0 net/core/dev.c:9024\n do_setlink+0xff6/0x41f0 net/core/rtnetlink.c:2923\n rtnl_setlink+0x40d/0x5a0 net/core/rtnetlink.c:3201\n rtnetlink_rcv_msg+0x73f/0xcf0 net/core/rtnetlink.c:6647\n netlink_rcv_skb+0x1e3/0x430 net/netlink/af_netlink.c:2550",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2024-58017": {
+                "cve_id": "CVE-2024-58017",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nprintk: Fix signed integer overflow when defining LOG_BUF_LEN_MAX\n\nShifting 1 << 31 on a 32-bit int causes signed integer overflow, which\nleads to undefined behavior. To prevent this, cast 1 to u32 before\nperforming the shift, ensuring well-defined behavior.\n\nThis change explicitly avoids any potential overflow by ensuring that\nthe shift occurs on an unsigned 32-bit integer.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2025-10263": {
+                "cve_id": "CVE-2025-10263",
+                "title": "Arm C1-Ultra, C1-Premium, Neoverse V3 & V3AE, Neoverse V2, Neover ...",
+                "description": "Arm C1-Ultra, C1-Premium, Neoverse V3 & V3AE, Neoverse V2, Neoverse V1, Neoverse-N2, Neoverse-N1, Cortex-X925, Cortex-X4, Cortex-X3, Cortex-X2, Cortex-X1 & X1C, Cortex-A710, Cortex-A78, A78AE & A78C, Cortex-A77, Cortex-A76 & A76A may allow writes to resources owned by a higher exception level.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.0.12-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2025-37835": {
+                "cve_id": "CVE-2025-37835",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2025-38213": {
+                "cve_id": "CVE-2025-38213",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2025-38553": {
+                "cve_id": "CVE-2025-38553",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-13087": {
+                "cve_id": "CVE-2026-13087",
+                "title": "Rejected reason: This CVE was reserved in error and duplicates CV ...",
+                "description": "Rejected reason: This CVE was reserved in error and duplicates CVE-2026-89530.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-31534": {
+                "cve_id": "CVE-2026-31534",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-31688": {
+                "cve_id": "CVE-2026-31688",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-43284": {
+                "cve_id": "CVE-2026-43284",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: esp: avoid in-place decrypt on shared skb frags\n\nMSG_SPLICE_PAGES can attach pages from a pipe directly to an skb. TCP\nmarks such skbs with SKBFL_SHARED_FRAG after skb_splice_from_iter(),\nso later paths that may modify packet data can first make a private\ncopy. The IPv4/IPv6 datagram append paths did not set this flag when\nsplicing pages into UDP skbs.\n\nThat leaves an ESP-in-UDP packet made from shared pipe pages looking\nlike an ordinary uncloned nonlinear skb. ESP input then takes the no-COW\nfast path for uncloned skbs without a frag_list and decrypts in place\nover data that is not owned privately by the skb.\n\nMark IPv4/IPv6 datagram splice frags with SKBFL_SHARED_FRAG, matching\nTCP. Also make ESP input fall back to skb_cow_data() when the flag is\npresent, so ESP does not decrypt externally backed frags in place.\nPrivate nonlinear skb frags still use the existing fast path.\n\nThis intentionally does not change ESP output. In esp_output_head(),\nthe path that appends the ESP trailer to existing skb tailroom without\ncalling skb_cow_data() is not reachable for nonlinear skbs:\nskb_tailroom() returns zero when skb->data_len is nonzero, while ESP\ntailen is positive. Thus ESP output will either use the separate\ndestination-frag path or fall back to skb_cow_data().",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.0.4-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-46300": {
+                "cve_id": "CVE-2026-46300",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: preserve shared-frag marker during coalescing\n\nskb_try_coalesce() can attach paged frags from @from to @to.  If @from\nhas SKBFL_SHARED_FRAG set, the resulting @to skb can contain the same\nexternally-owned or page-cache-backed frags, but the shared-frag marker\nis currently lost.\n\nThat breaks the invariant relied on by later in-place writers.  In\nparticular, ESP input checks skb_has_shared_frag() before deciding\nwhether an uncloned nonlinear skb can skip skb_cow_data().  If TCP\nreceive coalescing has moved shared frags into an unmarked skb, ESP can\nsee skb_has_shared_frag() as false and decrypt in place over page-cache\nbacked frags.\n\nPropagate SKBFL_SHARED_FRAG when skb_try_coalesce() transfers paged\nfrags.  The tailroom copy path does not need the marker because it copies\nbytes into @to's linear data rather than transferring frag descriptors.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.0.6-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-46333": {
+                "cve_id": "CVE-2026-46333",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nptrace: slightly saner 'get_dumpable()' logic\n\nThe 'dumpability' of a task is fundamentally about the memory image of\nthe task - the concept comes from whether it can core dump or not - and\nmakes no sense when you don't have an associated mm.\n\nAnd almost all users do in fact use it only for the case where the task\nhas a mm pointer.\n\nBut we have one odd special case: ptrace_may_access() uses 'dumpable' to\ncheck various other things entirely independently of the MM (typically\nexplicitly using flags like PTRACE_MODE_READ_FSCREDS).  Including for\nthreads that no longer have a VM (and maybe never did, like most kernel\nthreads).\n\nIt's not what this flag was designed for, but it is what it is.\n\nThe ptrace code does check that the uid/gid matches, so you do have to\nbe uid-0 to see kernel thread details, but this means that the\ntraditional \"drop capabilities\" model doesn't make any difference for\nthis all.\n\nMake it all make a *bit* more sense by saying that if you don't have a\nMM pointer, we'll use a cached \"last dumpability\" flag if the thread\never had a MM (it will be zero for kernel threads since it is never\nset), and require a proper CAP_SYS_PTRACE capability to override.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.0.8-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-53359": {
+                "cve_id": "CVE-2026-53359",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: x86: Fix shadow paging use-after-free due to unexpected role\n\nCommit 0cb2af2ea66ad (\"KVM: x86: Fix shadow paging use-after-free due\nto unexpected GFN\") fixed a shadow paging mismatch between stored and\ncomputed GFNs; the bug could be triggered by changing a PDE mapping from\noutside the guest, and then deleting a memslot.  The rmap_remove()\ncall would miss entries created after the PDE change because the GFN\nof the leaf SPTE does not match the GFN of the struct kvm_mmu_page.\n\nA similar hole however remains if the modified PDE points to a non-leaf\npage.  In this case the gfn can be made to match, but the role does not\nmatch: the original large 2MB page creates a kvm_mmu_page with direct=1,\nwhile the new 4KB needs a kvm_mmu_page with direct=0.  However,\nkvm_mmu_get_child_sp() does not compare the role, and therefore reuses\nthe page.\n\nThe next step is installing a leaf (4KB) SPTE on the new path which\nrecords an rmap entry under the gfn resolved by the walk.  But when\nthat child is zapped its parent kvm_mmu_page has direct=1 and\nkvm_mmu_page_get_gfn() computes the gfn for the 4KB page as\nsp->gfn + index instead of using sp->shadowed_translation[] (or sp->gfns[]\nin older kernels).  It therefore fails to remove the recorded entry.\n\nWhen the memslot is dropped the shadow page is freed but the rmap\nentry survives, as in the scenario that was already fixed.  Code that\nlater walks that gfn (dirty logging, MMU notifier invalidation, and\nso on) dereferences an sptep that lies in the freed page, causing the\nuse-after-free.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.1.3-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-63872": {
+                "cve_id": "CVE-2026-63872",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-68171": {
+                "cve_id": "CVE-2026-68171",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-68480": {
+                "cve_id": "CVE-2026-68480",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/bugs: Make Safe-RET robust against interrupt injection\n\nAn attacker injecting interrupts while the Safe-RET mitigation executes\non machines affected by SRSO can neutralize the safe return sequence,\npotentially leading to data leakage through speculative execution.\n\nFixup register state as if the Safe-RET sequence executed successfully\nby \"emulating\" it, in a manner of speaking, and avoid executing a RET\ninstruction after returning from the interrupt.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.1.7-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-74511": {
+                "cve_id": "CVE-2026-74511",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80590": {
+                "cve_id": "CVE-2026-80590",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ninet: frags: strip GSO state from fragments before reassembly\n\nA virtio_net_hdr (tun/tap, or AF_PACKET with PACKET_VNET_HDR) can mark\nan IPv4 or IPv6 fragment as GSO; nothing relates gso_type to frag_off.\ninet_frag_reasm_prepare()/inet_frag_reasm_finish() keep the first\nfragment's skb as the head of the reassembled datagram, including its\nshinfo->gso_size/gso_type/gso_segs, and chain the remaining fragments\non frag_list with whatever linear/paged layout they arrived with.\n\nAfter ip_defrag() (ip_local_deliver(), nf_defrag_ipv4, ...) the\nreassembled skb therefore still claims to be GSO (SKB_GSO_DODGY), and\nthe next software segmentation point - udp_rcv_segment() on local\ndelivery, validate_xmit_skb(), or the ip_finish_output_gso() slow\npath - hands it to skb_segment(). skb_segment()'s frag_list walk\nassumes GRO-shaped input and hits one of its BUG_ON()s. Two writes to\na tap by an unprivileged user in its own userns are enough:\n\n  kernel BUG at net/core/skbuff.c:4899!\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 0 UID: 1000 PID: 82 Comm: poc Not tainted 7.2.0-pentest+ #2\n  RIP: 0010:skb_segment+0x20ca/0x48b0\n  Call Trace:\n   <TASK>\n   __udp_gso_segment+0x29a/0x27d0\n   udp4_ufo_fragment+0x458/0x6c0\n   inet_gso_segment+0x429/0x1340\n   skb_mac_gso_segment+0x233/0x4f0\n   __skb_gso_segment+0x308/0x660\n   udp_queue_rcv_skb+0x440/0xad0\n   udp_unicast_rcv_skb+0xc7/0x2c0\n   udp_rcv+0x16ce/0x2260\n   ip_protocol_deliver_rcu+0x197/0x2d0\n   ip_local_deliver+0x430/0x690\n   ip_rcv+0x16f/0x1f0\n   __netif_receive_skb_one_core+0x15e/0x1c0\n   __netif_receive_skb+0x1e/0x110\n   netif_receive_skb+0xf6/0x5c0\n   tun_rx_batched.isra.0+0x3ab/0x790\n   tun_get_user+0x17c3/0x3550\n   tun_chr_write_iter+0xba/0x1b0\n   vfs_write+0x646/0x1130\n   </TASK>\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nThis runs with BH disabled, so it is a panic rather than an oops. The\nsame is reachable with CAP_NET_RAW in a netns where a defrag point\nprecedes a GSO point, and from a guest whose VMM forwards\nvirtio_net_hdr to a tap. The SKB_GSO_DODGY frag_list checks added by\ncommit 3dcbdb134f32 (\"net: gso: Fix skb_segment splat when splitting\ngso_size mangled skb having linear-headed frag_list\") and by\ncommit 9e4b7a99a03a (\"net: gso: fix panic on frag_list with mixed head\nalloc types\") do not cover it: page-backed heads skip them, and kmalloc\nheads skip them when gso_size == skb_headlen(head), which the sender\ncontrols.\n\nAn skb entering a frag queue is an IP fragment by definition and\ncannot legitimately carry GSO state: GRO does not merge fragments and\nthe stack segments before it fragments, so only untrusted sources are\naffected. This has been reachable since\ncommit f43798c27684 (\"tun: Allow GSO using virtio_net_hdr\"), the first\npath that let userspace attach GSO metadata to an IP fragment. Reset\nthe GSO fields of every fragment as it is queued, in\ninet_frag_queue_insert(), which IPv4, IPv6, nf_conntrack_reasm and\n6lowpan reassembly share; then neither the head nor the frag_list\nmembers of the reassembled skb carry them (the members matter too:\nthe ip_do_fragment()/ip6_fragment() fast paths send them out as they\nare). The head may remain CHECKSUM_PARTIAL; that is already accepted\non receive and resolved by skb_checksum_help() in\nip_do_fragment()/ip6_fragment() on forward.\n\nTested on top of net.git (dc4b95b8fee9), x86_64: the tap reproducer\nabove, two further IPv4 frag_list geometries that reach\nBUG_ON(i >= nfrags) and BUG_ON(!list_skb->head_frag), and an IPv6\nfragment-header variant (udp6_ufo_fragment()) each panic the unpatched\nkernel; with this patch all four datagrams are delivered intact and\nnothing is logged.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.1.12-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-80726": {
+                "cve_id": "CVE-2026-80726",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-81010": {
+                "cve_id": "CVE-2026-81010",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-89603": {
+                "cve_id": "CVE-2026-89603",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99217": {
+                "cve_id": "CVE-2026-99217",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99243": {
+                "cve_id": "CVE-2026-99243",
+                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
+                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.3-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-99999": {
+                "cve_id": "CVE-2026-99999",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: validate checksum_start before completing checksum\n\nIf a packet with bad checksum metadata gets into the ipv4 stack,\nskb_checksum_help can corrupt the network header and cause a bunch of\nmischief.\n\nThis was discovered and reported by Paulos, and has been reporoduced\nby others independently since.\n\nWe really shouldn't allow such packets in, but as a defence\nin depth measure, let's also check before we complete the checksum.\n\nA more complete validation at input is forthcoming, but needs more work.",
+                "severity": "CRITICAL",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.2.11-100.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-43500": {
+                "cve_id": "CVE-2026-43500",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrxrpc: Also unshare DATA/RESPONSE packets when paged frags are present\n\nThe DATA-packet handler in rxrpc_input_call_event() and the RESPONSE\nhandler in rxrpc_verify_response() copy the skb to a linear one before\ncalling into the security ops only when skb_cloned() is true.  An skb\nthat is not cloned but still carries externally-owned paged fragments\n(e.g. SKBFL_SHARED_FRAG set by splice() into a UDP socket via\n__ip_append_data, or a chained skb_has_frag_list()) falls through to\nthe in-place decryption path, which binds the frag pages directly into\nthe AEAD/skcipher SGL via skb_to_sgvec().\n\nExtend the gate to also unshare when skb_has_frag_list() or\nskb_has_shared_frag() is true.  This catches the splice-loopback vector\nand other externally-shared frag sources while preserving the\nzero-copy fast path for skbs whose frags are kernel-private (e.g. NIC\npage_pool RX, GRO).  The OOM/trace handling already in place is reused.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.0.4-100.fc43"
+                    }
+                ]
+            }
+        },
         "10": {
             "CVE-2024-57994": {
                 "cve_id": "CVE-2024-57994",
@@ -95130,358 +95500,6 @@
                         "introduced": "0",
                         "identifier": "el10"
                     },
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-99999": {
-                "cve_id": "CVE-2026-99999",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: validate checksum_start before completing checksum\n\nIf a packet with bad checksum metadata gets into the ipv4 stack,\nskb_checksum_help can corrupt the network header and cause a bunch of\nmischief.\n\nThis was discovered and reported by Paulos, and has been reporoduced\nby others independently since.\n\nWe really shouldn't allow such packets in, but as a defence\nin depth measure, let's also check before we complete the checksum.\n\nA more complete validation at input is forthcoming, but needs more work.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.2.11-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-43500": {
-                "cve_id": "CVE-2026-43500",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nrxrpc: Also unshare DATA/RESPONSE packets when paged frags are present\n\nThe DATA-packet handler in rxrpc_input_call_event() and the RESPONSE\nhandler in rxrpc_verify_response() copy the skb to a linear one before\ncalling into the security ops only when skb_cloned() is true.  An skb\nthat is not cloned but still carries externally-owned paged fragments\n(e.g. SKBFL_SHARED_FRAG set by splice() into a UDP socket via\n__ip_append_data, or a chained skb_has_frag_list()) falls through to\nthe in-place decryption path, which binds the frag pages directly into\nthe AEAD/skcipher SGL via skb_to_sgvec().\n\nExtend the gate to also unshare when skb_has_frag_list() or\nskb_has_shared_frag() is true.  This catches the splice-loopback vector\nand other externally-shared frag sources while preserving the\nzero-copy fast path for skbs whose frags are kernel-private (e.g. NIC\npage_pool RX, GRO).  The OOM/trace handling already in place is reused.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.0.4-100.fc43"
-                    }
-                ]
-            }
-        },
-        "8": {
-            "CVE-2024-57994": {
-                "cve_id": "CVE-2024-57994",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nptr_ring: do not block hard interrupts in ptr_ring_resize_multiple()\n\nJakub added a lockdep_assert_no_hardirq() check in __page_pool_put_page()\nto increase test coverage.\n\nsyzbot found a splat caused by hard irq blocking in\nptr_ring_resize_multiple() [1]\n\nAs current users of ptr_ring_resize_multiple() do not require\nhard irqs being masked, replace it to only block BH.\n\nRename helpers to better reflect they are safe against BH only.\n\n- ptr_ring_resize_multiple() to ptr_ring_resize_multiple_bh()\n- skb_array_resize_multiple() to skb_array_resize_multiple_bh()\n\n[1]\n\nWARNING: CPU: 1 PID: 9150 at net/core/page_pool.c:709 __page_pool_put_page net/core/page_pool.c:709 [inline]\nWARNING: CPU: 1 PID: 9150 at net/core/page_pool.c:709 page_pool_put_unrefed_netmem+0x157/0xa40 net/core/page_pool.c:780\nModules linked in:\nCPU: 1 UID: 0 PID: 9150 Comm: syz.1.1052 Not tainted 6.11.0-rc3-syzkaller-00202-gf8669d7b5f5d #0\nHardware name: Google Google Compute Engine/Google Compute Engine, BIOS Google 08/06/2024\nRIP: 0010:__page_pool_put_page net/core/page_pool.c:709 [inline]\nRIP: 0010:page_pool_put_unrefed_netmem+0x157/0xa40 net/core/page_pool.c:780\nCode: 74 0e e8 7c aa fb f7 eb 43 e8 75 aa fb f7 eb 3c 65 8b 1d 38 a8 6a 76 31 ff 89 de e8 a3 ae fb f7 85 db 74 0b e8 5a aa fb f7 90 <0f> 0b 90 eb 1d 65 8b 1d 15 a8 6a 76 31 ff 89 de e8 84 ae fb f7 85\nRSP: 0018:ffffc9000bda6b58 EFLAGS: 00010083\nRAX: ffffffff8997e523 RBX: 0000000000000000 RCX: 0000000000040000\nRDX: ffffc9000fbd0000 RSI: 0000000000001842 RDI: 0000000000001843\nRBP: 0000000000000000 R08: ffffffff8997df2c R09: 1ffffd40003a000d\nR10: dffffc0000000000 R11: fffff940003a000e R12: ffffea0001d00040\nR13: ffff88802e8a4000 R14: dffffc0000000000 R15: 00000000ffffffff\nFS:  00007fb7aaf716c0(0000) GS:ffff8880b9300000(0000) knlGS:0000000000000000\nCS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\nCR2: 00007fa15a0d4b72 CR3: 00000000561b0000 CR4: 00000000003506f0\nDR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000\nDR3: 0000000000000000 DR6: 00000000fffe0ff0 DR7: 0000000000000400\nCall Trace:\n <TASK>\n tun_ptr_free drivers/net/tun.c:617 [inline]\n __ptr_ring_swap_queue include/linux/ptr_ring.h:571 [inline]\n ptr_ring_resize_multiple_noprof include/linux/ptr_ring.h:643 [inline]\n tun_queue_resize drivers/net/tun.c:3694 [inline]\n tun_device_event+0xaaf/0x1080 drivers/net/tun.c:3714\n notifier_call_chain+0x19f/0x3e0 kernel/notifier.c:93\n call_netdevice_notifiers_extack net/core/dev.c:2032 [inline]\n call_netdevice_notifiers net/core/dev.c:2046 [inline]\n dev_change_tx_queue_len+0x158/0x2a0 net/core/dev.c:9024\n do_setlink+0xff6/0x41f0 net/core/rtnetlink.c:2923\n rtnl_setlink+0x40d/0x5a0 net/core/rtnetlink.c:3201\n rtnetlink_rcv_msg+0x73f/0xcf0 net/core/rtnetlink.c:6647\n netlink_rcv_skb+0x1e3/0x430 net/netlink/af_netlink.c:2550",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2024-58017": {
-                "cve_id": "CVE-2024-58017",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nprintk: Fix signed integer overflow when defining LOG_BUF_LEN_MAX\n\nShifting 1 << 31 on a 32-bit int causes signed integer overflow, which\nleads to undefined behavior. To prevent this, cast 1 to u32 before\nperforming the shift, ensuring well-defined behavior.\n\nThis change explicitly avoids any potential overflow by ensuring that\nthe shift occurs on an unsigned 32-bit integer.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2025-10263": {
-                "cve_id": "CVE-2025-10263",
-                "title": "Arm C1-Ultra, C1-Premium, Neoverse V3 & V3AE, Neoverse V2, Neover ...",
-                "description": "Arm C1-Ultra, C1-Premium, Neoverse V3 & V3AE, Neoverse V2, Neoverse V1, Neoverse-N2, Neoverse-N1, Cortex-X925, Cortex-X4, Cortex-X3, Cortex-X2, Cortex-X1 & X1C, Cortex-A710, Cortex-A78, A78AE & A78C, Cortex-A77, Cortex-A76 & A76A may allow writes to resources owned by a higher exception level.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.0.12-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2025-37835": {
-                "cve_id": "CVE-2025-37835",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2025-38213": {
-                "cve_id": "CVE-2025-38213",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2025-38553": {
-                "cve_id": "CVE-2025-38553",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-13087": {
-                "cve_id": "CVE-2026-13087",
-                "title": "Rejected reason: This CVE was reserved in error and duplicates CV ...",
-                "description": "Rejected reason: This CVE was reserved in error and duplicates CVE-2026-89530.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-31534": {
-                "cve_id": "CVE-2026-31534",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-31688": {
-                "cve_id": "CVE-2026-31688",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-43284": {
-                "cve_id": "CVE-2026-43284",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfrm: esp: avoid in-place decrypt on shared skb frags\n\nMSG_SPLICE_PAGES can attach pages from a pipe directly to an skb. TCP\nmarks such skbs with SKBFL_SHARED_FRAG after skb_splice_from_iter(),\nso later paths that may modify packet data can first make a private\ncopy. The IPv4/IPv6 datagram append paths did not set this flag when\nsplicing pages into UDP skbs.\n\nThat leaves an ESP-in-UDP packet made from shared pipe pages looking\nlike an ordinary uncloned nonlinear skb. ESP input then takes the no-COW\nfast path for uncloned skbs without a frag_list and decrypts in place\nover data that is not owned privately by the skb.\n\nMark IPv4/IPv6 datagram splice frags with SKBFL_SHARED_FRAG, matching\nTCP. Also make ESP input fall back to skb_cow_data() when the flag is\npresent, so ESP does not decrypt externally backed frags in place.\nPrivate nonlinear skb frags still use the existing fast path.\n\nThis intentionally does not change ESP output. In esp_output_head(),\nthe path that appends the ESP trailer to existing skb tailroom without\ncalling skb_cow_data() is not reachable for nonlinear skbs:\nskb_tailroom() returns zero when skb->data_len is nonzero, while ESP\ntailen is positive. Thus ESP output will either use the separate\ndestination-frag path or fall back to skb_cow_data().",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.0.4-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-46300": {
-                "cve_id": "CVE-2026-46300",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: skbuff: preserve shared-frag marker during coalescing\n\nskb_try_coalesce() can attach paged frags from @from to @to.  If @from\nhas SKBFL_SHARED_FRAG set, the resulting @to skb can contain the same\nexternally-owned or page-cache-backed frags, but the shared-frag marker\nis currently lost.\n\nThat breaks the invariant relied on by later in-place writers.  In\nparticular, ESP input checks skb_has_shared_frag() before deciding\nwhether an uncloned nonlinear skb can skip skb_cow_data().  If TCP\nreceive coalescing has moved shared frags into an unmarked skb, ESP can\nsee skb_has_shared_frag() as false and decrypt in place over page-cache\nbacked frags.\n\nPropagate SKBFL_SHARED_FRAG when skb_try_coalesce() transfers paged\nfrags.  The tailroom copy path does not need the marker because it copies\nbytes into @to's linear data rather than transferring frag descriptors.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.0.6-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-46333": {
-                "cve_id": "CVE-2026-46333",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nptrace: slightly saner 'get_dumpable()' logic\n\nThe 'dumpability' of a task is fundamentally about the memory image of\nthe task - the concept comes from whether it can core dump or not - and\nmakes no sense when you don't have an associated mm.\n\nAnd almost all users do in fact use it only for the case where the task\nhas a mm pointer.\n\nBut we have one odd special case: ptrace_may_access() uses 'dumpable' to\ncheck various other things entirely independently of the MM (typically\nexplicitly using flags like PTRACE_MODE_READ_FSCREDS).  Including for\nthreads that no longer have a VM (and maybe never did, like most kernel\nthreads).\n\nIt's not what this flag was designed for, but it is what it is.\n\nThe ptrace code does check that the uid/gid matches, so you do have to\nbe uid-0 to see kernel thread details, but this means that the\ntraditional \"drop capabilities\" model doesn't make any difference for\nthis all.\n\nMake it all make a *bit* more sense by saying that if you don't have a\nMM pointer, we'll use a cached \"last dumpability\" flag if the thread\never had a MM (it will be zero for kernel threads since it is never\nset), and require a proper CAP_SYS_PTRACE capability to override.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.0.8-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-53359": {
-                "cve_id": "CVE-2026-53359",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nKVM: x86: Fix shadow paging use-after-free due to unexpected role\n\nCommit 0cb2af2ea66ad (\"KVM: x86: Fix shadow paging use-after-free due\nto unexpected GFN\") fixed a shadow paging mismatch between stored and\ncomputed GFNs; the bug could be triggered by changing a PDE mapping from\noutside the guest, and then deleting a memslot.  The rmap_remove()\ncall would miss entries created after the PDE change because the GFN\nof the leaf SPTE does not match the GFN of the struct kvm_mmu_page.\n\nA similar hole however remains if the modified PDE points to a non-leaf\npage.  In this case the gfn can be made to match, but the role does not\nmatch: the original large 2MB page creates a kvm_mmu_page with direct=1,\nwhile the new 4KB needs a kvm_mmu_page with direct=0.  However,\nkvm_mmu_get_child_sp() does not compare the role, and therefore reuses\nthe page.\n\nThe next step is installing a leaf (4KB) SPTE on the new path which\nrecords an rmap entry under the gfn resolved by the walk.  But when\nthat child is zapped its parent kvm_mmu_page has direct=1 and\nkvm_mmu_page_get_gfn() computes the gfn for the 4KB page as\nsp->gfn + index instead of using sp->shadowed_translation[] (or sp->gfns[]\nin older kernels).  It therefore fails to remove the recorded entry.\n\nWhen the memslot is dropped the shadow page is freed but the rmap\nentry survives, as in the scenario that was already fixed.  Code that\nlater walks that gfn (dirty logging, MMU notifier invalidation, and\nso on) dereferences an sptep that lies in the freed page, causing the\nuse-after-free.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.1.3-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-63872": {
-                "cve_id": "CVE-2026-63872",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-68171": {
-                "cve_id": "CVE-2026-68171",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-68480": {
-                "cve_id": "CVE-2026-68480",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/bugs: Make Safe-RET robust against interrupt injection\n\nAn attacker injecting interrupts while the Safe-RET mitigation executes\non machines affected by SRSO can neutralize the safe return sequence,\npotentially leading to data leakage through speculative execution.\n\nFixup register state as if the Safe-RET sequence executed successfully\nby \"emulating\" it, in a manner of speaking, and avoid executing a RET\ninstruction after returning from the interrupt.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.1.7-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-74511": {
-                "cve_id": "CVE-2026-74511",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-80590": {
-                "cve_id": "CVE-2026-80590",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ninet: frags: strip GSO state from fragments before reassembly\n\nA virtio_net_hdr (tun/tap, or AF_PACKET with PACKET_VNET_HDR) can mark\nan IPv4 or IPv6 fragment as GSO; nothing relates gso_type to frag_off.\ninet_frag_reasm_prepare()/inet_frag_reasm_finish() keep the first\nfragment's skb as the head of the reassembled datagram, including its\nshinfo->gso_size/gso_type/gso_segs, and chain the remaining fragments\non frag_list with whatever linear/paged layout they arrived with.\n\nAfter ip_defrag() (ip_local_deliver(), nf_defrag_ipv4, ...) the\nreassembled skb therefore still claims to be GSO (SKB_GSO_DODGY), and\nthe next software segmentation point - udp_rcv_segment() on local\ndelivery, validate_xmit_skb(), or the ip_finish_output_gso() slow\npath - hands it to skb_segment(). skb_segment()'s frag_list walk\nassumes GRO-shaped input and hits one of its BUG_ON()s. Two writes to\na tap by an unprivileged user in its own userns are enough:\n\n  kernel BUG at net/core/skbuff.c:4899!\n  Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI\n  CPU: 0 UID: 1000 PID: 82 Comm: poc Not tainted 7.2.0-pentest+ #2\n  RIP: 0010:skb_segment+0x20ca/0x48b0\n  Call Trace:\n   <TASK>\n   __udp_gso_segment+0x29a/0x27d0\n   udp4_ufo_fragment+0x458/0x6c0\n   inet_gso_segment+0x429/0x1340\n   skb_mac_gso_segment+0x233/0x4f0\n   __skb_gso_segment+0x308/0x660\n   udp_queue_rcv_skb+0x440/0xad0\n   udp_unicast_rcv_skb+0xc7/0x2c0\n   udp_rcv+0x16ce/0x2260\n   ip_protocol_deliver_rcu+0x197/0x2d0\n   ip_local_deliver+0x430/0x690\n   ip_rcv+0x16f/0x1f0\n   __netif_receive_skb_one_core+0x15e/0x1c0\n   __netif_receive_skb+0x1e/0x110\n   netif_receive_skb+0xf6/0x5c0\n   tun_rx_batched.isra.0+0x3ab/0x790\n   tun_get_user+0x17c3/0x3550\n   tun_chr_write_iter+0xba/0x1b0\n   vfs_write+0x646/0x1130\n   </TASK>\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nThis runs with BH disabled, so it is a panic rather than an oops. The\nsame is reachable with CAP_NET_RAW in a netns where a defrag point\nprecedes a GSO point, and from a guest whose VMM forwards\nvirtio_net_hdr to a tap. The SKB_GSO_DODGY frag_list checks added by\ncommit 3dcbdb134f32 (\"net: gso: Fix skb_segment splat when splitting\ngso_size mangled skb having linear-headed frag_list\") and by\ncommit 9e4b7a99a03a (\"net: gso: fix panic on frag_list with mixed head\nalloc types\") do not cover it: page-backed heads skip them, and kmalloc\nheads skip them when gso_size == skb_headlen(head), which the sender\ncontrols.\n\nAn skb entering a frag queue is an IP fragment by definition and\ncannot legitimately carry GSO state: GRO does not merge fragments and\nthe stack segments before it fragments, so only untrusted sources are\naffected. This has been reachable since\ncommit f43798c27684 (\"tun: Allow GSO using virtio_net_hdr\"), the first\npath that let userspace attach GSO metadata to an IP fragment. Reset\nthe GSO fields of every fragment as it is queued, in\ninet_frag_queue_insert(), which IPv4, IPv6, nf_conntrack_reasm and\n6lowpan reassembly share; then neither the head nor the frag_list\nmembers of the reassembled skb carry them (the members matter too:\nthe ip_do_fragment()/ip6_fragment() fast paths send them out as they\nare). The head may remain CHECKSUM_PARTIAL; that is already accepted\non receive and resolved by skb_checksum_help() in\nip_do_fragment()/ip6_fragment() on forward.\n\nTested on top of net.git (dc4b95b8fee9), x86_64: the tap reproducer\nabove, two further IPv4 frag_list geometries that reach\nBUG_ON(i >= nfrags) and BUG_ON(!list_skb->head_frag), and an IPv6\nfragment-header variant (udp6_ufo_fragment()) each panic the unpatched\nkernel; with this patch all four datagrams are delivered intact and\nnothing is logged.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.1.12-100.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-80726": {
-                "cve_id": "CVE-2026-80726",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-81010": {
-                "cve_id": "CVE-2026-81010",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-89603": {
-                "cve_id": "CVE-2026-89603",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-99217": {
-                "cve_id": "CVE-2026-99217",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.3-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-99243": {
-                "cve_id": "CVE-2026-99243",
-                "title": "Rejected reason: This CVE ID has been rejected or withdrawn by it ...",
-                "description": "Rejected reason: This CVE ID has been rejected or withdrawn by its CVE Numbering Authority.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
                     {
                         "introduced": "6.17.1-300.fc43",
                         "identifier": "fc43",
