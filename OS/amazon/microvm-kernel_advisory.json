@@ -20,7 +20,7 @@
                 "cve_id": "CVE-2026-74752",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: validate cookie AUTH state before use\n\nWhen cookie authentication is disabled, COOKIE_ECHO restores fixed-size\nAUTH fields directly from peer-controlled cookie bytes.  A forged RANDOM\nlength, HMAC list, or CHUNKS list can then reach association consumers\nwith lengths or identifiers that were never validated against the local\nbacking arrays.\n\nA forged RANDOM length can cause out-of-bounds reads during key-vector\nconstruction.  A forged HMAC identifier also caused a 32-byte write past\na zero-length AUTH chunk, providing a primitive for a local privilege\nescalation chain.\n\nValidate the cookie's RANDOM, HMACS, and CHUNKS parameters at the cookie\ntrust boundary before copying them into the association.  Reject invalid\ntypes, malformed lengths, unsupported HMAC identifiers, HMAC lists\nwithout SHA1, and forbidden chunk ids.",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -34,7 +34,7 @@
                 "cve_id": "CVE-2026-89633",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix OOB read/write from unvalidated DataOffset in coalesce_t2()\n\ncoalesce_t2() computes data pointers directly from server-supplied\nDataOffset fields with no validation against buffer bounds:\n\n  data_area_of_tgt = (char *)&pSMBt->hdr.Protocol +\n                     get_unaligned_le16(&pSMBt->t2_rsp.DataOffset);\n  data_area_of_src = (char *)&pSMBs->hdr.Protocol +\n                     get_unaligned_le16(&pSMBs->t2_rsp.DataOffset);\n  data_area_of_tgt += total_in_tgt;\n  ...\n  memcpy(data_area_of_tgt, data_area_of_src, total_in_src);\n\nA small DataOffset can push a pointer below the actual byte area,\noverwriting header fields; a large one can push it past the buffer\nend, causing out-of-bounds heap reads (source) or writes (target).\nThe BCC overflow guard does not prevent this: BCC reflects how much\ndata is present, while DataOffset controls where in the buffer it\nstarts.\n\nThe \"validate target area\" comment present since the function was\nfirst written in 2005 was a placeholder that was never implemented.\n\nAdd lower- and upper-bound checks for both data pointers before the\nmemcpy, and before any target header fields are modified.",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -48,7 +48,7 @@
                 "cve_id": "CVE-2026-89659",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during delegation revoke\n\nA delegation stateid holds only a bare pointer to its owning\nnfs4_client and does not keep it alive.  The client survives its\nstateids only because __destroy_client() drains cl_delegations and\ncl_revoked before free_client() runs.\n\nnfs4_laundromat() breaks that invariant: it unhashes an\nexpired delegation from cl_delegations, drops deleg_lock, then\nrevoke_delegation() relinks it onto cl_revoked under cl_lock.  In that\nwindow the delegation is on neither list, so client_has_state() can\nreport no remaining state.\n\nEvery teardown path first requires cl_rpc_users to be zero, but\nthe laundromat holds no such reference.  A client whose recalled\ndelegation has just timed out can therefore reach free_client()\nwhile revoke_delegation() is still about to dereference cl_lock,\na use-after-free.\n\nPin the client with cl_rpc_users across the revoke so teardown blocks\nuntil it completes, then reap the delegation from cl_revoked.  A client\nalready expiring reaps its own, so skip it and leave the delegation on\ndel_recall_lru.",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -62,7 +62,7 @@
                 "cve_id": "CVE-2026-90036",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nNFSD: Prevent client use-after-free during blocked-lock reaping\n\nA bare lock owner -- its only remaining reference a blocked lock on\nnn->blocked_locks_lru -- holds a raw pointer to its nfs4_client but\nno reference keeping the client alive. When the per-net laundromat\nreaps such a lock, freeing the nbl drops the owner reference\nheld through flc_owner, and the final nfs4_put_stateowner()\ntakes the client's cl_lock. Because the laundromat detaches the\nnbl first, __destroy_client() no longer finds it, so a concurrent\nforce_expire_client() can free the client before nfs4_put_stateowner()\nruns, dereferencing cl_lock in freed memory.\n\nPin the client with cl_rpc_users before dropping\nnn->blocked_locks_lock, and skip clients already expiring, whose\nblocked locks __destroy_client() frees while holding an owner\nreference. Take nn->client_lock outside nn->blocked_locks_lock.\nEvery other site holds nn->blocked_locks_lock as a leaf, acquiring\nno further lock, so placing nn->client_lock outside it cannot form\na lock-order cycle.",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -76,7 +76,7 @@
                 "cve_id": "CVE-2026-97563",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject out-of-bounds DataOffset in CIFSSMBRead()\n\nThe SMB1 synchronous read helper CIFSSMBRead() validates the server's\nDataLength against CIFSMaxBufSize and the caller's count, but never\nvalidates DataOffset. The copy source is formed as\n\n\t&pSMBr->hdr.Protocol + le16_to_cpu(pSMBr->DataOffset)\n\nand memcpy()'d for DataLength bytes with no check that the\n[DataOffset, DataOffset + DataLength) range lies within the response\nactually received from the server.\n\nA malicious or compromised SMB1 server can return a response carrying\nan in-range DataLength and a large DataOffset, driving the source\npointer past the end of the response buffer. The memcpy() then copies\nadjacent kernel heap into the caller's read buffer (information\ndisclosure), or reads unmapped memory and oopses (denial of service).\nSMB1 is not negotiated by default; reaching this code requires an\nexplicit vers=1.0 mount.\n\nBoth DataOffset and the received response length recorded in\nrsp_iov.iov_len are relative to the start of the SMB header, so reject\nthe response unless DataOffset + DataLength fits within that length,\nusing overflow-safe arithmetic, before forming the source pointer.\nThe response length has been validated by the previous patch, so the\nDataOffset and DataLength fields can be read safely here.\n\nWhile here, make data_length unsigned. It holds a length derived from\nunsigned on-the-wire fields and is only ever compared against unsigned\nquantities; print it with %u accordingly, and add __func__ to the\ncifs_dbg() calls in this function.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -90,7 +90,7 @@
                 "cve_id": "CVE-2026-98033",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbpf: Preserve inner map identity in callback frames\n\nCallback frame constructors initialize map-typed argument registers with\n__mark_reg_known_zero() and then restore map_ptr. This clears map_uid,\nwhich is the only field distinguishing inner maps that share an\ninner_map_meta template.\n\nWhen a timer callback invokes bpf_for_each_map_elem() on a second inner\nmap, both the saved first map and the second map value can reach the nested\ncallback as the same template with map_uid zero. bpf_timer_init() then\naccepts pairing the timer from the second map with the first map.\n\nThe runtime records the first map in the timer without taking a reference.\nFreeing that map does not find the timer stored in the second map, so a\nlater timer callback dereferences the freed map.\n\nCopy map_uid from the same caller register as map_ptr when constructing\nfor-each, timer/workqueue, and task-work callback arguments. The existing\nidentity check can then reject mismatched inner maps while allowing a\ncallback value to be paired with its actual map.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -104,7 +104,7 @@
                 "cve_id": "CVE-2026-98432",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv4: free inet_opt and ireq_opt after an RCU grace period\n\ntcp_v4_syn_recv_sock() transfers ownership of ireq->ireq_opt to the\nchild socket (newinet->inet_opt) without copying it.\n\nAnother cpu can concurrently process a retransmitted SYN for the same\nrequest socket, and send a SYNACK from tcp_check_req().\ntcp_v4_send_synack() and inet_csk_route_req() read ireq->ireq_opt\nunder rcu_read_lock() only, and ip_build_and_send_pkt() and\nip_options_build() then read opt->optlen twice.\n\nNote that the SYNACK timer itself is not an issue: it holds a\nreference on its request socket, and inet_csk_reqsk_queue_drop()\ncalls timer_delete_sync() before the child can be freed.\n\nSince commit 079096f103fa (\"tcp/dccp: install syn_recv requests\ninto ehash table\"), request sockets are processed without holding\nthe listener lock, so nothing prevents the child socket from being\nfreed while the SYNACK is still being built. TCP child sockets do\nnot have SOCK_RCU_FREE, and inet_sock_destruct() frees inet_opt\nwith a plain kfree(), leading to a use-after-free in\nip_options_build().\n\nA similar issue exists with request socket migration\n(net.ipv4.tcp_migrate_req=1, or a BPF_SK_REUSEPORT_SELECT_OR_MIGRATE\nprogram). reqsk_timer_handler() clones the request socket with\ninet_reqsk_clone(), so that the old request socket and its clone\nshare the same ireq_opt, then reqsk_migrate_reset() clears the\npointer in the old one. Another cpu holding a reference on the old\nrequest socket can still be using these options (sending a SYNACK,\nor creating a child in tcp_v4_syn_recv_sock()) when the clone is\nfreed, and tcp_v4_reqsk_destructor() also uses a plain kfree().\n\nReaders already use RCU, and other paths replacing inet_opt\n(do_ip_setsockopt(), cipso_v4_sock_setattr()...) already use\nkfree_rcu(). Use kfree_rcu() in inet_sock_destruct() and\ntcp_v4_reqsk_destructor() as well.\n\nIPv6 is not affected by the first issue, because tcp_v6_syn_recv_sock()\nduplicates the options. tcp_v6_reqsk_destructor() has the same\nmigration issue with ipv6_opt, which is only set by CALIPSO. This\nwill be addressed in a separate patch.",
-                "severity": "CRITICAL",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -160,7 +160,7 @@
                 "cve_id": "CVE-2026-98846",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsctp: check RCV_SHUTDOWN after the sendmsg connect wait\n\nsctp_wait_for_connect() drops the socket lock while it sleeps. An\nout-of-the-blue ABORT can then be processed from the socket backlog and\nunlink the association. If a concurrent shutdown(fd, SHUT_RD) sets\nRCV_SHUTDOWN, the waiter breaks with err == 0 before checking\nasoc->base.dead. Its final sctp_association_put() can then free the\nassociation, leaving sctp_sendmsg_to_asoc() to continue with a dangling\npointer.\n\nCheck RCV_SHUTDOWN along with the wait error in sctp_sendmsg_to_asoc()\nbefore using the association again. The check only accesses the socket,\nso it needs no additional association reference. Return the existing\n-ESRCH so that sctp_sendmsg() skips freeing a new association that may\nalready have been destroyed.\n\nKeep sctp_wait_for_connect() unchanged to preserve its behavior for the\nconnect() caller.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
