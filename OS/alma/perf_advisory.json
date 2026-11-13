@@ -7463,6 +7463,19 @@
                     }
                 ]
             },
+            "CVE-2026-74446": {
+                "cve_id": "CVE-2026-74446",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: hold event_mutex while checkpointing CRIU events\n\nkfd_criu_checkpoint_events() counts the entries in p->event_idr via\nkfd_get_num_events(), allocates an array sized to that count, and then\nwalks the same IDR to fill it. Neither the count nor the walk holds\np->event_mutex.\n\nThe CRIU checkpoint caller holds only p->mutex. Event create and destroy\n(kfd_event_create()/kfd_event_destroy()) take p->event_mutex and do not\ntake p->mutex, so a second thread in the same process can insert or remove\nevents between the count and the walk. If an event is inserted, the walk\niterates more entries than were counted and writes past the end of the\nev_privs allocation; if an event is removed, the walk dereferences an\nentry that is being freed.\n\nHold p->event_mutex across the count and the walk so both observe a\nconsistent view of p->event_idr. The lock is released before\ncopy_to_user(), which only touches the local buffer. The caller already\nholds p->mutex and the create/destroy paths never take p->mutex, so the\np->mutex -> p->event_mutex order is not inverted and no deadlock is\nintroduced.\n\n(cherry picked from commit ff57e223ab105795b05d3ef3f3c35a5a441bcbaa)",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-74480": {
                 "cve_id": "CVE-2026-74480",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7945,6 +7958,19 @@
                     }
                 ]
             },
+            "CVE-2026-80842": {
+                "cve_id": "CVE-2026-80842",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bridge: mcast: fix use-after-free of a master VLAN's multicast context\n\nbr_multicast_toggle_one_vlan() clears BR_VLFLAG_MCAST_ENABLED under\nbr->multicast_lock before stopping a VLAN's multicast context.  That is\nthe teardown handshake: lockless readers gate on the flag through\nbr_multicast_ctx_should_use() -> br_multicast_ctx_vlan_disabled(), so\nonce it is cleared under the lock no reader can arm the context again.\n\nFor a master VLAN the handshake never runs.  __vlan_del() clears\nBRIDGE_VLAN_INFO_BRENTRY before calling br_vlan_put_master(), so\nbr_multicast_toggle_one_vlan(masterv, false) returns early on\n!br_vlan_is_brentry(vlan): the flag stays set and br->multicast_lock is\nnever taken.  br_vlan_put_master() then drains the context in\nbr_multicast_ctx_deinit() and frees the VLAN through call_rcu(), while a\nreader still inside rcu_read_lock() sees the context as enabled and\nre-arms it.  The port and port-VLAN branch of the function has no\nbr_vlan_is_brentry() test and flips the flag under br->multicast_lock,\nso it is not affected.\n\nThe reader is the bridge transmit path.  For a master VLAN\nbr_multicast_rcv() selects brmctx = &vlan->br_mcast_ctx with\npmctx = NULL, so IGMP sent to the bridge device re-arms the context's\ntimers after br_multicast_ctx_deinit() has already stopped them.\n\n  BUG: KASAN: slab-use-after-free in detach_if_pending+0x412/0x4a0\n  Write of size 8 at addr ffff88810ac39918 by task brmc/601\n   __mod_timer+0x51a/0xc50\n   br_multicast_host_join+0x25b/0x390\n   __br_multicast_add_group+0x468/0x530\n   br_ip4_multicast_add_group+0x1a0/0x260\n   br_multicast_rcv+0x2cda/0x61e0\n   br_dev_xmit+0x6c4/0x1540\n  Allocated by task 610:\n   br_vlan_add+0x111/0xb40\n   br_vlan_info+0x370/0x3e0\n  Freed by task 0:\n   kfree+0x1a7/0x4f0\n   rcu_core+0x7dc/0x10a0\n\nOnly test br_vlan_is_brentry() when enabling, like the\nbr_multicast_ctx_vlan_global_disabled() test next to it.  Disabling then\nalways clears BR_VLFLAG_MCAST_ENABLED under br->multicast_lock before\nbr_multicast_ctx_deinit() drains the context.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-80863": {
                 "cve_id": "CVE-2026-80863",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -8345,6 +8371,20 @@
                     }
                 ]
             },
+            "CVE-2026-90207": {
+                "cve_id": "CVE-2026-90207",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: midi: Serialize input teardown with event_input\n\nsnd_midi_input_event() must not be running while a rawmidi substream is\nclosing, since this can lead to the trigger state becoming out-of-step\nthrough this sequence in snd_rawmidi_input_trigger():\n\n\tsnd_rawmidi_input_trigger(up=0)\n\t\t\t\t\tsnd_midi_input_event()\n\t\t\t\t\t -> snd_rawmidi_kernel_read()\n\t\t\t\t\t     -> snd_rawmidi_input_trigger(up=1)\n\t  -> cancel_work_sync()\n\nwhich ends with the underlying device being active unexpectedly.\n\nWhen this is called from close_substream(), further input can re-trigger\nthe input event leaving it running after rawmidi_release_priv() has set\nrfile->rmidi to NULL which leads to:\n\n\tUnable to handle kernel NULL pointer dereference at virtual address 00000000000000b0\n\tCall trace:\n\t snd_midi_input_event+0x3c/0x134 [snd_seq_midi] (P)\n\t snd_rawmidi_input_event_work+0x1c/0x2c\n\t process_one_work+0x150/0x3a4\n\t worker_thread+0x190/0x318\n\nApply a similar approach to commit ef7607ab1c8ad (\"ALSA: seq: midi:\nSerialize output teardown with event_input\") which fixed the same issue\nin the output direction, but updated to use RCU following Takashi Iwai's\nproposed follow-on patch [1].\n\nWith this change in place, midisynth_unsubscribe() clears the input file\nso snd_midi_input_event() will not re-trigger the stream and will be\nquiesced by the cancel_work_sync() in snd_rawmidi_input_trigger().\n\n[1] https://lore.kernel.org/linux-sound/20260813144224.753399-1-tiwai@suse.de/",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-741.22.1.el9_9",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-90315": {
                 "cve_id": "CVE-2026-90315",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -8466,6 +8506,45 @@
                     }
                 ]
             },
+            "CVE-2026-97422": {
+                "cve_id": "CVE-2026-97422",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: fix SMI event cross-process information leak\n\nkfd_smi_ev_enabled() skips the suser privilege check when pid=0.\nPROCESS_START, PROCESS_END, and VMFAULT events are emitted with\npid=0 while carrying another process's PID and command name, so any\n/dev/kfd user in the render group can monitor all GPU workloads.\n\nPass the target process PID into kfd_smi_event_add() for these events\nso the existing per-client filter restricts delivery to the owning\nprocess or CAP_SYS_ADMIN subscribers.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97425": {
+                "cve_id": "CVE-2026-97425",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: fix buffer overflow during vBIOS update\n\nClamp the buffer postion to write by setting the bin attribute\nto the maximum buffer size so that VFS layer will block the\nout-of-bounds accessing.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97427": {
+                "cve_id": "CVE-2026-97427",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amd/pm: bound pp_dpm_set_pp_table() memcpy\n\nThe powerplay path allocates hardcode_pp_table once with kmemdup(...,\nsoft_pp_table_size). memcpy(..., size) used the sysfs store count (up to\nPAGE_SIZE) with no upper bound, causing heap overflow. Reject\nwrites where size exceeds soft_pp_table_size.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-97493": {
                 "cve_id": "CVE-2026-97493",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -8475,6 +8554,59 @@
                 "events": [
                     {
                         "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97494": {
+                "cve_id": "CVE-2026-97494",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: validate and share PSP fw_pri_buf copies via psp_copy_fw\n\nChange psp_copy_fw from void to int: return -ENODEV when drm_dev_enter\nfails, and -EINVAL when the image size is zero or larger than the\n1 MiB PSP private buffer.\n\nReplace open-coded memset/memcpy into fw_pri_buf with psp_copy_fw.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97495": {
+                "cve_id": "CVE-2026-97495",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Check bounds on allocate_doorbell\n\nallocated_doorbell has an option to set the doorbell id\nto a specific value (used by CRIU). This value was not\nbounds checked.\n\nCheck to confirm it's less than KFD_MAX_NUM_OF_QUEUES_PER_PROCESS.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-97497": {
+                "cve_id": "CVE-2026-97497",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Check bounds for allocate_sdma_queue restore_sdma_id\n\nallocate_sdma_queue has an option where the sdma queue id can be\nspecified (used by CRIU). We weren't bounds-checking that\nvalue.\n\nConfirm it's less than the maximum number of queues.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-98116": {
+                "cve_id": "CVE-2026-98116",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: pcm: Serialize PCM mmap with buffer reallocation to fix page UAF\n\nsnd_pcm_hw_params() and snd_pcm_hw_free() guard buffer reallocation\nwith an mmap_count check performed under the PCM stream lock, but the\nlock is released long before the buffer is actually freed:\nsnd_pcm_sync_stop(), constraint refinement and do_free_pages() all\nhappen in between.  snd_pcm_mmap_data(), on the other hand, takes no\nlock at all: it validates against the old buffer's state and\ndma_bytes, remaps its pages into the VMA, and only then increments\nmmap_count.\n\nA concurrent mmap() can therefore slip in between the check and the\nfree.  remap_pfn_range() installs writable PTEs for the old buffer's\npages without taking page references, and the subsequent\ndo_free_pages() returns those pages to the page allocator while the\nVMA still maps them.  This leaves a stale, writable mapping of freed\npages: a page-level use-after-free that can be leveraged for local\nprivilege escalation.\n\nMake snd_pcm_mmap_data() participate in the buffer-access scheme\nintroduced for hw_params/hw_free: acquire runtime->buffer_accessing\nbefore validating and remapping, and release it afterwards.  Buffer\nreallocation already fails with -EBUSY while accessors are active,\nand the mmap side now fails with -EBUSY while a reallocation is in\nprogress, so the validate/remap sequence and the check/free sequence\ncan no longer interleave.\n\nA reproducer that turns this race into a stale writable mapping of\nthe freed DMA buffer pages is available on request.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-741.22.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -8616,6 +8748,61 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix exchange-range-to-eof file size exchange\n\nNorbert Szetei posted a patch containing an incomplete description of a\nbug in XFS_IOC_EXCHANGE_RANGE's TO_EOF flag.  The bug tricks\nexchange-range into modifying a file so that it has shared blocks\nstarting beyond EOF, which is never allowed because files never have\nwritten data beyond EOF, and you can only share written data blocks.\nThis is key to all the incorrect behavior that follows.\n\nEventually I got from Norbert a description of what's going wrong:\n\n> Fair. Here it is with physical block numbers, 4k blocks. peer is the file\n> that gets rewritten and file1 is the one that ends up with the flag\n> cleared.\n>\n> Start, nothing shared:\n>\n>\tpeer size 4096   -> [100]\n>\tfile1 size 12288 -> [200] [201] [202]\n>\tdonor1 size 4096 -> [300]\n>\tdonor2 size 4096 -> [400]\n>\n> 1. FICLONERANGE peer's block into file1's middle slot:\n>\n>\tpeer size 4096   -> [100]\n>\tfile1 size 12288 -> [200] [100] [202] reflink flag set\n>                             ^^^^^ both files own block 100\n>\n> 2. XFS_IOC_EXCHANGE_RANGE file1 against donor1, file1_offset 0,\n> file2_offset 8192, length 0, TO_EOF. One block is exchanged, and the sizes\n> are exchanged with it:\n>\n>\tfile1 size 4096   -> [200] [100] [300] reflink flag set\n>                              ^^^^^^^^^^^ still owned, now past the size\n>\tdonor1 size 12288 -> [202]\n>\n> file1 says it is one block long while it still owns three. Nothing was\n> unmapped. file2_offset is block 2, so this exchange cannot clear a flag.\n>\n> 3. XFS_IOC_EXCHANGE_RANGE file1 against donor2, both offsets 0, length 4096.\n> By i_disk_size this is two one-block files exchanging everything, so\n> xmi_can_exchange_reflink_flags() agrees and the flag is cleared:\n>\n>\tfile1 size 4096   -> [400] [100] [300] reflink flag CLEARED\n>\tdonor2 size 4096  -> [200]\n>\n> Block 100 is still shared with peer.\n>\n> 4. pwrite(file1, 4096, 4096), which is file1's second slot, block 100.\n> xfs_is_cow_inode(file1) is false, so no CoW:\n>\n>\tpeer size 4096 -> [100] same block, new contents\n>\n> Block 100 is the only one that matters here. PoC below, it reads a file\n> called peer in the current directory. The filesystem needs reflink and\n> exchange-range, which mkfs.xfs 7.x turns on by default.\n\nSo yes, TO_EOF is screwing up the file size even if it's actually\nexchanging the data block correctly.  The following is the intended\nbehavior of XFS_EXCHANGE_RANGE_TO_EOF, as described by its manpage:\n\n\"Ignore the length parameter.  All bytes in file1_fd from file1_offset\n to EOF are moved to file2_fd, and file2's size is set to\n (file2_offset+(file1_length-file1_offset)).  Meanwhile, all bytes in\n file2 from file2_offset to EOF are moved to file1 and file1's size is\n set to (file1_offset+(file2_length-file2_offset)).\"\n\nIn other words, if we only exchange a portion of the file data, then we\nshould only exchange the portion of the file size that relates to the\nexchanged data.  Unfortunately, the code swaps the ondisk file size and\nthe incore file sizes, which is incorrect if the caller passes in a\nnonzero offset.\n\nHaving confused the file sizes, the PoC uses a second exchange-range\ncall on what looks like a non-reflinked single-block file.  Because the\nfile size is set incorrectly, exchange-range thinks it's exchanging the\nfull contents of two files and clears the reflink flag on the broken\nfile.  That enables an extending write of the broken file to rewrite the\nshared block that's just past EOF.  This has become known colloquially\nas refluxfs.\n\nOnce the file sizes are set correctly, the second exchange-range no\nlonger thinks that it's doing a full-contents swap, so it won't clear\nthe reflink flag on either of its file arguments.\n\nNorbert followed up to an earlier version of this patch with a second\ncomplaint about us not handling the i_disk_size state correctly:\n\n> The offsets are bounded against the incore i_size but subtracted from\n>\n---truncated---",
                 "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-99032": {
+                "cve_id": "CVE-2026-99032",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/smc: protect clcsock lifetime in smc_getname\n\nsmc_getname() dereferences smc->clcsock without holding\nclcsock_release_lock. Link-group termination can release the CLC socket\nthrough smc_close_active_abort() while the SMC socket is still open,\nfor example after shutdown(SHUT_WR).\n\nA getsockname() caller can load smc->clcsock, then the termination worker\ncan clear the pointer and call sock_release() before the caller accesses\nclcsock->ops or invokes getname(). This causes a use-after-free; if the\nworker clears the pointer before the load, it causes a NULL dereference.\nThe syscall's file reference keeps the SMC socket alive but does not\nprevent asynchronous release of its CLC socket.\n\nKASAN reported the following with test-only timing instrumentation:\n\n  BUG: KASAN: slab-use-after-free in smc_getname+0x19e/0x1b0\n  Read of size 8 at addr ffff888109abb4e0 by task poc/103\n  Call Trace:\n   smc_getname+0x19e/0x1b0\n   do_getsockname+0xe5/0x170\n   __sys_getsockname+0x8c/0x100\n\n  Allocated by task 95:\n   sock_alloc_inode+0x1e/0x280\n   sock_alloc+0x3d/0x240\n   __sock_create+0x7e/0x430\n   smc_create+0x121/0x240\n\n  Freed by task 0:\n   kmem_cache_free+0xcc/0x340\n   rcu_core+0x50a/0x1850\n\n  Last potentially related work creation:\n   evict+0x446/0x6c0\n   smc_clcsock_release+0xa8/0xd0\n   smc_close_active_abort+0x26a/0x3a0\n   __smc_lgr_terminate.part.0+0x137/0x2e0\n\nHold clcsock_release_lock across the pointer check and the getname()\ncallback to serialize with smc_clcsock_release(). Return -EBADF if the\nCLC socket has already been released, preserving the existing peer\nstate check and the callback's return value otherwise.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-741.22.1.el9_9",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-99152": {
+                "cve_id": "CVE-2026-99152",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the task named by a management response\n\n__iscsi_complete_pdu() fetches the task for five response types from one\nplace and checks only that the index resolved:\n\n      case ISCSI_OP_LOGOUT_RSP:\n      case ISCSI_OP_LOGIN_RSP:\n      case ISCSI_OP_TEXT_RSP:\n      case ISCSI_OP_SCSI_TMFUNC_RSP:\n      case ISCSI_OP_NOOP_IN:\n              task = iscsi_itt_to_task(conn, hdr->itt);\n              if (!task)\n                      return ISCSI_ERR_BAD_ITT;\n\niscsi_itt_to_task() bounds the index against cmds_max and looks at\nnothing else, so a target can name any slot in the pool, including one\nthat has never been used. task->conn is then NULL, and both\niscsi_nop_out_rsp() and iscsi_complete_task() dereference it. One\nunsolicited NOP-In is enough; a Text Response carrying the same ITT\ncrashes in iscsi_complete_task() instead.\n\nRequire the task to be in flight and not a SCSI command, the way\niscsi_itt_to_ctask() does for the command opcodes.\n\n[    6.298634] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.298642] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.298652] CPU: 1 UID: 0 PID: 111 Comm: iscsistart Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.298654] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.298656] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.298691] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.298698] RSP: 0018:ffff88806c907be8 EFLAGS: 00010206\n[    6.298701] RAX: dffffc0000000000 RBX: ffff888006116800 RCX: 0000000000000020\n[    6.298702] RDX: 000000000000000c RSI: ffff88800525d578 RDI: 0000000000000060\n[    6.298703] RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000\n[    6.298706] R10: 0000000000000020 R11: 0000000000000000 R12: 0000000000000000\n[    6.298706] R13: 000000000000002e R14: ffff8880056eb440 R15: ffff888006116800\n[    6.298707] FS:  00007fc02d1c2740(0000) GS:ffff8880b29bc000(0000) knlGS:0000000000000000\n[    6.298710] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.298711] CR2: 000055fe3b56ddf8 CR3: 00000000053b9004 CR4: 0000000000770ef0\n[    6.298712] PKRU: 55555554\n[    6.298713] Call Trace:\n[    6.298714]  <IRQ>\n[    6.298714]  __iscsi_complete_pdu+0x13a8/0x22a0\n[    6.298758]  iscsi_complete_pdu+0x54/0xa0\n[    6.298759]  iscsi_tcp_hdr_recv_done+0x870/0x2c80\n[    6.298778]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.298800]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.298804]  __tcp_read_sock+0x1ab/0x810\n[    6.298812]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.298814]  tcp_rcv_established+0x1f56/0x3a00\n[    6.298842]  tcp_v4_do_rcv+0x449/0x960\n[    6.298847]  tcp_v4_rcv+0x2245/0x3bc0",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-741.22.1.el9_9",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-99153": {
+                "cve_id": "CVE-2026-99153",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the ITT reflected in a Reject PDU\n\nA Reject PDU carries a copy of the header it rejects, and\niscsi_handle_reject() takes the ITT out of that copy to find the task to\nclean up:\n\n      memcpy(&rejected_pdu, data, sizeof(struct iscsi_hdr));\n      ...\n      task = iscsi_itt_to_task(conn, rejected_pdu.itt);\n\nThat value is whatever the target put there. iscsi_itt_to_task() bounds\nthe index against cmds_max and checks nothing else, so any task in the\npool can be named, and iscsi_nop_out_rsp() then completes it.\n\nAn index that has never been used gives a NULL task->conn: the pool is\nzeroed at session setup and conn is assigned only when a task is\nallocated. If the task was used and returned, iscsi_complete_task() hits\nits WARN_ON_ONCE(task->state == ISCSI_TASK_FREE) and the refcount\nunderflows. An in-flight SCSI command is completed as successful - a 1\nMiB read returned 1048576 with none of its buffer written and no\nwarning.\n\nValidate the reflected ITT the way iscsi_itt_to_ctask() validates a\ncommand ITT, and require the task to be in flight and not a SCSI\ncommand.\n\n[    6.248477] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.249357] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.249951] CPU: 1 UID: 0 PID: 0 Comm: swapper/1 Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.250718] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.251616] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.252043] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.252813] RSP: 0018:ffff88806c907b80 EFLAGS: 00010206\n[    6.253042] RAX: dffffc0000000000 RBX: ffff88800607e000 RCX: ffffffff8d571a25\n[    6.253345] RDX: 000000000000000c RSI: ffff88806c907c38 RDI: 0000000000000060\n[    6.253642] RBP: 0000000000000000 R08: 0000000000000000 R09: fffffbfff235a504\n[    6.253947] R10: 0000000000000003 R11: 7463656e6e6f6320 R12: 0000000000000000\n[    6.254251] R13: 0000000000000000 R14: ffff88806c907c38 R15: 0000000000000000\n[    6.254549] FS:  0000000000000000(0000) GS:ffff8880d95bc000(0000) knlGS:0000000000000000\n[    6.254887] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.255140] CR2: 00007fc393e8ffc0 CR3: 0000000005252006 CR4: 0000000000770ef0\n[    6.255439] PKRU: 55555554\n[    6.255564] Call Trace:\n[    6.255674]  <IRQ>\n[    6.255768]  __iscsi_complete_pdu+0x18bf/0x22a0\n[    6.256733]  iscsi_complete_pdu+0x54/0xa0\n[    6.256905]  iscsi_tcp_data_recv_done+0xf4/0x250\n[    6.257103]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.257680]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.258061]  __tcp_read_sock+0x1ab/0x810\n[    6.258853]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.259808]  tcp_data_queue+0x1f13/0x4cd0\n[    6.260567]  tcp_rcv_established+0x8a5/0x3a00\n[    6.261931]  tcp_v4_do_rcv+0x449/0x960\n[    6.262269]  tcp_v4_rcv+0x2245/0x3bc0",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:5.14.0-687.5.1.el9_8",
+                        "fixed": "0:5.14.0-741.22.1.el9_9",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-99156": {
+                "cve_id": "CVE-2026-99156",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: st: Fix use-after-free race between st_remove() and st_open()\n\nst_remove() drops the probe reference on the scsi_tape with kref_put()\nand only afterwards removes its index from st_index_idr. If that was the\nlast reference, scsi_tape_release() frees the structure while it is\nstill published in the idr.\n\nscsi_tape_get(), called from st_open(), looks up the tape in\nst_index_idr and takes a reference under st_ref_mutex and\nst_index_lock. remove_cdevs() does not wait for opens that are already\npast chrdev_open(), so an open that is blocked on st_ref_mutex while\nst_remove() holds it can take the mutex as soon as st_remove() drops it,\nfind the freed tpnt in the idr and call kref_get() on it:\n\n  BUG: KASAN: slab-use-after-free in st_open\n  Write of size 4 ...\n   st_open (drivers/scsi/st.c:254 drivers/scsi/st.c:1291)\n   chrdev_open\n  ...\n  Freed by task ...:\n   kfree\n   st_remove (drivers/scsi/st.c:4512)\n\nRemove the index from the idr before dropping the reference, all under\nst_ref_mutex. A concurrent scsi_tape_get() now either runs first and\nholds a valid reference that keeps the tape alive, or runs afterwards\nand finds nothing, so st_open() fails with -ENXIO.\n\nThis restores the ordering st_remove() had before the conversion to\nst_index_idr, where the tape was unpublished from scsi_tapes[] before\nthe final kref_put().",
+                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -69235,19 +69422,6 @@
                     }
                 ]
             },
-            "CVE-2026-74446": {
-                "cve_id": "CVE-2026-74446",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: hold event_mutex while checkpointing CRIU events\n\nkfd_criu_checkpoint_events() counts the entries in p->event_idr via\nkfd_get_num_events(), allocates an array sized to that count, and then\nwalks the same IDR to fill it. Neither the count nor the walk holds\np->event_mutex.\n\nThe CRIU checkpoint caller holds only p->mutex. Event create and destroy\n(kfd_event_create()/kfd_event_destroy()) take p->event_mutex and do not\ntake p->mutex, so a second thread in the same process can insert or remove\nevents between the count and the walk. If an event is inserted, the walk\niterates more entries than were counted and writes past the end of the\nev_privs allocation; if an event is removed, the walk dereferences an\nentry that is being freed.\n\nHold p->event_mutex across the count and the walk so both observe a\nconsistent view of p->event_idr. The lock is released before\ncopy_to_user(), which only touches the local buffer. The caller already\nholds p->mutex and the create/destroy paths never take p->mutex, so the\np->mutex -> p->event_mutex order is not inverted and no deadlock is\nintroduced.\n\n(cherry picked from commit ff57e223ab105795b05d3ef3f3c35a5a441bcbaa)",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-74447": {
                 "cve_id": "CVE-2026-74447",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -73633,19 +73807,6 @@
                 "cve_id": "CVE-2026-80841",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/packet: defer vmalloc TX_RING free until skbs finish\n\nAF_PACKET TX_RING skbs keep a raw pointer to their ring frame. The skb\npage references preserve page-backed ring blocks after pg_vec is freed,\nbut they do not preserve a vmalloc mapping.\n\ntpacket_destruct_skb() currently drops the pending reference before\nwriting the timestamp and TP_STATUS_AVAILABLE to the frame. Move the\ndecrement after those stores. The smp_wmb() in __packet_set_status()\norders the frame stores before the decrement.\n\nAlso recheck pending TX frames under pg_vec_lock before non-closing\nring replacement, so a racing send cannot add a pending skb between\nthe initial check and the ring swap.\n\nRing allocation can produce a mixture of page-backed and vmalloc-backed\nblocks. Allocate deferred-work storage during TX ring setup when the\nfirst vmalloc-backed block is encountered, and keep its pointer in the\npg_vec allocation header. If allocation fails, return -ENOMEM from ring\nsetup. On socket close, a non-NULL pointer identifies a vmalloc-backed\nvector without a scan. If TX skbs remain, defer the whole vector to\nsystem_long_wq.\n\nAfter pg_vec is detached, a late destructor can skip the pending\ndecrement. Use socket write-memory accounting as the deferred lifetime\ngate instead: an skb remains charged through its final sock_wfree(),\nafter all ring-frame accesses. The delayed work retains a socket\nreference and reschedules itself until no TX skbs remain.\n\nMove pending_refcnt release to packet_sock_destruct() so late skb\ndestructors and deferred cleanup can safely use it after\npacket_release(). Page-backed teardown remains synchronous, and no lock\nis added to the TX completion hot path.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-80842": {
-                "cve_id": "CVE-2026-80842",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bridge: mcast: fix use-after-free of a master VLAN's multicast context\n\nbr_multicast_toggle_one_vlan() clears BR_VLFLAG_MCAST_ENABLED under\nbr->multicast_lock before stopping a VLAN's multicast context.  That is\nthe teardown handshake: lockless readers gate on the flag through\nbr_multicast_ctx_should_use() -> br_multicast_ctx_vlan_disabled(), so\nonce it is cleared under the lock no reader can arm the context again.\n\nFor a master VLAN the handshake never runs.  __vlan_del() clears\nBRIDGE_VLAN_INFO_BRENTRY before calling br_vlan_put_master(), so\nbr_multicast_toggle_one_vlan(masterv, false) returns early on\n!br_vlan_is_brentry(vlan): the flag stays set and br->multicast_lock is\nnever taken.  br_vlan_put_master() then drains the context in\nbr_multicast_ctx_deinit() and frees the VLAN through call_rcu(), while a\nreader still inside rcu_read_lock() sees the context as enabled and\nre-arms it.  The port and port-VLAN branch of the function has no\nbr_vlan_is_brentry() test and flips the flag under br->multicast_lock,\nso it is not affected.\n\nThe reader is the bridge transmit path.  For a master VLAN\nbr_multicast_rcv() selects brmctx = &vlan->br_mcast_ctx with\npmctx = NULL, so IGMP sent to the bridge device re-arms the context's\ntimers after br_multicast_ctx_deinit() has already stopped them.\n\n  BUG: KASAN: slab-use-after-free in detach_if_pending+0x412/0x4a0\n  Write of size 8 at addr ffff88810ac39918 by task brmc/601\n   __mod_timer+0x51a/0xc50\n   br_multicast_host_join+0x25b/0x390\n   __br_multicast_add_group+0x468/0x530\n   br_ip4_multicast_add_group+0x1a0/0x260\n   br_multicast_rcv+0x2cda/0x61e0\n   br_dev_xmit+0x6c4/0x1540\n  Allocated by task 610:\n   br_vlan_add+0x111/0xb40\n   br_vlan_info+0x370/0x3e0\n  Freed by task 0:\n   kfree+0x1a7/0x4f0\n   rcu_core+0x7dc/0x10a0\n\nOnly test br_vlan_is_brentry() when enabling, like the\nbr_multicast_ctx_vlan_global_disabled() test next to it.  Disabling then\nalways clears BR_VLFLAG_MCAST_ENABLED under br->multicast_lock before\nbr_multicast_ctx_deinit() drains the context.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -79624,20 +79785,6 @@
                     }
                 ]
             },
-            "CVE-2026-90207": {
-                "cve_id": "CVE-2026-90207",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: midi: Serialize input teardown with event_input\n\nsnd_midi_input_event() must not be running while a rawmidi substream is\nclosing, since this can lead to the trigger state becoming out-of-step\nthrough this sequence in snd_rawmidi_input_trigger():\n\n\tsnd_rawmidi_input_trigger(up=0)\n\t\t\t\t\tsnd_midi_input_event()\n\t\t\t\t\t -> snd_rawmidi_kernel_read()\n\t\t\t\t\t     -> snd_rawmidi_input_trigger(up=1)\n\t  -> cancel_work_sync()\n\nwhich ends with the underlying device being active unexpectedly.\n\nWhen this is called from close_substream(), further input can re-trigger\nthe input event leaving it running after rawmidi_release_priv() has set\nrfile->rmidi to NULL which leads to:\n\n\tUnable to handle kernel NULL pointer dereference at virtual address 00000000000000b0\n\tCall trace:\n\t snd_midi_input_event+0x3c/0x134 [snd_seq_midi] (P)\n\t snd_rawmidi_input_event_work+0x1c/0x2c\n\t process_one_work+0x150/0x3a4\n\t worker_thread+0x190/0x318\n\nApply a similar approach to commit ef7607ab1c8ad (\"ALSA: seq: midi:\nSerialize output teardown with event_input\") which fixed the same issue\nin the output direction, but updated to use RCU following Takashi Iwai's\nproposed follow-on patch [1].\n\nWith this change in place, midisynth_unsubscribe() clears the input file\nso snd_midi_input_event() will not re-trigger the stream and will be\nquiesced by the cancel_work_sync() in snd_rawmidi_input_trigger().\n\n[1] https://lore.kernel.org/linux-sound/20260813144224.753399-1-tiwai@suse.de/",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-741.22.1.el9_9",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-90209": {
                 "cve_id": "CVE-2026-90209",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -83083,19 +83230,6 @@
                     }
                 ]
             },
-            "CVE-2026-97422": {
-                "cve_id": "CVE-2026-97422",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: fix SMI event cross-process information leak\n\nkfd_smi_ev_enabled() skips the suser privilege check when pid=0.\nPROCESS_START, PROCESS_END, and VMFAULT events are emitted with\npid=0 while carrying another process's PID and command name, so any\n/dev/kfd user in the render group can monitor all GPU workloads.\n\nPass the target process PID into kfd_smi_event_add() for these events\nso the existing per-client filter restricts delivery to the owning\nprocess or CAP_SYS_ADMIN subscribers.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-97424": {
                 "cve_id": "CVE-2026-97424",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -83109,37 +83243,11 @@
                     }
                 ]
             },
-            "CVE-2026-97425": {
-                "cve_id": "CVE-2026-97425",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: fix buffer overflow during vBIOS update\n\nClamp the buffer postion to write by setting the bin attribute\nto the maximum buffer size so that VFS layer will block the\nout-of-bounds accessing.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-97426": {
                 "cve_id": "CVE-2026-97426",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu/pm: fix SmartShift bias sysfs store PM refcount on parse error\n\nReturn the parse error before acquiring PM access.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-97427": {
-                "cve_id": "CVE-2026-97427",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amd/pm: bound pp_dpm_set_pp_table() memcpy\n\nThe powerplay path allocates hardcode_pp_table once with kmemdup(...,\nsoft_pp_table_size). memcpy(..., size) used the sysfs store count (up to\nPAGE_SIZE) with no upper bound, causing heap overflow. Reject\nwrites where size exceeds soft_pp_table_size.",
-                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -83577,49 +83685,10 @@
                     }
                 ]
             },
-            "CVE-2026-97494": {
-                "cve_id": "CVE-2026-97494",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdgpu: validate and share PSP fw_pri_buf copies via psp_copy_fw\n\nChange psp_copy_fw from void to int: return -ENODEV when drm_dev_enter\nfails, and -EINVAL when the image size is zero or larger than the\n1 MiB PSP private buffer.\n\nReplace open-coded memset/memcpy into fw_pri_buf with psp_copy_fw.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-97495": {
-                "cve_id": "CVE-2026-97495",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Check bounds on allocate_doorbell\n\nallocated_doorbell has an option to set the doorbell id\nto a specific value (used by CRIU). This value was not\nbounds checked.\n\nCheck to confirm it's less than KFD_MAX_NUM_OF_QUEUES_PER_PROCESS.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-97496": {
                 "cve_id": "CVE-2026-97496",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Fix OOB memory exposure in get_wave_state()\n\nThe get_wave_state() function for v9 trusts cp_hqd_cntl_stack_size and\ncp_hqd_cntl_stack_offset values read directly from the MQD, which are\nwritten by GPU microcode and fully attacker-controlled on the\nCRIU-restore path (via AMDKFD_IOC_RESTORE_PROCESS with H3).\n\nthis leads to an unbounded copy_to_user() that can leak adjacent\nGTT/kernel memory. If offset > size, integer underflow produces a ~4 GiB\nread length, if size is set to 1 MiB against a 4 KiB allocation, we leak\n1 MiB of adjacent kernel memory (other queues' MQDs, ring buffers, KASLR\npointers).\n\nFix by clamping both cp_hqd_cntl_stack_size to the actual allocated\nbuffer size (q->ctl_stack_size) and cp_hqd_cntl_stack_offset to the\nclamped size before performing arithmetic and copy_to_user().\n\nThis ensures we never read beyond the allocated kernel BO regardless of\nattacker-supplied MQD field values.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-97497": {
-                "cve_id": "CVE-2026-97497",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndrm/amdkfd: Check bounds for allocate_sdma_queue restore_sdma_id\n\nallocate_sdma_queue has an option where the sdma queue id can be\nspecified (used by CRIU). We weren't bounds-checking that\nvalue.\n\nConfirm it's less than the maximum number of queues.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -86134,20 +86203,6 @@
                 "events": [
                     {
                         "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-98116": {
-                "cve_id": "CVE-2026-98116",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: pcm: Serialize PCM mmap with buffer reallocation to fix page UAF\n\nsnd_pcm_hw_params() and snd_pcm_hw_free() guard buffer reallocation\nwith an mmap_count check performed under the PCM stream lock, but the\nlock is released long before the buffer is actually freed:\nsnd_pcm_sync_stop(), constraint refinement and do_free_pages() all\nhappen in between.  snd_pcm_mmap_data(), on the other hand, takes no\nlock at all: it validates against the old buffer's state and\ndma_bytes, remaps its pages into the VMA, and only then increments\nmmap_count.\n\nA concurrent mmap() can therefore slip in between the check and the\nfree.  remap_pfn_range() installs writable PTEs for the old buffer's\npages without taking page references, and the subsequent\ndo_free_pages() returns those pages to the page allocator while the\nVMA still maps them.  This leaves a stale, writable mapping of freed\npages: a page-level use-after-free that can be leveraged for local\nprivilege escalation.\n\nMake snd_pcm_mmap_data() participate in the buffer-access scheme\nintroduced for hw_params/hw_free: acquire runtime->buffer_accessing\nbefore validating and remapping, and release it afterwards.  Buffer\nreallocation already fails with -EBUSY while accessors are active,\nand the mmap side now fails with -EBUSY while a reallocation is in\nprogress, so the validate/remap sequence and the check/free sequence\ncan no longer interleave.\n\nA reproducer that turns this race into a stale writable mapping of\nthe freed DMA buffer pages is available on request.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-741.22.1.el9_9",
                         "identifier": "el9"
                     }
                 ]
@@ -92460,20 +92515,6 @@
                     }
                 ]
             },
-            "CVE-2026-99032": {
-                "cve_id": "CVE-2026-99032",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/smc: protect clcsock lifetime in smc_getname\n\nsmc_getname() dereferences smc->clcsock without holding\nclcsock_release_lock. Link-group termination can release the CLC socket\nthrough smc_close_active_abort() while the SMC socket is still open,\nfor example after shutdown(SHUT_WR).\n\nA getsockname() caller can load smc->clcsock, then the termination worker\ncan clear the pointer and call sock_release() before the caller accesses\nclcsock->ops or invokes getname(). This causes a use-after-free; if the\nworker clears the pointer before the load, it causes a NULL dereference.\nThe syscall's file reference keeps the SMC socket alive but does not\nprevent asynchronous release of its CLC socket.\n\nKASAN reported the following with test-only timing instrumentation:\n\n  BUG: KASAN: slab-use-after-free in smc_getname+0x19e/0x1b0\n  Read of size 8 at addr ffff888109abb4e0 by task poc/103\n  Call Trace:\n   smc_getname+0x19e/0x1b0\n   do_getsockname+0xe5/0x170\n   __sys_getsockname+0x8c/0x100\n\n  Allocated by task 95:\n   sock_alloc_inode+0x1e/0x280\n   sock_alloc+0x3d/0x240\n   __sock_create+0x7e/0x430\n   smc_create+0x121/0x240\n\n  Freed by task 0:\n   kmem_cache_free+0xcc/0x340\n   rcu_core+0x50a/0x1850\n\n  Last potentially related work creation:\n   evict+0x446/0x6c0\n   smc_clcsock_release+0xa8/0xd0\n   smc_close_active_abort+0x26a/0x3a0\n   __smc_lgr_terminate.part.0+0x137/0x2e0\n\nHold clcsock_release_lock across the pointer check and the getname()\ncallback to serialize with smc_clcsock_release(). Return -EBADF if the\nCLC socket has already been released, preserving the existing peer\nstate check and the callback's return value otherwise.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-741.22.1.el9_9",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-99033": {
                 "cve_id": "CVE-2026-99033",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -93410,51 +93451,10 @@
                     }
                 ]
             },
-            "CVE-2026-99152": {
-                "cve_id": "CVE-2026-99152",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the task named by a management response\n\n__iscsi_complete_pdu() fetches the task for five response types from one\nplace and checks only that the index resolved:\n\n      case ISCSI_OP_LOGOUT_RSP:\n      case ISCSI_OP_LOGIN_RSP:\n      case ISCSI_OP_TEXT_RSP:\n      case ISCSI_OP_SCSI_TMFUNC_RSP:\n      case ISCSI_OP_NOOP_IN:\n              task = iscsi_itt_to_task(conn, hdr->itt);\n              if (!task)\n                      return ISCSI_ERR_BAD_ITT;\n\niscsi_itt_to_task() bounds the index against cmds_max and looks at\nnothing else, so a target can name any slot in the pool, including one\nthat has never been used. task->conn is then NULL, and both\niscsi_nop_out_rsp() and iscsi_complete_task() dereference it. One\nunsolicited NOP-In is enough; a Text Response carrying the same ITT\ncrashes in iscsi_complete_task() instead.\n\nRequire the task to be in flight and not a SCSI command, the way\niscsi_itt_to_ctask() does for the command opcodes.\n\n[    6.298634] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.298642] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.298652] CPU: 1 UID: 0 PID: 111 Comm: iscsistart Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.298654] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.298656] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.298691] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.298698] RSP: 0018:ffff88806c907be8 EFLAGS: 00010206\n[    6.298701] RAX: dffffc0000000000 RBX: ffff888006116800 RCX: 0000000000000020\n[    6.298702] RDX: 000000000000000c RSI: ffff88800525d578 RDI: 0000000000000060\n[    6.298703] RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000\n[    6.298706] R10: 0000000000000020 R11: 0000000000000000 R12: 0000000000000000\n[    6.298706] R13: 000000000000002e R14: ffff8880056eb440 R15: ffff888006116800\n[    6.298707] FS:  00007fc02d1c2740(0000) GS:ffff8880b29bc000(0000) knlGS:0000000000000000\n[    6.298710] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.298711] CR2: 000055fe3b56ddf8 CR3: 00000000053b9004 CR4: 0000000000770ef0\n[    6.298712] PKRU: 55555554\n[    6.298713] Call Trace:\n[    6.298714]  <IRQ>\n[    6.298714]  __iscsi_complete_pdu+0x13a8/0x22a0\n[    6.298758]  iscsi_complete_pdu+0x54/0xa0\n[    6.298759]  iscsi_tcp_hdr_recv_done+0x870/0x2c80\n[    6.298778]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.298800]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.298804]  __tcp_read_sock+0x1ab/0x810\n[    6.298812]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.298814]  tcp_rcv_established+0x1f56/0x3a00\n[    6.298842]  tcp_v4_do_rcv+0x449/0x960\n[    6.298847]  tcp_v4_rcv+0x2245/0x3bc0",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-741.22.1.el9_9",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-99153": {
-                "cve_id": "CVE-2026-99153",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the ITT reflected in a Reject PDU\n\nA Reject PDU carries a copy of the header it rejects, and\niscsi_handle_reject() takes the ITT out of that copy to find the task to\nclean up:\n\n      memcpy(&rejected_pdu, data, sizeof(struct iscsi_hdr));\n      ...\n      task = iscsi_itt_to_task(conn, rejected_pdu.itt);\n\nThat value is whatever the target put there. iscsi_itt_to_task() bounds\nthe index against cmds_max and checks nothing else, so any task in the\npool can be named, and iscsi_nop_out_rsp() then completes it.\n\nAn index that has never been used gives a NULL task->conn: the pool is\nzeroed at session setup and conn is assigned only when a task is\nallocated. If the task was used and returned, iscsi_complete_task() hits\nits WARN_ON_ONCE(task->state == ISCSI_TASK_FREE) and the refcount\nunderflows. An in-flight SCSI command is completed as successful - a 1\nMiB read returned 1048576 with none of its buffer written and no\nwarning.\n\nValidate the reflected ITT the way iscsi_itt_to_ctask() validates a\ncommand ITT, and require the task to be in flight and not a SCSI\ncommand.\n\n[    6.248477] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.249357] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.249951] CPU: 1 UID: 0 PID: 0 Comm: swapper/1 Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.250718] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.251616] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.252043] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.252813] RSP: 0018:ffff88806c907b80 EFLAGS: 00010206\n[    6.253042] RAX: dffffc0000000000 RBX: ffff88800607e000 RCX: ffffffff8d571a25\n[    6.253345] RDX: 000000000000000c RSI: ffff88806c907c38 RDI: 0000000000000060\n[    6.253642] RBP: 0000000000000000 R08: 0000000000000000 R09: fffffbfff235a504\n[    6.253947] R10: 0000000000000003 R11: 7463656e6e6f6320 R12: 0000000000000000\n[    6.254251] R13: 0000000000000000 R14: ffff88806c907c38 R15: 0000000000000000\n[    6.254549] FS:  0000000000000000(0000) GS:ffff8880d95bc000(0000) knlGS:0000000000000000\n[    6.254887] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.255140] CR2: 00007fc393e8ffc0 CR3: 0000000005252006 CR4: 0000000000770ef0\n[    6.255439] PKRU: 55555554\n[    6.255564] Call Trace:\n[    6.255674]  <IRQ>\n[    6.255768]  __iscsi_complete_pdu+0x18bf/0x22a0\n[    6.256733]  iscsi_complete_pdu+0x54/0xa0\n[    6.256905]  iscsi_tcp_data_recv_done+0xf4/0x250\n[    6.257103]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.257680]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.258061]  __tcp_read_sock+0x1ab/0x810\n[    6.258853]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.259808]  tcp_data_queue+0x1f13/0x4cd0\n[    6.260567]  tcp_rcv_established+0x8a5/0x3a00\n[    6.261931]  tcp_v4_do_rcv+0x449/0x960\n[    6.262269]  tcp_v4_rcv+0x2245/0x3bc0",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:5.14.0-687.5.1.el9_8",
-                        "fixed": "0:5.14.0-741.22.1.el9_9",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-99154": {
                 "cve_id": "CVE-2026-99154",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Reject a negative task index from parse_pdu_itt\n\nA transport that implements parse_pdu_itt hands libiscsi an index taken\nfrom the PDU, and both lookups bound it from above only:\n\n      if (i >= session->cmds_max)\n\ni and cmds_max are both int, so a negative index passes and\nsession->cmds[i] is read from before the array.\n\nbe2iscsi produces one. beiscsi_parse_pdu() assigns the raw tag,\n\n      *index = (int)itt;\n\nand beiscsi_complete_pdu() forwards an unsolicited NOP-In from the\nhardware async ring without replacing its ITT, so the value is the\ntarget's. It also reports the session's own age rather than the one in\nthe tag, which leaves the age comparison in iscsi_verify_itt() with\nnothing to reject.\n\nBound the index from below in both lookups.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-99156": {
-                "cve_id": "CVE-2026-99156",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: st: Fix use-after-free race between st_remove() and st_open()\n\nst_remove() drops the probe reference on the scsi_tape with kref_put()\nand only afterwards removes its index from st_index_idr. If that was the\nlast reference, scsi_tape_release() frees the structure while it is\nstill published in the idr.\n\nscsi_tape_get(), called from st_open(), looks up the tape in\nst_index_idr and takes a reference under st_ref_mutex and\nst_index_lock. remove_cdevs() does not wait for opens that are already\npast chrdev_open(), so an open that is blocked on st_ref_mutex while\nst_remove() holds it can take the mutex as soon as st_remove() drops it,\nfind the freed tpnt in the idr and call kref_get() on it:\n\n  BUG: KASAN: slab-use-after-free in st_open\n  Write of size 4 ...\n   st_open (drivers/scsi/st.c:254 drivers/scsi/st.c:1291)\n   chrdev_open\n  ...\n  Freed by task ...:\n   kfree\n   st_remove (drivers/scsi/st.c:4512)\n\nRemove the index from the idr before dropping the reference, all under\nst_ref_mutex. A concurrent scsi_tape_get() now either runs first and\nholds a valid reference that keeps the tape alive, or runs afterwards\nand finds nothing, so st_open() fails with -ENXIO.\n\nThis restores the ordering st_remove() had before the conversion to\nst_index_idr, where the tape was unpublished from scsi_tapes[] before\nthe final kref_put().",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -101159,6 +101159,20 @@
                     }
                 ]
             },
+            "CVE-2026-80842": {
+                "cve_id": "CVE-2026-80842",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bridge: mcast: fix use-after-free of a master VLAN's multicast context\n\nbr_multicast_toggle_one_vlan() clears BR_VLFLAG_MCAST_ENABLED under\nbr->multicast_lock before stopping a VLAN's multicast context.  That is\nthe teardown handshake: lockless readers gate on the flag through\nbr_multicast_ctx_should_use() -> br_multicast_ctx_vlan_disabled(), so\nonce it is cleared under the lock no reader can arm the context again.\n\nFor a master VLAN the handshake never runs.  __vlan_del() clears\nBRIDGE_VLAN_INFO_BRENTRY before calling br_vlan_put_master(), so\nbr_multicast_toggle_one_vlan(masterv, false) returns early on\n!br_vlan_is_brentry(vlan): the flag stays set and br->multicast_lock is\nnever taken.  br_vlan_put_master() then drains the context in\nbr_multicast_ctx_deinit() and frees the VLAN through call_rcu(), while a\nreader still inside rcu_read_lock() sees the context as enabled and\nre-arms it.  The port and port-VLAN branch of the function has no\nbr_vlan_is_brentry() test and flips the flag under br->multicast_lock,\nso it is not affected.\n\nThe reader is the bridge transmit path.  For a master VLAN\nbr_multicast_rcv() selects brmctx = &vlan->br_mcast_ctx with\npmctx = NULL, so IGMP sent to the bridge device re-arms the context's\ntimers after br_multicast_ctx_deinit() has already stopped them.\n\n  BUG: KASAN: slab-use-after-free in detach_if_pending+0x412/0x4a0\n  Write of size 8 at addr ffff88810ac39918 by task brmc/601\n   __mod_timer+0x51a/0xc50\n   br_multicast_host_join+0x25b/0x390\n   __br_multicast_add_group+0x468/0x530\n   br_ip4_multicast_add_group+0x1a0/0x260\n   br_multicast_rcv+0x2cda/0x61e0\n   br_dev_xmit+0x6c4/0x1540\n  Allocated by task 610:\n   br_vlan_add+0x111/0xb40\n   br_vlan_info+0x370/0x3e0\n  Freed by task 0:\n   kfree+0x1a7/0x4f0\n   rcu_core+0x7dc/0x10a0\n\nOnly test br_vlan_is_brentry() when enabling, like the\nbr_multicast_ctx_vlan_global_disabled() test next to it.  Disabling then\nalways clears BR_VLFLAG_MCAST_ENABLED under br->multicast_lock before\nbr_multicast_ctx_deinit() drains the context.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.75.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-80844": {
                 "cve_id": "CVE-2026-80844",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -101727,6 +101741,20 @@
                     }
                 ]
             },
+            "CVE-2026-90207": {
+                "cve_id": "CVE-2026-90207",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: midi: Serialize input teardown with event_input\n\nsnd_midi_input_event() must not be running while a rawmidi substream is\nclosing, since this can lead to the trigger state becoming out-of-step\nthrough this sequence in snd_rawmidi_input_trigger():\n\n\tsnd_rawmidi_input_trigger(up=0)\n\t\t\t\t\tsnd_midi_input_event()\n\t\t\t\t\t -> snd_rawmidi_kernel_read()\n\t\t\t\t\t     -> snd_rawmidi_input_trigger(up=1)\n\t  -> cancel_work_sync()\n\nwhich ends with the underlying device being active unexpectedly.\n\nWhen this is called from close_substream(), further input can re-trigger\nthe input event leaving it running after rawmidi_release_priv() has set\nrfile->rmidi to NULL which leads to:\n\n\tUnable to handle kernel NULL pointer dereference at virtual address 00000000000000b0\n\tCall trace:\n\t snd_midi_input_event+0x3c/0x134 [snd_seq_midi] (P)\n\t snd_rawmidi_input_event_work+0x1c/0x2c\n\t process_one_work+0x150/0x3a4\n\t worker_thread+0x190/0x318\n\nApply a similar approach to commit ef7607ab1c8ad (\"ALSA: seq: midi:\nSerialize output teardown with event_input\") which fixed the same issue\nin the output direction, but updated to use RCU following Takashi Iwai's\nproposed follow-on patch [1].\n\nWith this change in place, midisynth_unsubscribe() clears the input file\nso snd_midi_input_event() will not re-trigger the stream and will be\nquiesced by the cancel_work_sync() in snd_rawmidi_input_trigger().\n\n[1] https://lore.kernel.org/linux-sound/20260813144224.753399-1-tiwai@suse.de/",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.75.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-90227": {
                 "cve_id": "CVE-2026-90227",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -101921,6 +101949,20 @@
                     }
                 ]
             },
+            "CVE-2026-98116": {
+                "cve_id": "CVE-2026-98116",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: pcm: Serialize PCM mmap with buffer reallocation to fix page UAF\n\nsnd_pcm_hw_params() and snd_pcm_hw_free() guard buffer reallocation\nwith an mmap_count check performed under the PCM stream lock, but the\nlock is released long before the buffer is actually freed:\nsnd_pcm_sync_stop(), constraint refinement and do_free_pages() all\nhappen in between.  snd_pcm_mmap_data(), on the other hand, takes no\nlock at all: it validates against the old buffer's state and\ndma_bytes, remaps its pages into the VMA, and only then increments\nmmap_count.\n\nA concurrent mmap() can therefore slip in between the check and the\nfree.  remap_pfn_range() installs writable PTEs for the old buffer's\npages without taking page references, and the subsequent\ndo_free_pages() returns those pages to the page allocator while the\nVMA still maps them.  This leaves a stale, writable mapping of freed\npages: a page-level use-after-free that can be leveraged for local\nprivilege escalation.\n\nMake snd_pcm_mmap_data() participate in the buffer-access scheme\nintroduced for hw_params/hw_free: acquire runtime->buffer_accessing\nbefore validating and remapping, and release it afterwards.  Buffer\nreallocation already fails with -EBUSY while accessors are active,\nand the mmap side now fails with -EBUSY while a reallocation is in\nprogress, so the validate/remap sequence and the check/free sequence\ncan no longer interleave.\n\nA reproducer that turns this race into a stale writable mapping of\nthe freed DMA buffer pages is available on request.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.75.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
             "CVE-2026-98222": {
                 "cve_id": "CVE-2026-98222",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -102078,6 +102120,34 @@
                     {
                         "introduced": "0:6.12.0-211.7.1.el10_2",
                         "fixed": "0:6.12.0-264.14.1.el10_3",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-99152": {
+                "cve_id": "CVE-2026-99152",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the task named by a management response\n\n__iscsi_complete_pdu() fetches the task for five response types from one\nplace and checks only that the index resolved:\n\n      case ISCSI_OP_LOGOUT_RSP:\n      case ISCSI_OP_LOGIN_RSP:\n      case ISCSI_OP_TEXT_RSP:\n      case ISCSI_OP_SCSI_TMFUNC_RSP:\n      case ISCSI_OP_NOOP_IN:\n              task = iscsi_itt_to_task(conn, hdr->itt);\n              if (!task)\n                      return ISCSI_ERR_BAD_ITT;\n\niscsi_itt_to_task() bounds the index against cmds_max and looks at\nnothing else, so a target can name any slot in the pool, including one\nthat has never been used. task->conn is then NULL, and both\niscsi_nop_out_rsp() and iscsi_complete_task() dereference it. One\nunsolicited NOP-In is enough; a Text Response carrying the same ITT\ncrashes in iscsi_complete_task() instead.\n\nRequire the task to be in flight and not a SCSI command, the way\niscsi_itt_to_ctask() does for the command opcodes.\n\n[    6.298634] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.298642] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.298652] CPU: 1 UID: 0 PID: 111 Comm: iscsistart Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.298654] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.298656] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.298691] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.298698] RSP: 0018:ffff88806c907be8 EFLAGS: 00010206\n[    6.298701] RAX: dffffc0000000000 RBX: ffff888006116800 RCX: 0000000000000020\n[    6.298702] RDX: 000000000000000c RSI: ffff88800525d578 RDI: 0000000000000060\n[    6.298703] RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000\n[    6.298706] R10: 0000000000000020 R11: 0000000000000000 R12: 0000000000000000\n[    6.298706] R13: 000000000000002e R14: ffff8880056eb440 R15: ffff888006116800\n[    6.298707] FS:  00007fc02d1c2740(0000) GS:ffff8880b29bc000(0000) knlGS:0000000000000000\n[    6.298710] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.298711] CR2: 000055fe3b56ddf8 CR3: 00000000053b9004 CR4: 0000000000770ef0\n[    6.298712] PKRU: 55555554\n[    6.298713] Call Trace:\n[    6.298714]  <IRQ>\n[    6.298714]  __iscsi_complete_pdu+0x13a8/0x22a0\n[    6.298758]  iscsi_complete_pdu+0x54/0xa0\n[    6.298759]  iscsi_tcp_hdr_recv_done+0x870/0x2c80\n[    6.298778]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.298800]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.298804]  __tcp_read_sock+0x1ab/0x810\n[    6.298812]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.298814]  tcp_rcv_established+0x1f56/0x3a00\n[    6.298842]  tcp_v4_do_rcv+0x449/0x960\n[    6.298847]  tcp_v4_rcv+0x2245/0x3bc0",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.75.1.el10_2",
+                        "identifier": "el10"
+                    }
+                ]
+            },
+            "CVE-2026-99153": {
+                "cve_id": "CVE-2026-99153",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the ITT reflected in a Reject PDU\n\nA Reject PDU carries a copy of the header it rejects, and\niscsi_handle_reject() takes the ITT out of that copy to find the task to\nclean up:\n\n      memcpy(&rejected_pdu, data, sizeof(struct iscsi_hdr));\n      ...\n      task = iscsi_itt_to_task(conn, rejected_pdu.itt);\n\nThat value is whatever the target put there. iscsi_itt_to_task() bounds\nthe index against cmds_max and checks nothing else, so any task in the\npool can be named, and iscsi_nop_out_rsp() then completes it.\n\nAn index that has never been used gives a NULL task->conn: the pool is\nzeroed at session setup and conn is assigned only when a task is\nallocated. If the task was used and returned, iscsi_complete_task() hits\nits WARN_ON_ONCE(task->state == ISCSI_TASK_FREE) and the refcount\nunderflows. An in-flight SCSI command is completed as successful - a 1\nMiB read returned 1048576 with none of its buffer written and no\nwarning.\n\nValidate the reflected ITT the way iscsi_itt_to_ctask() validates a\ncommand ITT, and require the task to be in flight and not a SCSI\ncommand.\n\n[    6.248477] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.249357] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.249951] CPU: 1 UID: 0 PID: 0 Comm: swapper/1 Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.250718] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.251616] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.252043] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.252813] RSP: 0018:ffff88806c907b80 EFLAGS: 00010206\n[    6.253042] RAX: dffffc0000000000 RBX: ffff88800607e000 RCX: ffffffff8d571a25\n[    6.253345] RDX: 000000000000000c RSI: ffff88806c907c38 RDI: 0000000000000060\n[    6.253642] RBP: 0000000000000000 R08: 0000000000000000 R09: fffffbfff235a504\n[    6.253947] R10: 0000000000000003 R11: 7463656e6e6f6320 R12: 0000000000000000\n[    6.254251] R13: 0000000000000000 R14: ffff88806c907c38 R15: 0000000000000000\n[    6.254549] FS:  0000000000000000(0000) GS:ffff8880d95bc000(0000) knlGS:0000000000000000\n[    6.254887] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.255140] CR2: 00007fc393e8ffc0 CR3: 0000000005252006 CR4: 0000000000770ef0\n[    6.255439] PKRU: 55555554\n[    6.255564] Call Trace:\n[    6.255674]  <IRQ>\n[    6.255768]  __iscsi_complete_pdu+0x18bf/0x22a0\n[    6.256733]  iscsi_complete_pdu+0x54/0xa0\n[    6.256905]  iscsi_tcp_data_recv_done+0xf4/0x250\n[    6.257103]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.257680]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.258061]  __tcp_read_sock+0x1ab/0x810\n[    6.258853]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.259808]  tcp_data_queue+0x1f13/0x4cd0\n[    6.260567]  tcp_rcv_established+0x8a5/0x3a00\n[    6.261931]  tcp_v4_do_rcv+0x449/0x960\n[    6.262269]  tcp_v4_rcv+0x2245/0x3bc0",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0:6.12.0-211.7.1.el10_2",
+                        "fixed": "0:6.12.0-211.75.1.el10_2",
                         "identifier": "el10"
                     }
                 ]
@@ -102847,20 +102917,6 @@
                     }
                 ]
             },
-            "CVE-2026-80842": {
-                "cve_id": "CVE-2026-80842",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: bridge: mcast: fix use-after-free of a master VLAN's multicast context\n\nbr_multicast_toggle_one_vlan() clears BR_VLFLAG_MCAST_ENABLED under\nbr->multicast_lock before stopping a VLAN's multicast context.  That is\nthe teardown handshake: lockless readers gate on the flag through\nbr_multicast_ctx_should_use() -> br_multicast_ctx_vlan_disabled(), so\nonce it is cleared under the lock no reader can arm the context again.\n\nFor a master VLAN the handshake never runs.  __vlan_del() clears\nBRIDGE_VLAN_INFO_BRENTRY before calling br_vlan_put_master(), so\nbr_multicast_toggle_one_vlan(masterv, false) returns early on\n!br_vlan_is_brentry(vlan): the flag stays set and br->multicast_lock is\nnever taken.  br_vlan_put_master() then drains the context in\nbr_multicast_ctx_deinit() and frees the VLAN through call_rcu(), while a\nreader still inside rcu_read_lock() sees the context as enabled and\nre-arms it.  The port and port-VLAN branch of the function has no\nbr_vlan_is_brentry() test and flips the flag under br->multicast_lock,\nso it is not affected.\n\nThe reader is the bridge transmit path.  For a master VLAN\nbr_multicast_rcv() selects brmctx = &vlan->br_mcast_ctx with\npmctx = NULL, so IGMP sent to the bridge device re-arms the context's\ntimers after br_multicast_ctx_deinit() has already stopped them.\n\n  BUG: KASAN: slab-use-after-free in detach_if_pending+0x412/0x4a0\n  Write of size 8 at addr ffff88810ac39918 by task brmc/601\n   __mod_timer+0x51a/0xc50\n   br_multicast_host_join+0x25b/0x390\n   __br_multicast_add_group+0x468/0x530\n   br_ip4_multicast_add_group+0x1a0/0x260\n   br_multicast_rcv+0x2cda/0x61e0\n   br_dev_xmit+0x6c4/0x1540\n  Allocated by task 610:\n   br_vlan_add+0x111/0xb40\n   br_vlan_info+0x370/0x3e0\n  Freed by task 0:\n   kfree+0x1a7/0x4f0\n   rcu_core+0x7dc/0x10a0\n\nOnly test br_vlan_is_brentry() when enabling, like the\nbr_multicast_ctx_vlan_global_disabled() test next to it.  Disabling then\nalways clears BR_VLFLAG_MCAST_ENABLED under br->multicast_lock before\nbr_multicast_ctx_deinit() drains the context.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.75.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-80951": {
                 "cve_id": "CVE-2026-80951",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -102917,66 +102973,10 @@
                     }
                 ]
             },
-            "CVE-2026-90207": {
-                "cve_id": "CVE-2026-90207",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: seq: midi: Serialize input teardown with event_input\n\nsnd_midi_input_event() must not be running while a rawmidi substream is\nclosing, since this can lead to the trigger state becoming out-of-step\nthrough this sequence in snd_rawmidi_input_trigger():\n\n\tsnd_rawmidi_input_trigger(up=0)\n\t\t\t\t\tsnd_midi_input_event()\n\t\t\t\t\t -> snd_rawmidi_kernel_read()\n\t\t\t\t\t     -> snd_rawmidi_input_trigger(up=1)\n\t  -> cancel_work_sync()\n\nwhich ends with the underlying device being active unexpectedly.\n\nWhen this is called from close_substream(), further input can re-trigger\nthe input event leaving it running after rawmidi_release_priv() has set\nrfile->rmidi to NULL which leads to:\n\n\tUnable to handle kernel NULL pointer dereference at virtual address 00000000000000b0\n\tCall trace:\n\t snd_midi_input_event+0x3c/0x134 [snd_seq_midi] (P)\n\t snd_rawmidi_input_event_work+0x1c/0x2c\n\t process_one_work+0x150/0x3a4\n\t worker_thread+0x190/0x318\n\nApply a similar approach to commit ef7607ab1c8ad (\"ALSA: seq: midi:\nSerialize output teardown with event_input\") which fixed the same issue\nin the output direction, but updated to use RCU following Takashi Iwai's\nproposed follow-on patch [1].\n\nWith this change in place, midisynth_unsubscribe() clears the input file\nso snd_midi_input_event() will not re-trigger the stream and will be\nquiesced by the cancel_work_sync() in snd_rawmidi_input_trigger().\n\n[1] https://lore.kernel.org/linux-sound/20260813144224.753399-1-tiwai@suse.de/",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.75.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-98116": {
-                "cve_id": "CVE-2026-98116",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: pcm: Serialize PCM mmap with buffer reallocation to fix page UAF\n\nsnd_pcm_hw_params() and snd_pcm_hw_free() guard buffer reallocation\nwith an mmap_count check performed under the PCM stream lock, but the\nlock is released long before the buffer is actually freed:\nsnd_pcm_sync_stop(), constraint refinement and do_free_pages() all\nhappen in between.  snd_pcm_mmap_data(), on the other hand, takes no\nlock at all: it validates against the old buffer's state and\ndma_bytes, remaps its pages into the VMA, and only then increments\nmmap_count.\n\nA concurrent mmap() can therefore slip in between the check and the\nfree.  remap_pfn_range() installs writable PTEs for the old buffer's\npages without taking page references, and the subsequent\ndo_free_pages() returns those pages to the page allocator while the\nVMA still maps them.  This leaves a stale, writable mapping of freed\npages: a page-level use-after-free that can be leveraged for local\nprivilege escalation.\n\nMake snd_pcm_mmap_data() participate in the buffer-access scheme\nintroduced for hw_params/hw_free: acquire runtime->buffer_accessing\nbefore validating and remapping, and release it afterwards.  Buffer\nreallocation already fails with -EBUSY while accessors are active,\nand the mmap side now fails with -EBUSY while a reallocation is in\nprogress, so the validate/remap sequence and the check/free sequence\ncan no longer interleave.\n\nA reproducer that turns this race into a stale writable mapping of\nthe freed DMA buffer pages is available on request.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.75.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
             "CVE-2026-98318": {
                 "cve_id": "CVE-2026-98318",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: validate absolute native symlink targets before NT fixups\n\nWith symlinkroot unset, an absolute target is copied without conversion\nto an NT drive path. Later code still assumes an NT prefix is present\nwhen modifying the target and calculating the print name length.\n\nFor \"/ab\", this causes two failures: sym[5] and path[5] are written\npast their allocations, and plen -= 2 * poff subtracts an assumed\n8-byte prefix from a 6-byte UTF-16 target, wrapping u16 plen to 65534.\nThat underflow causes another overflow: memcpy() copies 65534 bytes\ninto a 24-byte buffer. A user with write access to a mounted share\ncan trigger these bugs with default settings.\n\nValidate the NT drive prefix, including an ASCII drive letter, before\naccessing fixed offsets or subtracting the prefix length.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.75.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-99152": {
-                "cve_id": "CVE-2026-99152",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the task named by a management response\n\n__iscsi_complete_pdu() fetches the task for five response types from one\nplace and checks only that the index resolved:\n\n      case ISCSI_OP_LOGOUT_RSP:\n      case ISCSI_OP_LOGIN_RSP:\n      case ISCSI_OP_TEXT_RSP:\n      case ISCSI_OP_SCSI_TMFUNC_RSP:\n      case ISCSI_OP_NOOP_IN:\n              task = iscsi_itt_to_task(conn, hdr->itt);\n              if (!task)\n                      return ISCSI_ERR_BAD_ITT;\n\niscsi_itt_to_task() bounds the index against cmds_max and looks at\nnothing else, so a target can name any slot in the pool, including one\nthat has never been used. task->conn is then NULL, and both\niscsi_nop_out_rsp() and iscsi_complete_task() dereference it. One\nunsolicited NOP-In is enough; a Text Response carrying the same ITT\ncrashes in iscsi_complete_task() instead.\n\nRequire the task to be in flight and not a SCSI command, the way\niscsi_itt_to_ctask() does for the command opcodes.\n\n[    6.298634] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.298642] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.298652] CPU: 1 UID: 0 PID: 111 Comm: iscsistart Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.298654] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.298656] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.298691] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.298698] RSP: 0018:ffff88806c907be8 EFLAGS: 00010206\n[    6.298701] RAX: dffffc0000000000 RBX: ffff888006116800 RCX: 0000000000000020\n[    6.298702] RDX: 000000000000000c RSI: ffff88800525d578 RDI: 0000000000000060\n[    6.298703] RBP: 0000000000000000 R08: 0000000000000000 R09: 0000000000000000\n[    6.298706] R10: 0000000000000020 R11: 0000000000000000 R12: 0000000000000000\n[    6.298706] R13: 000000000000002e R14: ffff8880056eb440 R15: ffff888006116800\n[    6.298707] FS:  00007fc02d1c2740(0000) GS:ffff8880b29bc000(0000) knlGS:0000000000000000\n[    6.298710] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.298711] CR2: 000055fe3b56ddf8 CR3: 00000000053b9004 CR4: 0000000000770ef0\n[    6.298712] PKRU: 55555554\n[    6.298713] Call Trace:\n[    6.298714]  <IRQ>\n[    6.298714]  __iscsi_complete_pdu+0x13a8/0x22a0\n[    6.298758]  iscsi_complete_pdu+0x54/0xa0\n[    6.298759]  iscsi_tcp_hdr_recv_done+0x870/0x2c80\n[    6.298778]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.298800]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.298804]  __tcp_read_sock+0x1ab/0x810\n[    6.298812]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.298814]  tcp_rcv_established+0x1f56/0x3a00\n[    6.298842]  tcp_v4_do_rcv+0x449/0x960\n[    6.298847]  tcp_v4_rcv+0x2245/0x3bc0",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "0:6.12.0-211.7.1.el10_2",
-                        "fixed": "0:6.12.0-211.75.1.el10_2",
-                        "identifier": "el10"
-                    }
-                ]
-            },
-            "CVE-2026-99153": {
-                "cve_id": "CVE-2026-99153",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: libiscsi: Validate the ITT reflected in a Reject PDU\n\nA Reject PDU carries a copy of the header it rejects, and\niscsi_handle_reject() takes the ITT out of that copy to find the task to\nclean up:\n\n      memcpy(&rejected_pdu, data, sizeof(struct iscsi_hdr));\n      ...\n      task = iscsi_itt_to_task(conn, rejected_pdu.itt);\n\nThat value is whatever the target put there. iscsi_itt_to_task() bounds\nthe index against cmds_max and checks nothing else, so any task in the\npool can be named, and iscsi_nop_out_rsp() then completes it.\n\nAn index that has never been used gives a NULL task->conn: the pool is\nzeroed at session setup and conn is assigned only when a task is\nallocated. If the task was used and returned, iscsi_complete_task() hits\nits WARN_ON_ONCE(task->state == ISCSI_TASK_FREE) and the refcount\nunderflows. An in-flight SCSI command is completed as successful - a 1\nMiB read returned 1048576 with none of its buffer written and no\nwarning.\n\nValidate the reflected ITT the way iscsi_itt_to_ctask() validates a\ncommand ITT, and require the task to be in flight and not a SCSI\ncommand.\n\n[    6.248477] Oops: general protection fault, probably for non-canonical address 0xdffffc000000000c: 0000 [#1] SMP KASAN NOPTI\n[    6.249357] KASAN: null-ptr-deref in range [0x0000000000000060-0x0000000000000067]\n[    6.249951] CPU: 1 UID: 0 PID: 0 Comm: swapper/1 Not tainted 7.2.0-rc5-ISCSI1-gf5098b6bae76 #1 PREEMPT(lazy)\n[    6.250718] Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014\n[    6.251616] RIP: 0010:iscsi_nop_out_rsp.constprop.0+0x46/0x160\n[    6.252043] Code: c1 ea 03 48 83 ec 08 80 3c 02 00 0f 85 f5 00 00 00 48 b8 00 00 00 00 00 fc ff df 48 8b 6b 58 48 8d 7d 60 48 89 fa 48 c1 ea 03 <80> 3c 02 00 0f 85 c0 00 00 00 48 8b 45 60 48 39 c3 74 50 48 b8 00\n[    6.252813] RSP: 0018:ffff88806c907b80 EFLAGS: 00010206\n[    6.253042] RAX: dffffc0000000000 RBX: ffff88800607e000 RCX: ffffffff8d571a25\n[    6.253345] RDX: 000000000000000c RSI: ffff88806c907c38 RDI: 0000000000000060\n[    6.253642] RBP: 0000000000000000 R08: 0000000000000000 R09: fffffbfff235a504\n[    6.253947] R10: 0000000000000003 R11: 7463656e6e6f6320 R12: 0000000000000000\n[    6.254251] R13: 0000000000000000 R14: ffff88806c907c38 R15: 0000000000000000\n[    6.254549] FS:  0000000000000000(0000) GS:ffff8880d95bc000(0000) knlGS:0000000000000000\n[    6.254887] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033\n[    6.255140] CR2: 00007fc393e8ffc0 CR3: 0000000005252006 CR4: 0000000000770ef0\n[    6.255439] PKRU: 55555554\n[    6.255564] Call Trace:\n[    6.255674]  <IRQ>\n[    6.255768]  __iscsi_complete_pdu+0x18bf/0x22a0\n[    6.256733]  iscsi_complete_pdu+0x54/0xa0\n[    6.256905]  iscsi_tcp_data_recv_done+0xf4/0x250\n[    6.257103]  iscsi_tcp_recv_skb+0x31e/0xec0\n[    6.257680]  iscsi_sw_tcp_recv+0x12f/0x390\n[    6.258061]  __tcp_read_sock+0x1ab/0x810\n[    6.258853]  iscsi_sw_tcp_data_ready+0x18b/0x510\n[    6.259808]  tcp_data_queue+0x1f13/0x4cd0\n[    6.260567]  tcp_rcv_established+0x8a5/0x3a00\n[    6.261931]  tcp_v4_do_rcv+0x449/0x960\n[    6.262269]  tcp_v4_rcv+0x2245/0x3bc0",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
