@@ -19774,7 +19774,7 @@
                 "cve_id": "CVE-2026-97901",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ngenetlink: pin family module during policy dump\n\nThe generic netlink controller's policy dump keeps pointers to the target\nfamily's operation and policy tables in its callback state.  A dump may be\nsplit across multiple skbs and remain pending after the initial request.\n\nNetlink pins the module which owns the dump callback, but in this case\nthat is the controller's owner rather than the target family's owner.  The\ntarget family can consequently be unregistered and its module unloaded\nwhile a policy dump is pending.  Advancing the dump then dereferences\npolicy memory from the unloaded module.\n\nTake a reference to the target family's module when the dump starts.\nDrop it from the error and done paths.  This matches the lifetime for which\nthe dump context retains the family and policy pointers.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19788,7 +19788,7 @@
                 "cve_id": "CVE-2026-97902",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs: don't return -EINVAL for successful nested thaw\n\nCommit 7366f8b6fc6a (\"fs: handle freezing from multiple devices\")\nreplaced the freeze_holders bitmask with per-holder counters to allow\nnested freezes. In the bitmask version, a thaw that released a shared\nhold while another holder remained returned 0. Since the rework,\nthaw_super_locked() drops the freeze reference via freeze_dec() but\nthen returns -EINVAL when other freezers remain, misinforming the\ncaller: the thaw did succeed, the superblock just stays frozen for the\nremaining holders.\n\nThis breaks bdev-initiated freezing. When a filesystem is frozen with\nFIFREEZE and additionally frozen via bdev_freeze() -- which nests by\ndesign, see fs_bdev_freeze() -- the subsequent bdev_thaw() receives\n-EINVAL from the holder op although its freeze reference was dropped,\nand therefore keeps bd_fsfreeze_count elevated. Then device-mapper's\nunlock_fs() ignores bdev_thaw()'s return value, so nothing rebalances\nthe count. After the user's FITHAW and umount, the block device can\nnever be mounted again:\n\n    dm-1: Can't mount, blockdev is frozen\n\nThere is no way for userspace to drop the leaked count; only\ndestroying the block device (or a reboot) recovers the device.\n\nReproducer (any kernel since v6.8):\n\n    dmsetup create dut --table \"0 $(blockdev --getsz \"$DEV\") linear $DEV 0\"\n    mkfs.ext4 /dev/mapper/dut\n    mount /dev/mapper/dut /mnt\n    fsfreeze --freeze /mnt      # freeze_ucount == 1\n    dmsetup suspend dut         # bd_fsfreeze_count == 1, ucount == 2\n    dmsetup resume dut          # ucount 2 -> 1, but thaw_super()\n                                # returns -EINVAL, so bdev_thaw()\n                                # keeps bd_fsfreeze_count at 1\n    fsfreeze --unfreeze /mnt    # filesystem thaws fine\n    umount /mnt\n    mount /dev/mapper/dut /mnt  # EBUSY, forever\n\nThe same happens with fsfreeze held across an LVM snapshot of the\norigin volume.\n\nfs_bdev_thaw()'s documentation already describes the intended\nsemantics: \"If this function returns zero it doesn't mean that the\nfilesystem is unfrozen as it may have been frozen multiple times\".\nRestore them by returning 0 when a nested thaw drops its hold while\nother freezers remain. Thawing without holding a freeze still fails\nwith -EINVAL as may_unfreeze() rejects that case before the reference\ncount is touched.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19816,7 +19816,7 @@
                 "cve_id": "CVE-2026-97904",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncpufreq: initialize policy rwsem before sysfs publication\n\ncpufreq_policy_alloc() initializes policy->rwsem after\nkobject_init_and_add() has created the policy sysfs directory and its\ndefault attributes. A sysfs access can therefore reach a policy callback\nbefore the semaphore has been initialized.\n\nInitialize policy->rwsem before publishing the policy kobject so sysfs\ncallbacks always see an initialized semaphore.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19830,7 +19830,7 @@
                 "cve_id": "CVE-2026-97905",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncpufreq: zero-initialize policy cpumask before sysfs publication\n\ncpufreq_policy_alloc() allocates policy->cpus with alloc_cpumask_var(),\ni.e. without __GFP_ZERO, unlike the sibling related_cpus and real_cpus\nmasks. With CONFIG_CPUMASK_OFFSTACK=y the mask is a separate\nkmalloc_node() allocation, so its bitmap holds whatever the slab allocator\nleft behind:\n\n  cpufreq_online()\n    cpufreq_policy_alloc()\n      alloc_cpumask_var(&policy->cpus)    /* bitmap is uninitialized */\n      kobject_init_and_add()              /* policy%u/ appears in sysfs */\n    cpufreq_policy_online()\n      cpumask_copy(policy->cpus, cpumask_of(cpu))  /* first valid value */\n\nThis leaves a window in which the sysfs attributes are already reachable\nwhile policy->cpus is still garbage. show()/store() gate on\npolicy_is_inactive(), i.e. cpumask_empty(policy->cpus), so a non-zero\nbitmap makes them run the attribute callbacks on a policy that is not\ninitialized yet.\n\nFix this by using zalloc_cpumask_var() for policy->cpus.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19844,7 +19844,7 @@
                 "cve_id": "CVE-2026-97906",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbootconfig: Fix integer overflow in initrd size check\n\nSashiko reported that in get_boot_config_from_initrd(), a crafted initrd\nwith a huge bootconfig size (such as 0xFFFFFFFF) can cause the pointer\narithmetic:\n\n    data = ((void *)hdr) - size;\n\nto wrap around on 32-bit systems (or when pointer subtraction overflows).\nBecause data wraps around, the subsequent bounds check:\n\n    if ((unsigned long)data < initrd_start)\n\nevaluates to false, bypassing the check. The kernel then calls\nxbc_calc_checksum(data, size), which attempts to read 4GB of memory,\nhitting unmapped pages and triggering a fatal kernel page fault during\nearly boot. Furthermore, on 64-bit systems with an initrd > 4.29 GB, an\nunbounded 32-bit size can similarly bypass the initrd_start check.\n\nFix this by:\n1. Ensuring the initrd is at least large enough to contain the bootconfig\n   footer and verifying hdr is within the initrd bounds.\n2. Checking that size does not exceed XBC_DATA_MAX and does not exceed\n   the available space between initrd_start and hdr before performing\n   pointer subtraction.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19858,7 +19858,7 @@
                 "cve_id": "CVE-2026-97925",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntick/broadcast: Plug clockevents replacement race\n\n\u6731\u607a\u4e7e reported and decoded the following race condition when a broadcast\ndevice is replaced:\n\nCPUA\t\t\t\t\tCPUB\n __tick_broadcast_oneshot_control()\n   bc = tick_broadcast_device.evtdev;\n\t\t\t\t\ttick_install_broadcast_device(dev)\n        \t\t\t\tclockevents_exchange_device(cur, dev)\n\t\t\t\t\t   shutdown(cur);\n\t\t\t\t\t   detach(cur);\n\t\t\t\t\t   cur->handler = noop;\n\t\t\t\t\t   tick_broadcast_device.evtdev = dev;\n\n  tick_broadcast_set_event(bc, next_event); <- FAIL: arms a detached device.\n\nIf the original broadcast device has a restricted interrupt affinity mask\nand the last CPU in that mask goes offline then the BUG() in\ntick_cleanup_dead_cpu() triggers because the clockevent device is not in\ndetached state.\n\nThe reason for this is that tick_install_broadcast_device() is not\nserialized vs. tick broadcast operations.\n\nThe obvious cure is to serialize tick_install_broadcast_device() with\ntick_broadcast_lock against a concurrent tick broadcast operation.\n\nThat requires to split clockevents_exchange_device() into two parts, one\nwhich does the exchange, shutdown and detach operation and the other which\ndrops the module reference count. This is required because the module\nreference cannot be dropped while holding tick_broadcast_lock.\n\nLet clockevents_exchange_device() do both operations as before, but let the\nbroadcast device code take the two step approach and do the device\nexchange under tick_broadcast_lock and drop the module reference count\nafter releasing it.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19872,7 +19872,7 @@
                 "cve_id": "CVE-2026-97938",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nreboot: fix cad_pid use-after-free race\n\ncad_pid is a single kernel-wide struct pid pointer. proc_do_cad_pid()\nreads it and passes it to pid_vnr() without protecting the lifetime of\nthe referenced struct pid. A concurrent writer can replace cad_pid and\ndrop the final reference to the old struct pid after the reader has\nloaded the pointer but before pid_vnr() has finished dereferencing it,\ncausing a use-after-free.\n\nkill_cad_pid() has the same lifetime race when it passes cad_pid to\nkill_pid().\n\nAt the time this issue was reported, an unprivileged user could reach the\nsysctl through user and PID namespaces because cad_pid was registered in\npid_table[]. Moving cad_pid back to the global reboot sysctl table\ncorrected that namespace and permission mismatch, but did not fix the\nunderlying lifetime race.\n\nFix this by treating cad_pid as an RCU-protected pointer at both read\nsites and by waiting for a grace period before dropping the old reference\non the write side.\n\ncall_rcu(&old_pid->rcu, ...) cannot be used here because free_pid()\nalso queues pid->rcu; queueing the same rcu_head twice can corrupt the\nRCU callback list.\n\nOriginal KASAN crash stack:\n  kernel/pid.c:545 pid_nr_ns()        # reads freed pid->level\n  kernel/pid.c:556 pid_vnr()          # calls pid_nr_ns()\n  kernel/pid.c:775 proc_do_cad_pid()  # calls pid_vnr(cad_pid)",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19886,7 +19886,7 @@
                 "cve_id": "CVE-2026-97939",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipmr: account multicast table and route memory\n\nA netadmin in a user+net namespace can create many IPv4 and IPv6\nmulticast routing tables with MRT_TABLE and MRT6_TABLE. Each unseen\nid allocates an mr_table via the shared mr_table_alloc(), links it\ninto the per-net list, and leaves it until netns teardown. Those\nobjects were not charged to memcg, so the host unreclaimable slab\ngrows with the table count.\n\nAccount mr_table allocations with GFP_KERNEL_ACCOUNT and mark the\nIPv4/IPv6 MFC caches SLAB_ACCOUNT. This matches the established\nhandling of IP addresses, routes and alternate interface names.\n\nUnresolved MFC entries are still allocated from softIRQ with\nGFP_ATOMIC and are not charged. They expire after 10 seconds and are\nbounded by the socket receive queue; see commit 0079ad8e8dc3\n(\"ipmr: remove hard code cache_resolve_queue_len limit\").",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19914,7 +19914,7 @@
                 "cve_id": "CVE-2026-97942",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/alternatives: Exclude text poking against change_page_attr()\n\nFrom time to time, the following BUG can be observed\nin the x86 alternatives patching code [0]:\n\n  > kernel BUG at arch/x86/kernel/alternative.c:2576!\n  > Oops: invalid opcode: 0000 [#1] SMP NOPTI\n  > CPU: 0 UID: 0 PID: 355 Comm: (udev-worker) Not tainted 7.1.3-1-default #1 PREEMPT(full) openSUSE Tumbleweed  8c1795b03ec64f997e57a8ad38b1161e3b98da64\n  > Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS unknown 02/02/2022\n  > RIP: 0010:__text_poke+0x2aa/0x450\n  > Call Trace:\n  >  <TASK>\n  >  smp_text_poke_batch_finish+0x2a7/0x320\n  >  __static_call_transform+0xb7/0x220\n  >  arch_static_call_transform+0x5b/0xb0\n  >  __static_call_init+0xe9/0x270\n  >  static_call_module_notify+0x11f/0x150\n  >  notifier_call_chain+0x61/0xe0\n  >  blocking_notifier_call_chain_robust+0x63/0xc0\n  >  load_module+0x1c92/0x20c0\n  >  init_module_from_file+0xd8/0x140\n  >  idempotent_init_module+0x100/0x2f0\n  >  __x64_sys_finit_module+0x71/0xe0\n  >  do_syscall_64+0xe1/0x610\n  >  entry_SYSCALL_64_after_hwframe+0x76/0x7e\n\nwhich matches the following BUG_ON() in alternative.c:\n\n\t/*\n\t * If something went wrong, crash and burn since recovery paths are not\n\t * implemented.\n\t */\n\tBUG_ON(!pages[0] || (cross_page_boundary && !pages[1]));\n\nThis can happen if vmalloc_to_page() fails, for any reason. Such can happen\nif text poking races with CPA, which can possibly result in the collapsing\nof page tables (or breaking of PMD hugepages). It is not a problem for most\nusers of vmalloc_to_page() (they solely own the vmalloc'd range) but, when\nCONFIG_ARCH_HAS_EXECMEM_ROX=y, various modules own a single execmem vmalloc\nrange, and can call set_memory_*() in parallel on it. This can happen to\nrace against __text_poke and cause havoc in vmalloc_to_page().\n\nFix it by excluding against CPA using the init_mm mmap read lock.\n\n[ dhansen: Fix up SoB ordering. The actual code flow here was:\n\t   Pedro=>Lorenzo=>Mike=>Me which is reflected in the SoB chain\n\t   now. I *believe* Mike simply picked up Lorenzo's update to\n\t   Pedro's post from the Link ]",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19928,7 +19928,7 @@
                 "cve_id": "CVE-2026-97943",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mm/pat: Acquire init_mm write lock on collapse to avoid UAF\n\nx86 implements page attribute modification using its Change Page\nAttributes (CPA) mechanism.\n\nThis tracks properties of ranges such as cache mode through x86 page\nattributes, and as part of that logic manipulates kernel page tables.\n\nSince commit:\n\n  41d88484c71c (\"x86/mm/pat: restore large ROX pages after fragmentation\")\n\nranges of kernel page table entries can be collapsed into\nhuge page table entries as part of this logic.\n\nAs part of this collapse, it frees the page tables which the collapsed\nentries previously pointed to, and it does so without any relevant locks\nbeing held to preclude concurrent kernel page table walkers.\n\nThe only way this code can be reached is if CPA_COLLAPSE is specified, and\nthis is only set in set_memory_rox() via:\n\nset_memory_rox()\n-> change_page_attr_set_clr()\n-> cpa_flush()\n-> cpa_collapse_large_pages()\n\nNotable users of this are execmem and BPF when manipulating executable\nmappings.\n\nHowever, this is problematic for ptdump as it walks ranges it does not own\nand thus runs the risk of a use-after-free on page tables freed underneath\nit.\n\nIn addition, concurrent CPA collapse operations are possible which can also\ncause races.\n\nResolve the issue by acquiring the mmap write lock on init_mm across the\nwhole operation.\n\nIt is safe to acquire a sleeping lock as all the callers invoke\nset_memory_rox() from process context and in any case,\nchange_page_attr_set_clr() calls vm_unmap_alias() which ultimately takes a\nmutex, disallowing atomic context here.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19942,7 +19942,7 @@
                 "cve_id": "CVE-2026-97945",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mm: Fix user-space data loss with MADV_FREE and THP\n\nSome of users of Polars (a data analytics library) have lost production\ndata from this bug. They seem to have just the right combination of\nhuge pages, MADV_FREE and heavy reclaim pressure.\n\npmd_modify() masks the old value with (_HPAGE_CHG_MASK & ~_PAGE_DIRTY),\nsilently discarding the hardware dirty bit.  The subsequent\npmd_mksaveddirty() call is supposed to transfer _PAGE_DIRTY into\n_PAGE_SAVED_DIRTY when write-protecting, but the dirty bit was already\nstripped from the value, so there is nothing left to transfer.\n\nContrast with pte_modify(), which keeps _PAGE_DIRTY_BITS in its mask,\nand pud_modify(), which keeps _HPAGE_CHG_MASK untouched: pmd_modify()\nis the odd one out.  Any pmd_modify() on a writable, dirty PMD loses\nthe dirty state.\n\nOne visible consequence is data loss with MADV_FREE on PMD-mapped THP:\n\n    memset(buf, 0x5A, size);          // PMD-mapped THP, PMD dirty\n    madvise(buf, size, MADV_FREE);    // PMD cleaned but left writable,\n                                      // folio marked lazyfree\n    memset(buf, 0x5A, size);          // hardware sets _PAGE_DIRTY again\n    mprotect(buf, size, PROT_READ);   // pmd_modify() drops the dirty bit\n    mprotect(buf, size, PROT_READ|PROT_WRITE);\n    // ... memory pressure ...\n\nReclaim (e.g. under memcg pressure) then finds the lazyfree folio with\nno dirty bit set anywhere and frees it in\n__discard_anon_folio_pmd_locked(), even though the data was rewritten\nafter MADV_FREE; subsequent reads fault in fresh zero pages.  NUMA\nhinting alone can trigger the same loss, as do_huge_pmd_numa_page()\nrestores the PMD through pmd_modify() as well.\n\nPMD-mapped file THPs are affected too: mprotect()/NUMA hinting dropping\nthe dirty bit means rewritten data is never written back.\n\nFix it by keeping _PAGE_DIRTY in the preserved mask, exactly like\npte_modify() and pud_modify() do.  The existing\npmd_mksaveddirty()/pmd_clear_saveddirty() pair then performs the\nhardware-dirty <-> saved-dirty transition based on the write bit,\npreserving the shadow-stack encoding rules.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19956,7 +19956,7 @@
                 "cve_id": "CVE-2026-97946",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/amd_node: Fix PCI device reference counting in amd_smn_init()\n\nThe local \"root\" pointer is a temporary variable used during the device\nsearch. Therefore, refcount related to the search iterators should be cleaned\nup after the search is complete.\n\nUse the __free() cleanup macro to ensure the refcount is decremented when the\ntemporary pointer goes out of scope.\n\nAdditionally, increment the refcount when caching a root pointer. This ensures\nthe in-use refcount is separate from the temporary search refcounting.\n\nFinally, drop the redundant \"root = NULL\" before the second search loop. The\npci_get_class() iterator always decrements the refcount of its \"from\"\nargument, so the first loop can only fall through with \"root\" already NULL.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19970,7 +19970,7 @@
                 "cve_id": "CVE-2026-97947",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/amd_node: Fix potential NULL pointer dereference\n\namd_smn_read/write() are exported functions around __amd_smn_rw(), so\nthey are always available even if amd_smn_init() fails. In that case,\n'amd_roots' is NULL and __amd_smn_rw() will access uninitialized memory.\n\nThen, commit:\n\n  83518453074d (\"x86/amd_node: Add SMN offsets to exclusive region access\")\n\nadded the 'smn_exclusive' flag, which indicated the calls to\npci_request_config_region_exclusive() succeeded, to prevent\nconcurrent userspace access.\n\nCommit:\n\n  0a4b61d9c2e4 (\"x86/amd_node: Fix AMD root device caching\")\n\nre-ordered initialization so pci_request_config_region_exclusive() is\ncalled earlier and a failure exits amd_smn_init() before allocating\n'amd_roots'. The setting of 'smn_exclusive' moved to the end of\namd_smn_init(), after 'amd_roots' is allocated. It became redundant\nand can be removed.\n\nReplace 'smn_exclusive' with directly checking 'amd_roots', to fix a\npotential NULL pointer dereference and to simplify the logic.\n\n  [ bp: Reorg commit message, touchup comment. ]\n  [ mingo: Rebase & further touchups. ]",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19984,7 +19984,7 @@
                 "cve_id": "CVE-2026-97949",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nconfigfs: unhash the dentry before dropping the item in rmdir\n\nconfigfs_get_config_item() treats a hashed dentry as proof that\nsd->s_element is a live config_item.  configfs_rmdir() breaks that:\nsimple_rmdir() leaves the dentry hashed, the last reference to the item is\ndropped right after, and the dentry is only unhashed by d_delete() once\n->rmdir() has returned.  configfs_symlink() resolves its target holding no\nlock on it, so get_target() can land in that window:\n\n  BUG: KASAN: slab-use-after-free in config_item_get+0x26/0x90\n   get_target fs/configfs/symlink.c:128 [inline]\n   configfs_symlink+0x4ab/0x1030 fs/configfs/symlink.c:185\n\nUnhash in configfs_remove_dir(), while the item is still guaranteed to be\nthere.  A reference obtained just before that stays harmless, as\ncreate_link() rechecks CONFIGFS_USET_DROPPING, already set by\nconfigfs_detach_prep().  Both configfs_unregister_subsystem() paths\nd_drop() after detaching, so this only makes rmdir match them.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -19998,7 +19998,7 @@
                 "cve_id": "CVE-2026-97950",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nconfigfs: pin the symlink target's dirent instead of chasing ->ci_dentry\n\ncreate_link() reads the target's configfs_dirent from\nitem->ci_dentry->d_fsdata, relying on the item reference taken by\nget_target().  That reference pins the item, not its dentry: the dentry is\npinned by DCACHE_PERSISTENT, which configfs_remove_dir() releases via\nsimple_rmdir() while the item is still alive.  A symlink racing with rmdir\nof its target can therefore find ->ci_dentry freed and its dirent\nreleased, triggering WARN_ON(!atomic_read(&sd->s_count)) in configfs_get().\n\nTake the dirent in get_target() as well, under ->d_lock and atomically\nwith the item reference, and pass it down to create_link().  A hashed\ndentry has not been killed yet, so its ->d_fsdata reference keeps the\ndirent alive there.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -20012,7 +20012,7 @@
                 "cve_id": "CVE-2026-97951",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nscsi: target: iscsi: Fix hang for aborted WRITE_PENDING commands\n\nWhen a LUN_RESET aborts a WRITE command that is in the\nTRANSPORT_WRITE_PENDING state, the target core sets CMD_T_ABORTED and\nwaits for the frontend to finish processing.\n\nIf the initiator subsequently sends the remaining dataout PDUs,\n__iscsit_check_dataout_hdr() catches the payload, stops the dataout\ntimer if the sequence is final and finally dumps the data.  However, the\niSCSI target doesn't trigger the completion process for these aborted\ncommands. Because of this, the abort path hangs indefinitely in\ntarget_put_cmd_and_wait(), leading to a deadlocked target worker thread.\n\nFix this by explicitly calling target_complete_cmd() when the final\ndataout PDU is received for an aborted WRITE command.\ntarget_complete_cmd() detects the CMD_T_ABORTED flag and cleanly routes\nthe command into target_abort_work, allowing the abort completion to\nsuccessfully unblock.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -20026,7 +20026,7 @@
                 "cve_id": "CVE-2026-97956",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: net_failover: Fix the deadlock in net_failover_slave_name_change()\n\nThis is a sibling fix of commit\nb84c5632c7b3 (\"net: net_failover: Fix the deadlock in slave register\").\nThere is netdev_lock_ops() in the upper callers, so using netif_open()\ninstead of dev_open().\n\nCall Trace:\n __schedule+0x2bb/0x650\n schedule+0x27/0xb0\n schedule_preempt_disabled+0x15/0x30\n __mutex_lock.constprop.0+0x550/0xaf0\n __mutex_lock_slowpath+0x13/0x20\n mutex_lock+0x3b/0x50\n dev_open+0x3b/0xe0\n net_failover_slave_name_change+0x22/0x40\n failover_event+0xd4/0x1e0\n notifier_call_chain+0x62/0xf0\n raw_notifier_call_chain+0x16/0x30\n call_netdevice_notifiers_info+0x50/0x80\n netif_change_name+0x200/0x330\n do_setlink.isra.0+0xb12/0xdf0\n ? security_capable+0x9a/0x1e0\n ? ns_capable+0x31/0x60\n rtnl_setlink+0x302/0x670\n ? netlink_recvmsg+0x296/0x340\n ? security_capable+0x9a/0x1e0\n ? __pfx_rtnl_setlink+0x10/0x10\n rtnetlink_rcv_msg+0x384/0x460\n ? __pfx_rtnetlink_rcv_msg+0x10/0x10\n netlink_rcv_skb+0x61/0x120\n rtnetlink_rcv+0x15/0x30\n netlink_unicast+0x28f/0x3c0\n netlink_sendmsg+0x216/0x450\n __sys_sendto+0x222/0x230\n __x64_sys_sendto+0x24/0x40\n x64_sys_call+0x1d5d/0x2390\n do_syscall_64+0x105/0x5a0\n ? do_syscall_64+0x140/0x5a0\n ? exc_page_fault+0x94/0x1e0\n entry_SYSCALL_64_after_hwframe+0x76/0x7e",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
