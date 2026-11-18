@@ -48,7 +48,7 @@
                 "cve_id": "CVE-2023-53989",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\narm64: mm: fix VA-range sanity check\n\nBoth create_mapping_noalloc() and update_mapping_prot() sanity-check\ntheir 'virt' parameter, but the check itself doesn't make much sense.\nThe condition used today appears to be a historical accident.\n\nThe sanity-check condition:\n\n\tif ((virt >= PAGE_END) && (virt < VMALLOC_START)) {\n\t\t[ ... warning here ... ]\n\t\treturn;\n\t}\n\n... can only be true for the KASAN shadow region or the module region,\nand there's no reason to exclude these specifically for creating and\nupdateing mappings.\n\nWhen arm64 support was first upstreamed in commit:\n\n  c1cc1552616d0f35 (\"arm64: MMU initialisation\")\n\n... the condition was:\n\n\tif (virt < VMALLOC_START) {\n\t\t[ ... warning here ... ]\n\t\treturn;\n\t}\n\nAt the time, VMALLOC_START was the lowest kernel address, and this was\nchecking whether 'virt' would be translated via TTBR1.\n\nSubsequently in commit:\n\n  14c127c957c1c607 (\"arm64: mm: Flip kernel VA space\")\n\n... the condition was changed to:\n\n\tif ((virt >= VA_START) && (virt < VMALLOC_START)) {\n\t\t[ ... warning here ... ]\n\t\treturn;\n\t}\n\nThis appear to have been a thinko. The commit moved the linear map to\nthe bottom of the kernel address space, with VMALLOC_START being at the\nhalfway point. The old condition would warn for changes to the linear\nmap below this, and at the time VA_START was the end of the linear map.\n\nSubsequently we cleaned up the naming of VA_START in commit:\n\n  77ad4ce69321abbe (\"arm64: memory: rename VA_START to PAGE_END\")\n\n... keeping the erroneous condition as:\n\n\tif ((virt >= PAGE_END) && (virt < VMALLOC_START)) {\n\t\t[ ... warning here ... ]\n\t\treturn;\n\t}\n\nCorrect the condition to check against the start of the TTBR1 address\nspace, which is currently PAGE_OFFSET. This simplifies the logic, and\nmore clearly matches the \"outside kernel range\" message in the warning.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -104,7 +104,7 @@
                 "cve_id": "CVE-2024-57883",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm: hugetlb: independent PMD page table shared count\n\nThe folio refcount may be increased unexpectly through try_get_folio() by\ncaller such as split_huge_pages.  In huge_pmd_unshare(), we use refcount\nto check whether a pmd page table is shared.  The check is incorrect if\nthe refcount is increased by the above caller, and this can cause the page\ntable leaked:\n\n BUG: Bad page state in process sh  pfn:109324\n page: refcount:0 mapcount:0 mapping:0000000000000000 index:0x66 pfn:0x109324\n flags: 0x17ffff800000000(node=0|zone=2|lastcpupid=0xfffff)\n page_type: f2(table)\n raw: 017ffff800000000 0000000000000000 0000000000000000 0000000000000000\n raw: 0000000000000066 0000000000000000 00000000f2000000 0000000000000000\n page dumped because: nonzero mapcount\n ...\n CPU: 31 UID: 0 PID: 7515 Comm: sh Kdump: loaded Tainted: G    B              6.13.0-rc2master+ #7\n Tainted: [B]=BAD_PAGE\n Hardware name: QEMU KVM Virtual Machine, BIOS 0.0.0 02/06/2015\n Call trace:\n  show_stack+0x20/0x38 (C)\n  dump_stack_lvl+0x80/0xf8\n  dump_stack+0x18/0x28\n  bad_page+0x8c/0x130\n  free_page_is_bad_report+0xa4/0xb0\n  free_unref_page+0x3cc/0x620\n  __folio_put+0xf4/0x158\n  split_huge_pages_all+0x1e0/0x3e8\n  split_huge_pages_write+0x25c/0x2d8\n  full_proxy_write+0x64/0xd8\n  vfs_write+0xcc/0x280\n  ksys_write+0x70/0x110\n  __arm64_sys_write+0x24/0x38\n  invoke_syscall+0x50/0x120\n  el0_svc_common.constprop.0+0xc8/0xf0\n  do_el0_svc+0x24/0x38\n  el0_svc+0x34/0x128\n  el0t_64_sync_handler+0xc8/0xd0\n  el0t_64_sync+0x190/0x198\n\nThe issue may be triggered by damon, offline_page, page_idle, etc, which\nwill increase the refcount of page table.\n\n1. The page table itself will be discarded after reporting the\n   \"nonzero mapcount\".\n\n2. The HugeTLB page mapped by the page table miss freeing since we\n   treat the page table as shared and a shared page table will not be\n   unmapped.\n\nFix it by introducing independent PMD page table shared count.  As\ndescribed by comment, pt_index/pt_mm/pt_frag_refcount are used for s390\ngmap, x86 pgds and powerpc, pt_share_count is used for x86/arm64/riscv\npmds, so we can reuse the field as pt_share_count.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -118,7 +118,7 @@
                 "cve_id": "CVE-2024-57924",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs: relax assertions on failure to encode file handles\n\nEncoding file handles is usually performed by a filesystem >encode_fh()\nmethod that may fail for various reasons.\n\nThe legacy users of exportfs_encode_fh(), namely, nfsd and\nname_to_handle_at(2) syscall are ready to cope with the possibility\nof failure to encode a file handle.\n\nThere are a few other users of exportfs_encode_{fh,fid}() that\ncurrently have a WARN_ON() assertion when ->encode_fh() fails.\nRelax those assertions because they are wrong.\n\nThe second linked bug report states commit 16aac5ad1fa9 (\"ovl: support\nencoding non-decodable file handles\") in v6.6 as the regressing commit,\nbut this is not accurate.\n\nThe aforementioned commit only increases the chances of the assertion\nand allows triggering the assertion with the reproducer using overlayfs,\ninotify and drop_caches.\n\nTriggering this assertion was always possible with other filesystems and\nother reasons of ->encode_fh() failures and more particularly, it was\nalso possible with the exact same reproducer using overlayfs that is\nmounted with options index=on,nfs_export=on also on kernels < v6.6.\nTherefore, I am not listing the aforementioned commit as a Fixes commit.\n\nBackport hint: this patch will have a trivial conflict applying to\nv6.6.y, and other trivial conflicts applying to stable kernels < v6.6.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -342,7 +342,7 @@
                 "cve_id": "CVE-2025-21997",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxsk: fix an integer overflow in xp_create_and_assign_umem()\n\nSince the i and pool->chunk_size variables are of type 'u32',\ntheir product can wrap around and then be cast to 'u64'.\nThis can lead to two different XDP buffers pointing to the same\nmemory area.\n\nFound by InfoTeCS on behalf of Linux Verification Center\n(linuxtesting.org) with SVACE.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -398,7 +398,7 @@
                 "cve_id": "CVE-2025-22005",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nipv6: Fix memleak of nhc_pcpu_rth_output in fib_check_nh_v6_gw().\n\nfib_check_nh_v6_gw() expects that fib6_nh_init() cleans up everything\nwhen it fails.\n\nCommit 7dd73168e273 (\"ipv6: Always allocate pcpu memory in a fib6_nh\")\nmoved fib_nh_common_init() before alloc_percpu_gfp() within fib6_nh_init()\nbut forgot to add cleanup for fib6_nh->nh_common.nhc_pcpu_rth_output in\ncase it fails to allocate fib6_nh->rt6i_pcpu, resulting in memleak.\n\nLet's call fib_nh_common_release() and clear nhc_pcpu_rth_output in the\nerror path.\n\nNote that we can remove the fib6_nh_release() call in nh_create_ipv6()\nlater in net-next.git.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -426,7 +426,7 @@
                 "cve_id": "CVE-2025-22015",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmm/migrate: fix shmem xarray update during migration\n\nA shmem folio can be either in page cache or in swap cache, but not at the\nsame time.  Namely, once it is in swap cache, folio->mapping should be\nNULL, and the folio is no longer in a shmem mapping.\n\nIn __folio_migrate_mapping(), to determine the number of xarray entries to\nupdate, folio_test_swapbacked() is used, but that conflates shmem in page\ncache case and shmem in swap cache case.  It leads to xarray multi-index\nentry corruption, since it turns a sibling entry to a normal entry during\nxas_store() (see [1] for a userspace reproduction).  Fix it by only using\nfolio_test_swapcache() to determine whether xarray is storing swap cache\nentries or not to choose the right number of xarray entries to update.\n\n[1] https://lore.kernel.org/linux-mm/Z8idPCkaJW1IChjT@casper.infradead.org/\n\nNote:\nIn __split_huge_page(), folio_test_anon() && folio_test_swapcache() is\nused to get swap_cache address space, but that ignores the shmem folio in\nswap cache case.  It could lead to NULL pointer dereferencing when a\nin-swap-cache shmem folio is split at __xa_store(), since\n!folio_test_anon() is true and folio->mapping is NULL.  But fortunately,\nits caller split_huge_page_to_list_to_order() bails out early with EBUSY\nwhen folio->mapping is NULL.  So no need to take care of it here.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -454,7 +454,7 @@
                 "cve_id": "CVE-2025-22021",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: socket: Lookup orig tuple for IPv6 SNAT\n\nnf_sk_lookup_slow_v4 does the conntrack lookup for IPv4 packets to\nrestore the original 5-tuple in case of SNAT, to be able to find the\nright socket (if any). Then socket_match() can correctly check whether\nthe socket was transparent.\n\nHowever, the IPv6 counterpart (nf_sk_lookup_slow_v6) lacks this\nconntrack lookup, making xt_socket fail to match on the socket when the\npacket was SNATed. Add the same logic to nf_sk_lookup_slow_v6.\n\nIPv6 SNAT is used in Kubernetes clusters for pod-to-world packets, as\npods' addresses are in the fd00::/8 ULA subnet and need to be replaced\nwith the node's external address. Cilium leverages Envoy to enforce L7\npolicies, and Envoy uses transparent sockets. Cilium inserts an iptables\nprerouting rule that matches on `-m socket --transparent` and redirects\nthe packets to localhost, but it fails to match SNATed IPv6 packets due\nto that missing conntrack lookup.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -1196,7 +1196,7 @@
                 "cve_id": "CVE-2025-23160",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmedia: mediatek: vcodec: Fix a resource leak related to the scp device in FW initialization\n\nOn Mediatek devices with a system companion processor (SCP) the mtk_scp\nstructure has to be removed explicitly to avoid a resource leak.\nFree the structure in case the allocation of the firmware structure fails\nduring the firmware initialization.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -5242,7 +5242,7 @@
                 "cve_id": "CVE-2025-38637",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet_sched: skbprio: Remove overly strict queue assertions\n\nIn the current implementation, skbprio enqueue/dequeue contains an assertion\nthat fails under certain conditions when SKBPRIO is used as a child qdisc under\nTBF with specific parameters. The failure occurs because TBF sometimes peeks at\npackets in the child qdisc without actually dequeuing them when tokens are\nunavailable.\n\nThis peek operation creates a discrepancy between the parent and child qdisc\nqueue length counters. When TBF later receives a high-priority packet,\nSKBPRIO's queue length may show a different value than what's reflected in its\ninternal priority queue tracking, triggering the assertion.\n\nThe fix removes this overly strict assertions in SKBPRIO, they are not\nnecessary at all.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -5676,7 +5676,7 @@
                 "cve_id": "CVE-2025-39688",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: allow SC_STATUS_FREEABLE when searching via nfs4_lookup_stateid()\n\nThe pynfs DELEG8 test fails when run against nfsd. It acquires a\ndelegation and then lets the lease time out. It then tries to use the\ndeleg stateid and expects to see NFS4ERR_DELEG_REVOKED, but it gets\nbad NFS4ERR_BAD_STATEID instead.\n\nWhen a delegation is revoked, it's initially marked with\nSC_STATUS_REVOKED, or SC_STATUS_ADMIN_REVOKED and later, it's marked\nwith the SC_STATUS_FREEABLE flag, which denotes that it is waiting for\ns FREE_STATEID call.\n\nnfs4_lookup_stateid() accepts a statusmask that includes the status\nflags that a found stateid is allowed to have. Currently, that mask\nnever includes SC_STATUS_FREEABLE, which means that revoked delegations\nare (almost) never found.\n\nAdd SC_STATUS_FREEABLE to the always-allowed status flags, and remove it\nfrom nfsd4_delegreturn() since it's now always implied.",
-                "severity": "MEDIUM",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -30280,6 +30280,20 @@
                     {
                         "introduced": "1:6.1.141-167.250.amzn2023",
                         "fixed": "1:6.1.188-233.385.amzn2023",
+                        "identifier": "amzn2023"
+                    }
+                ]
+            },
+            "CVE-2026-99288": {
+                "cve_id": "CVE-2026-99288",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ninet: reject unhashed sockets during established lookups\n\nTCP established ehash lookups are lockless. The socket caches involved\nuse SLAB_TYPESAFE_BY_RCU, so memory can be reused before an RCU reader\nthat retained its old address has finished.\n\nAfter a tuple match, __inet_lookup_established() and\n__inet6_lookup_established() acquire a reference and repeat the tuple\ncheck. They do not check whether the new object is hashed. If the\naddress is reused for a socket with the same tuple, the lookup can\nacquire a reference to the new object and return it while its nulls node\nis unhashed.\n\nA PoC that drives reuse with a SYN cookie request socket reproduced the\ncrash. The new request socket is unhashed and has a NULL rsk_listener.\nA lookup that had loaded the address of the old request socket acquired\nthe reference published by tcp_get_cookie_sock() and returned the new\nobject. tcp_v4_rcv() then read sk_state through the NULL listener.\n\nThe resulting crash was:\n\n  BUG: kernel NULL pointer dereference, address: 0000000000000012\n  #PF: supervisor read access in kernel mode\n  #PF: error_code(0x0000) - not-present page\n  ...\n  Oops: Oops: 0000 [#1] SMP NOPTI\n  CPU: 4 UID: 0 PID: 0 Comm: swapper/4 Not tainted 7.3.0-00591-g0e135910deec #1 PREEMPT(lazy)\n  ...\n  RIP: 0010:tcp_v4_rcv+0x44e/0x1280\n  ...\n  R10: 0000000000000001 R11: 00000000024ca8c0 R12: 0000000000000000\n  ...\n  CR2: 0000000000000012 CR3: 0000000103d50004 CR4: 0000000000770ef0\n  ...\n  Call Trace:\n   <IRQ>\n   ? raw_local_deliver+0xae/0x240\n   ip_protocol_deliver_rcu+0x2d/0x180\n   ip_local_deliver_finish+0x84/0x100\n   ip_sublist_rcv_finish+0x5f/0x70\n   ip_sublist_rcv+0x12a/0x1d0\n   ip_list_rcv+0xfd/0x130\n   __netif_receive_skb_list_core+0x223/0x250\n   netif_receive_skb_list_internal+0x1d2/0x2c0\n   ? try_fill_recv+0x39/0x7b0\n   napi_complete_done+0x74/0x170\n   virtnet_poll+0x445/0x600\n   __napi_poll+0x27/0x1e0\n   net_rx_action+0x2fe/0x3b0\n   handle_softirqs+0xc2/0x2c0\n   __irq_exit_rcu+0x74/0xd0\n   common_interrupt+0x7f/0x90\n   </IRQ>\n  ...\n  Kernel panic - not syncing: Fatal exception in interrupt\n\nAfter taking a reference, check whether the nulls node is unhashed in\nboth IPv4 and IPv6 established lookups. If it is unhashed or the tuple\nno longer matches, drop the reference and restart the lookup.\n\nLookups racing with the TIME_WAIT hashdance, or with a request being\nreplaced by its child, now restart and find the new socket instead of\nreturning the old one.\n\nRequest sockets that were never inserted into ehash can have a nonzero\nrefcount, and a stale lookup can hold a transient reference. Therefore,\nwhen SYN cookie, Fast Open, and request migration paths fail after\nsetting a nonzero refcount, release the references held by those paths\nwith reqsk_put() instead of freeing the request directly.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:6.1.141-167.250.amzn2023",
+                        "fixed": "1:6.1.190-237.442.amzn2023",
                         "identifier": "amzn2023"
                     }
                 ]
