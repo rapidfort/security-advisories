@@ -187,6 +187,42 @@
                     }
                 ]
             },
+            "CVE-2026-107493": {
+                "cve_id": "CVE-2026-107493",
+                "title": "Issue summary: When an application passes a stack to\nPEM_X509_INF ...",
+                "description": "Issue summary: When an application passes a stack to\nPEM_X509_INFO_read_bio_ex() to add entries to, and reading fails,\nOpenSSL frees every entry in the stack, both the old ones and any new\nones, but leaves them in the stack.\n\nImpact summary: An application that passes an existing stack to\nPEM_X509_INFO_read_bio_ex() and keeps using it after a failed read may\nuse memory that was already freed. This can cause a crash or, in\nprinciple, memory corruption. Malformed PEM data can make the read fail,\nbut only applications that pass an existing stack are affected, and\nOpenSSL itself does not do this.\n\nCWE: CWE-416: Use After Free\n\nDescription: PEM_X509_INFO_read_bio_ex() reads certificates, CRLs and\nprivate keys from PEM data and adds them to a stack of X509_INFO\nstructures. If the application passes a stack that is not NULL, the\nfunction adds the new entries to it and must leave the entries that are\nalready there unchanged.\n\nIf reading fails, the function frees every entry in the stack. This\nincludes the entries that were there before the call, and the entries\nadded by the call. It does not remove these entries from the stack, so\nthe stack keeps pointers to freed memory. The failure can happen at any\npoint, even before any entry was added. A PEM item with invalid content\nis enough.  This also happens if the stack was empty: entries added\nbefore the failure are freed but stay in the stack.\n\nAn application that then reads or frees the stack will use memory that\nwas already freed. This can crash the application or, in principle,\ncorrupt memory.\n\nOnly applications that pass a stack that is not NULL are affected.\nOpenSSL itself never does this. Its own callers, including the code that\nTLS uses to load CA certificates, always pass NULL. When the stack is\nNULL, the function frees only the entries that it created itself, which\nis safe. We expect that very few applications pass an existing stack. An\nattacker can make the read fail with malformed PEM data, but cannot make\nan application pass an existing stack.\n\nThe same problem affects PEM_X509_INFO_read_bio(), PEM_X509_INFO_read()\nand PEM_X509_INFO_read_ex(), which use the same code. OpenSSL 1.1.1 and\n1.0.2 have only the first two of these functions.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-107496": {
+                "cve_id": "CVE-2026-107496",
+                "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
+                "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2026-14456": {
                 "cve_id": "CVE-2026-14456",
                 "title": "Issue summary: When an OpenSSL QUIC server (Listener SSL object)  ...",
@@ -1069,6 +1105,24 @@
                     }
                 ]
             },
+            "CVE-2026-84786": {
+                "cve_id": "CVE-2026-84786",
+                "title": "Issue summary: A DANE-enabled TLS client may crash by dereferenci ...",
+                "description": "Issue summary: A DANE-enabled TLS client may crash by dereferencing a NULL\npointer when processing an unusual combination of certificate and TLSA\nrecords.\n\nImpact summary: The impact is limited to a client crash (potential Denial\nof Service).\n\nCWE: CWE-476: NULL Pointer Dereference\n\nDescription: A DANE-enabled TLS client that supports TLSA records with at\nleast one of the PKIX-TA(0) or PKIX-EE(1) usages alongside the DANE-TA(2)\nusage may crash by dereferencing a NULL pointer if the server claims a trusted\nCA's certificate to be its end-entity certificate and has an unusual mix of\nassociated TLSA records.\n\nDANE SMTP clients should not be affected since only the\nDANE-TA(2) and DANE-EE(3) TLSA record usages are specified applicable\nin SMTP.  For example, the Postfix MTA is not affected, while the Exim\nMTA does not at present use OpenSSL's DANE implementation.\n\nUse of DANE in validation of RFC7250 raw public keys (RPKs) is also\nunaffected, as these only use DANE-EE(3) TLSA records.\n\nOnly applications that support combining the DANE PKI with a traditional PKI\nare potentially affected.  A DANE-enabled browser or similar, that uses\nOpenSSL's DANE API could be affected.\n\nFIPS impact: no\nThe DANE API is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2026-9076": {
                 "cve_id": "CVE-2026-9076",
                 "title": "Issue summary: When CMS password-based decryption (RFC 3211 / PWR ...",
@@ -1088,6 +1142,24 @@
                     }
                 ]
             },
+            "CVE-2026-95690": {
+                "cve_id": "CVE-2026-95690",
+                "title": "Issue summary: Receiving crafted out-of-sequence DTLS handshake f ...",
+                "description": "Issue summary: Receiving crafted out-of-sequence DTLS handshake fragments may\ncause OpenSSL to allocate a full message-length reassembly buffer for each\nbuffered message, so a small amount of wire data consumes a large amount of\nmemory.\n\nImpact summary: A remote attacker can send a few small crafted DTLS handshake\nfragments to make a DTLS server or client allocate well over a megabyte of\nmemory per connection, which may lead to memory exhaustion and Denial of\nService if many connections are made.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: DTLS handshake messages can arrive out of order and fragmented,\nso OpenSSL buffers fragments of up to ten out-of-sequence messages until\nreassembly is possible. When the first fragment of a new message arrives,\nOpenSSL allocates a buffer sized to the full message length declared in the\nfragment header, plus a reassembly bitmap, instead of storing only the bytes\nactually received. The declared length is capped by the maximum certificate\nlist size, 128KB by default, and that cap applies to every handshake message\ntype rather than only to Certificate messages.\n\nOnly DTLS endpoints reach this code. TLS, QUIC and applications that do not\nuse DTLS are unaffected. An attacker sends fragments that declare a large\nmessage length but carry almost no data, using up to ten distinct message\nsequence numbers.\n\nA single connection can then hold roughly 1.4MB of buffers from about 156\nbytes on the wire. Because the number of buffered messages is capped, memory\nexhaustion requires many connections or many peers, which is why the severity\nis Low.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2025-9231": {
                 "cve_id": "CVE-2025-9231",
                 "title": "Issue summary: A timing side-channel which could potentially allo ...",
@@ -1102,38 +1174,10 @@
                     }
                 ]
             },
-            "CVE-2026-107493": {
-                "cve_id": "CVE-2026-107493",
-                "title": "Issue summary: When an application passes a stack to\nPEM_X509_INF ...",
-                "description": "Issue summary: When an application passes a stack to\nPEM_X509_INFO_read_bio_ex() to add entries to, and reading fails,\nOpenSSL frees every entry in the stack, both the old ones and any new\nones, but leaves them in the stack.\n\nImpact summary: An application that passes an existing stack to\nPEM_X509_INFO_read_bio_ex() and keeps using it after a failed read may\nuse memory that was already freed. This can cause a crash or, in\nprinciple, memory corruption. Malformed PEM data can make the read fail,\nbut only applications that pass an existing stack are affected, and\nOpenSSL itself does not do this.\n\nCWE: CWE-416: Use After Free\n\nDescription: PEM_X509_INFO_read_bio_ex() reads certificates, CRLs and\nprivate keys from PEM data and adds them to a stack of X509_INFO\nstructures. If the application passes a stack that is not NULL, the\nfunction adds the new entries to it and must leave the entries that are\nalready there unchanged.\n\nIf reading fails, the function frees every entry in the stack. This\nincludes the entries that were there before the call, and the entries\nadded by the call. It does not remove these entries from the stack, so\nthe stack keeps pointers to freed memory. The failure can happen at any\npoint, even before any entry was added. A PEM item with invalid content\nis enough.  This also happens if the stack was empty: entries added\nbefore the failure are freed but stay in the stack.\n\nAn application that then reads or frees the stack will use memory that\nwas already freed. This can crash the application or, in principle,\ncorrupt memory.\n\nOnly applications that pass a stack that is not NULL are affected.\nOpenSSL itself never does this. Its own callers, including the code that\nTLS uses to load CA certificates, always pass NULL. When the stack is\nNULL, the function frees only the entries that it created itself, which\nis safe. We expect that very few applications pass an existing stack. An\nattacker can make the read fail with malformed PEM data, but cannot make\nan application pass an existing stack.\n\nThe same problem affects PEM_X509_INFO_read_bio(), PEM_X509_INFO_read()\nand PEM_X509_INFO_read_ex(), which use the same code. OpenSSL 1.1.1 and\n1.0.2 have only the first two of these functions.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
             "CVE-2026-107494": {
                 "cve_id": "CVE-2026-107494",
-                "title": "The QUIC stack queues a RETIRE_CONNECTION_ID frame also for retra ...",
-                "description": "The QUIC stack queues a RETIRE_CONNECTION_ID frame also for retransmitted NEW_CONNECTION_ID frames. This allows a remote malicious QUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-107496": {
-                "cve_id": "CVE-2026-107496",
-                "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
-                "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+                "title": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame ...",
+                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\nThis allows a malicious remote QUIC stack to trigger an out-of-memory (OOM)\ncondition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -1186,20 +1230,6 @@
                     }
                 ]
             },
-            "CVE-2026-84786": {
-                "cve_id": "CVE-2026-84786",
-                "title": "A DANE-enabled TLS client may crash by dereferencing a NULL point ...",
-                "description": "A DANE-enabled TLS client may crash by dereferencing a NULL pointer when processing an unusual combination of certificate and TLSA records.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
             "CVE-2026-88822": {
                 "cve_id": "CVE-2026-88822",
                 "title": "Issue summary: QUIC, when performing automated peer detection, ma ...",
@@ -1219,20 +1249,6 @@
                 "title": "Issue summary: The AES-GCM-SIV implementation treats a zero-lengt ...",
                 "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95690": {
-                "cve_id": "CVE-2026-95690",
-                "title": "Receiving crafted out-of-sequence DTLS handshake fragments may ca ...",
-                "description": "Receiving crafted out-of-sequence DTLS handshake fragments may cause OpenSSL to allocate a full message-length reassembly buffer for each buffered message, so a small amount of wire data consumes a large amount of memory.",
-                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -1474,6 +1490,42 @@
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
                         "fixed": "1:3.5.4-1.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-107493": {
+                "cve_id": "CVE-2026-107493",
+                "title": "Issue summary: When an application passes a stack to\nPEM_X509_INF ...",
+                "description": "Issue summary: When an application passes a stack to\nPEM_X509_INFO_read_bio_ex() to add entries to, and reading fails,\nOpenSSL frees every entry in the stack, both the old ones and any new\nones, but leaves them in the stack.\n\nImpact summary: An application that passes an existing stack to\nPEM_X509_INFO_read_bio_ex() and keeps using it after a failed read may\nuse memory that was already freed. This can cause a crash or, in\nprinciple, memory corruption. Malformed PEM data can make the read fail,\nbut only applications that pass an existing stack are affected, and\nOpenSSL itself does not do this.\n\nCWE: CWE-416: Use After Free\n\nDescription: PEM_X509_INFO_read_bio_ex() reads certificates, CRLs and\nprivate keys from PEM data and adds them to a stack of X509_INFO\nstructures. If the application passes a stack that is not NULL, the\nfunction adds the new entries to it and must leave the entries that are\nalready there unchanged.\n\nIf reading fails, the function frees every entry in the stack. This\nincludes the entries that were there before the call, and the entries\nadded by the call. It does not remove these entries from the stack, so\nthe stack keeps pointers to freed memory. The failure can happen at any\npoint, even before any entry was added. A PEM item with invalid content\nis enough.  This also happens if the stack was empty: entries added\nbefore the failure are freed but stay in the stack.\n\nAn application that then reads or frees the stack will use memory that\nwas already freed. This can crash the application or, in principle,\ncorrupt memory.\n\nOnly applications that pass a stack that is not NULL are affected.\nOpenSSL itself never does this. Its own callers, including the code that\nTLS uses to load CA certificates, always pass NULL. When the stack is\nNULL, the function frees only the entries that it created itself, which\nis safe. We expect that very few applications pass an existing stack. An\nattacker can make the read fail with malformed PEM data, but cannot make\nan application pass an existing stack.\n\nThe same problem affects PEM_X509_INFO_read_bio(), PEM_X509_INFO_read()\nand PEM_X509_INFO_read_ex(), which use the same code. OpenSSL 1.1.1 and\n1.0.2 have only the first two of these functions.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-107496": {
+                "cve_id": "CVE-2026-107496",
+                "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
+                "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
                     }
                 ]
             },
@@ -2220,6 +2272,24 @@
                     }
                 ]
             },
+            "CVE-2026-84786": {
+                "cve_id": "CVE-2026-84786",
+                "title": "Issue summary: A DANE-enabled TLS client may crash by dereferenci ...",
+                "description": "Issue summary: A DANE-enabled TLS client may crash by dereferencing a NULL\npointer when processing an unusual combination of certificate and TLSA\nrecords.\n\nImpact summary: The impact is limited to a client crash (potential Denial\nof Service).\n\nCWE: CWE-476: NULL Pointer Dereference\n\nDescription: A DANE-enabled TLS client that supports TLSA records with at\nleast one of the PKIX-TA(0) or PKIX-EE(1) usages alongside the DANE-TA(2)\nusage may crash by dereferencing a NULL pointer if the server claims a trusted\nCA's certificate to be its end-entity certificate and has an unusual mix of\nassociated TLSA records.\n\nDANE SMTP clients should not be affected since only the\nDANE-TA(2) and DANE-EE(3) TLSA record usages are specified applicable\nin SMTP.  For example, the Postfix MTA is not affected, while the Exim\nMTA does not at present use OpenSSL's DANE implementation.\n\nUse of DANE in validation of RFC7250 raw public keys (RPKs) is also\nunaffected, as these only use DANE-EE(3) TLSA records.\n\nOnly applications that support combining the DANE PKI with a traditional PKI\nare potentially affected.  A DANE-enabled browser or similar, that uses\nOpenSSL's DANE API could be affected.\n\nFIPS impact: no\nThe DANE API is outside the FIPS module boundary.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2026-9076": {
                 "cve_id": "CVE-2026-9076",
                 "title": "Issue summary: When CMS password-based decryption (RFC 3211 / PWR ...",
@@ -2238,6 +2308,24 @@
                     }
                 ]
             },
+            "CVE-2026-95690": {
+                "cve_id": "CVE-2026-95690",
+                "title": "Issue summary: Receiving crafted out-of-sequence DTLS handshake f ...",
+                "description": "Issue summary: Receiving crafted out-of-sequence DTLS handshake fragments may\ncause OpenSSL to allocate a full message-length reassembly buffer for each\nbuffered message, so a small amount of wire data consumes a large amount of\nmemory.\n\nImpact summary: A remote attacker can send a few small crafted DTLS handshake\nfragments to make a DTLS server or client allocate well over a megabyte of\nmemory per connection, which may lead to memory exhaustion and Denial of\nService if many connections are made.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: DTLS handshake messages can arrive out of order and fragmented,\nso OpenSSL buffers fragments of up to ten out-of-sequence messages until\nreassembly is possible. When the first fragment of a new message arrives,\nOpenSSL allocates a buffer sized to the full message length declared in the\nfragment header, plus a reassembly bitmap, instead of storing only the bytes\nactually received. The declared length is capped by the maximum certificate\nlist size, 128KB by default, and that cap applies to every handshake message\ntype rather than only to Certificate messages.\n\nOnly DTLS endpoints reach this code. TLS, QUIC and applications that do not\nuse DTLS are unaffected. An attacker sends fragments that declare a large\nmessage length but carry almost no data, using up to ten distinct message\nsequence numbers.\n\nA single connection can then hold roughly 1.4MB of buffers from about 156\nbytes on the wire. Because the number of buffered messages is capped, memory\nexhaustion requires many connections or many peers, which is why the severity\nis Low.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2025-9231": {
                 "cve_id": "CVE-2025-9231",
                 "title": "Issue summary: A timing side-channel which could potentially allo ...",
@@ -2252,38 +2340,10 @@
                     }
                 ]
             },
-            "CVE-2026-107493": {
-                "cve_id": "CVE-2026-107493",
-                "title": "Issue summary: When an application passes a stack to\nPEM_X509_INF ...",
-                "description": "Issue summary: When an application passes a stack to\nPEM_X509_INFO_read_bio_ex() to add entries to, and reading fails,\nOpenSSL frees every entry in the stack, both the old ones and any new\nones, but leaves them in the stack.\n\nImpact summary: An application that passes an existing stack to\nPEM_X509_INFO_read_bio_ex() and keeps using it after a failed read may\nuse memory that was already freed. This can cause a crash or, in\nprinciple, memory corruption. Malformed PEM data can make the read fail,\nbut only applications that pass an existing stack are affected, and\nOpenSSL itself does not do this.\n\nCWE: CWE-416: Use After Free\n\nDescription: PEM_X509_INFO_read_bio_ex() reads certificates, CRLs and\nprivate keys from PEM data and adds them to a stack of X509_INFO\nstructures. If the application passes a stack that is not NULL, the\nfunction adds the new entries to it and must leave the entries that are\nalready there unchanged.\n\nIf reading fails, the function frees every entry in the stack. This\nincludes the entries that were there before the call, and the entries\nadded by the call. It does not remove these entries from the stack, so\nthe stack keeps pointers to freed memory. The failure can happen at any\npoint, even before any entry was added. A PEM item with invalid content\nis enough.  This also happens if the stack was empty: entries added\nbefore the failure are freed but stay in the stack.\n\nAn application that then reads or frees the stack will use memory that\nwas already freed. This can crash the application or, in principle,\ncorrupt memory.\n\nOnly applications that pass a stack that is not NULL are affected.\nOpenSSL itself never does this. Its own callers, including the code that\nTLS uses to load CA certificates, always pass NULL. When the stack is\nNULL, the function frees only the entries that it created itself, which\nis safe. We expect that very few applications pass an existing stack. An\nattacker can make the read fail with malformed PEM data, but cannot make\nan application pass an existing stack.\n\nThe same problem affects PEM_X509_INFO_read_bio(), PEM_X509_INFO_read()\nand PEM_X509_INFO_read_ex(), which use the same code. OpenSSL 1.1.1 and\n1.0.2 have only the first two of these functions.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
             "CVE-2026-107494": {
                 "cve_id": "CVE-2026-107494",
-                "title": "The QUIC stack queues a RETIRE_CONNECTION_ID frame also for retra ...",
-                "description": "The QUIC stack queues a RETIRE_CONNECTION_ID frame also for retransmitted NEW_CONNECTION_ID frames. This allows a remote malicious QUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-107496": {
-                "cve_id": "CVE-2026-107496",
-                "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
-                "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+                "title": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame ...",
+                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\nThis allows a malicious remote QUIC stack to trigger an out-of-memory (OOM)\ncondition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -2336,20 +2396,6 @@
                     }
                 ]
             },
-            "CVE-2026-84786": {
-                "cve_id": "CVE-2026-84786",
-                "title": "A DANE-enabled TLS client may crash by dereferencing a NULL point ...",
-                "description": "A DANE-enabled TLS client may crash by dereferencing a NULL pointer when processing an unusual combination of certificate and TLSA records.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
             "CVE-2026-88822": {
                 "cve_id": "CVE-2026-88822",
                 "title": "Issue summary: QUIC, when performing automated peer detection, ma ...",
@@ -2369,20 +2415,6 @@
                 "title": "Issue summary: The AES-GCM-SIV implementation treats a zero-lengt ...",
                 "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95690": {
-                "cve_id": "CVE-2026-95690",
-                "title": "Receiving crafted out-of-sequence DTLS handshake fragments may ca ...",
-                "description": "Receiving crafted out-of-sequence DTLS handshake fragments may cause OpenSSL to allocate a full message-length reassembly buffer for each buffered message, so a small amount of wire data consumes a large amount of memory.",
-                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
@@ -2587,6 +2619,34 @@
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
                         "fixed": "1:3.5.4-1.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-107493": {
+                "cve_id": "CVE-2026-107493",
+                "title": "Issue summary: When an application passes a stack to\nPEM_X509_INF ...",
+                "description": "Issue summary: When an application passes a stack to\nPEM_X509_INFO_read_bio_ex() to add entries to, and reading fails,\nOpenSSL frees every entry in the stack, both the old ones and any new\nones, but leaves them in the stack.\n\nImpact summary: An application that passes an existing stack to\nPEM_X509_INFO_read_bio_ex() and keeps using it after a failed read may\nuse memory that was already freed. This can cause a crash or, in\nprinciple, memory corruption. Malformed PEM data can make the read fail,\nbut only applications that pass an existing stack are affected, and\nOpenSSL itself does not do this.\n\nCWE: CWE-416: Use After Free\n\nDescription: PEM_X509_INFO_read_bio_ex() reads certificates, CRLs and\nprivate keys from PEM data and adds them to a stack of X509_INFO\nstructures. If the application passes a stack that is not NULL, the\nfunction adds the new entries to it and must leave the entries that are\nalready there unchanged.\n\nIf reading fails, the function frees every entry in the stack. This\nincludes the entries that were there before the call, and the entries\nadded by the call. It does not remove these entries from the stack, so\nthe stack keeps pointers to freed memory. The failure can happen at any\npoint, even before any entry was added. A PEM item with invalid content\nis enough.  This also happens if the stack was empty: entries added\nbefore the failure are freed but stay in the stack.\n\nAn application that then reads or frees the stack will use memory that\nwas already freed. This can crash the application or, in principle,\ncorrupt memory.\n\nOnly applications that pass a stack that is not NULL are affected.\nOpenSSL itself never does this. Its own callers, including the code that\nTLS uses to load CA certificates, always pass NULL. When the stack is\nNULL, the function frees only the entries that it created itself, which\nis safe. We expect that very few applications pass an existing stack. An\nattacker can make the read fail with malformed PEM data, but cannot make\nan application pass an existing stack.\n\nThe same problem affects PEM_X509_INFO_read_bio(), PEM_X509_INFO_read()\nand PEM_X509_INFO_read_ex(), which use the same code. OpenSSL 1.1.1 and\n1.0.2 have only the first two of these functions.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-107496": {
+                "cve_id": "CVE-2026-107496",
+                "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
+                "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
                     }
                 ]
             },
@@ -3248,6 +3308,20 @@
                     }
                 ]
             },
+            "CVE-2026-84786": {
+                "cve_id": "CVE-2026-84786",
+                "title": "Issue summary: A DANE-enabled TLS client may crash by dereferenci ...",
+                "description": "Issue summary: A DANE-enabled TLS client may crash by dereferencing a NULL\npointer when processing an unusual combination of certificate and TLSA\nrecords.\n\nImpact summary: The impact is limited to a client crash (potential Denial\nof Service).\n\nCWE: CWE-476: NULL Pointer Dereference\n\nDescription: A DANE-enabled TLS client that supports TLSA records with at\nleast one of the PKIX-TA(0) or PKIX-EE(1) usages alongside the DANE-TA(2)\nusage may crash by dereferencing a NULL pointer if the server claims a trusted\nCA's certificate to be its end-entity certificate and has an unusual mix of\nassociated TLSA records.\n\nDANE SMTP clients should not be affected since only the\nDANE-TA(2) and DANE-EE(3) TLSA record usages are specified applicable\nin SMTP.  For example, the Postfix MTA is not affected, while the Exim\nMTA does not at present use OpenSSL's DANE implementation.\n\nUse of DANE in validation of RFC7250 raw public keys (RPKs) is also\nunaffected, as these only use DANE-EE(3) TLSA records.\n\nOnly applications that support combining the DANE PKI with a traditional PKI\nare potentially affected.  A DANE-enabled browser or similar, that uses\nOpenSSL's DANE API could be affected.\n\nFIPS impact: no\nThe DANE API is outside the FIPS module boundary.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2026-9076": {
                 "cve_id": "CVE-2026-9076",
                 "title": "Issue summary: When CMS password-based decryption (RFC 3211 / PWR ...",
@@ -3259,6 +3333,20 @@
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
                         "fixed": "1:3.5.7-1.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-95690": {
+                "cve_id": "CVE-2026-95690",
+                "title": "Issue summary: Receiving crafted out-of-sequence DTLS handshake f ...",
+                "description": "Issue summary: Receiving crafted out-of-sequence DTLS handshake fragments may\ncause OpenSSL to allocate a full message-length reassembly buffer for each\nbuffered message, so a small amount of wire data consumes a large amount of\nmemory.\n\nImpact summary: A remote attacker can send a few small crafted DTLS handshake\nfragments to make a DTLS server or client allocate well over a megabyte of\nmemory per connection, which may lead to memory exhaustion and Denial of\nService if many connections are made.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: DTLS handshake messages can arrive out of order and fragmented,\nso OpenSSL buffers fragments of up to ten out-of-sequence messages until\nreassembly is possible. When the first fragment of a new message arrives,\nOpenSSL allocates a buffer sized to the full message length declared in the\nfragment header, plus a reassembly bitmap, instead of storing only the bytes\nactually received. The declared length is capped by the maximum certificate\nlist size, 128KB by default, and that cap applies to every handshake message\ntype rather than only to Certificate messages.\n\nOnly DTLS endpoints reach this code. TLS, QUIC and applications that do not\nuse DTLS are unaffected. An attacker sends fragments that declare a large\nmessage length but carry almost no data, using up to ten distinct message\nsequence numbers.\n\nA single connection can then hold roughly 1.4MB of buffers from about 156\nbytes on the wire. Because the number of buffered messages is capped, memory\nexhaustion requires many connections or many peers, which is why the severity\nis Low.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
                     }
                 ]
             },
@@ -3276,38 +3364,10 @@
                     }
                 ]
             },
-            "CVE-2026-107493": {
-                "cve_id": "CVE-2026-107493",
-                "title": "Issue summary: When an application passes a stack to\nPEM_X509_INF ...",
-                "description": "Issue summary: When an application passes a stack to\nPEM_X509_INFO_read_bio_ex() to add entries to, and reading fails,\nOpenSSL frees every entry in the stack, both the old ones and any new\nones, but leaves them in the stack.\n\nImpact summary: An application that passes an existing stack to\nPEM_X509_INFO_read_bio_ex() and keeps using it after a failed read may\nuse memory that was already freed. This can cause a crash or, in\nprinciple, memory corruption. Malformed PEM data can make the read fail,\nbut only applications that pass an existing stack are affected, and\nOpenSSL itself does not do this.\n\nCWE: CWE-416: Use After Free\n\nDescription: PEM_X509_INFO_read_bio_ex() reads certificates, CRLs and\nprivate keys from PEM data and adds them to a stack of X509_INFO\nstructures. If the application passes a stack that is not NULL, the\nfunction adds the new entries to it and must leave the entries that are\nalready there unchanged.\n\nIf reading fails, the function frees every entry in the stack. This\nincludes the entries that were there before the call, and the entries\nadded by the call. It does not remove these entries from the stack, so\nthe stack keeps pointers to freed memory. The failure can happen at any\npoint, even before any entry was added. A PEM item with invalid content\nis enough.  This also happens if the stack was empty: entries added\nbefore the failure are freed but stay in the stack.\n\nAn application that then reads or frees the stack will use memory that\nwas already freed. This can crash the application or, in principle,\ncorrupt memory.\n\nOnly applications that pass a stack that is not NULL are affected.\nOpenSSL itself never does this. Its own callers, including the code that\nTLS uses to load CA certificates, always pass NULL. When the stack is\nNULL, the function frees only the entries that it created itself, which\nis safe. We expect that very few applications pass an existing stack. An\nattacker can make the read fail with malformed PEM data, but cannot make\nan application pass an existing stack.\n\nThe same problem affects PEM_X509_INFO_read_bio(), PEM_X509_INFO_read()\nand PEM_X509_INFO_read_ex(), which use the same code. OpenSSL 1.1.1 and\n1.0.2 have only the first two of these functions.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
             "CVE-2026-107494": {
                 "cve_id": "CVE-2026-107494",
-                "title": "The QUIC stack queues a RETIRE_CONNECTION_ID frame also for retra ...",
-                "description": "The QUIC stack queues a RETIRE_CONNECTION_ID frame also for retransmitted NEW_CONNECTION_ID frames. This allows a remote malicious QUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-107496": {
-                "cve_id": "CVE-2026-107496",
-                "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
-                "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
+                "title": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame ...",
+                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\nThis allows a malicious remote QUIC stack to trigger an out-of-memory (OOM)\ncondition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -3360,20 +3420,6 @@
                     }
                 ]
             },
-            "CVE-2026-84786": {
-                "cve_id": "CVE-2026-84786",
-                "title": "A DANE-enabled TLS client may crash by dereferencing a NULL point ...",
-                "description": "A DANE-enabled TLS client may crash by dereferencing a NULL pointer when processing an unusual combination of certificate and TLSA records.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
             "CVE-2026-88822": {
                 "cve_id": "CVE-2026-88822",
                 "title": "Issue summary: QUIC, when performing automated peer detection, ma ...",
@@ -3393,20 +3439,6 @@
                 "title": "Issue summary: The AES-GCM-SIV implementation treats a zero-lengt ...",
                 "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95690": {
-                "cve_id": "CVE-2026-95690",
-                "title": "Receiving crafted out-of-sequence DTLS handshake fragments may ca ...",
-                "description": "Receiving crafted out-of-sequence DTLS handshake fragments may cause OpenSSL to allocate a full message-length reassembly buffer for each buffered message, so a small amount of wire data consumes a large amount of memory.",
-                "severity": "MEDIUM",
                 "status": "fixed",
                 "events": [
                     {
