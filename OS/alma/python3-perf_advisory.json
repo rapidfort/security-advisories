@@ -6578,6 +6578,19 @@
                     }
                 ]
             },
+            "CVE-2026-68326": {
+                "cve_id": "CVE-2026-68326",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mwifiex: bound uAP association event IEs to the event buffer\n\nmwifiex_process_uap_event() handles EVENT_UAP_STA_ASSOC by exposing the\n(re)association request IEs that the firmware copies into the event:\n\n\tsinfo->assoc_req_ies = &event->data[len];\n\tlen = (u8 *)sinfo->assoc_req_ies - (u8 *)&event->frame_control;\n\tsinfo->assoc_req_ies_len = le16_to_cpu(event->len) - (u16)len;\n\nevent->len is supplied by the device firmware and is never validated,\nand the subtraction is unchecked.  assoc_req_ies points into\nadapter->event_body[MAX_EVENT_SIZE], a fixed-size array embedded in the\nkmalloc()'d struct mwifiex_adapter.\n\nOn the ap_11n_enabled path mwifiex_set_sta_ht_cap() walks these IEs with\ncfg80211_find_ie(), whose for_each_element() loop dereferences each\nelement header.  A firmware-reported event->len larger than the bytes\nactually received makes assoc_req_ies_len describe IEs that extend past\nevent_body, so the walk reads out of the adapter slab object, a\nslab-out-of-bounds read (KASAN: slab-out-of-bounds in cfg80211_find_ie).\nAn event->len smaller than the header instead makes the int subtraction\nnegative, which wraps to a huge size_t when stored in assoc_req_ies_len.\nThe same length is handed to cfg80211_new_sta(), so a more modest\nover-claim can also copy stale event_body bytes into the\nNL80211_CMD_NEW_STATION notification.\n\nA malicious or malfunctioning mwifiex device (USB/SDIO/PCIe) can deliver\nsuch an event while the interface is in AP/uAP mode.\n\nValidate event->len before use: reject a length that underflows the\nheader or that would place the IEs outside the event_body[] buffer the\nevent was copied into.  event->len here is struct mwifiex_assoc_event.len,\na payload field internal to this event, not the transport frame length,\nso it is validated in this handler rather than at the generic\nMWIFIEX_TYPE_EVENT receive path, which only sees the event cause and the\ntransport frame length.  The bound is against event_body[MAX_EVENT_SIZE]\nrather than the actually-received length because the transports store the\nevent differently (USB and SDIO leave the 4-byte event header in\nevent_skb, PCIe strips it via skb_pull), whereas event_body is the single\nfixed buffer all of them copy the event into.  This is the event-path\nanalogue of the receive-path bounds checks added in commit 119585281617\n(\"wifi: mwifiex: Fix OOB and integer underflow when rx packets\").",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-68338": {
                 "cve_id": "CVE-2026-68338",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -7248,6 +7261,19 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.46.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-74488": {
+                "cve_id": "CVE-2026-74488",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mwifiex: use the subframe length when parsing A-MSDU TDLS frames\n\nmwifiex_11n_dispatch_amsdu_pkt() splits an A-MSDU with\nieee80211_amsdu_to_8023s() and walks the resulting subframes. For each\nsubframe it passes the subframe data pointer to\nmwifiex_process_tdls_action_frame(), but pairs it with skb->len, the\nlength of the A-MSDU parent, instead of rx_skb->len:\n\n\trx_skb = __skb_dequeue(&list);\n\trx_hdr = (struct rx_packet_hdr *)rx_skb->data;\n\tif (ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info) &&\n\t    ntohs(rx_hdr->eth803_hdr.h_proto) == ETH_P_TDLS) {\n\t\tmwifiex_process_tdls_action_frame(priv, (u8 *)rx_hdr,\n\t\t\t\t\t\t  skb->len);\n\t}\n\nThe parent is not a valid description of that buffer, and may not be\nvalid memory at all. ieee80211_amsdu_to_8023s() ends with\n\n\tif (!reuse_skb)\n\t\tdev_kfree_skb(skb);\n\nand it only sets reuse_skb when the parent is linear, is not a\nhead_frag, and is being consumed as the *last* subframe. So when the\nparent does not qualify for reuse it has already been freed, and the\nread of skb->len is a use-after-free. When it is reused, skb->len is\nthe length of the last subframe, applied to every earlier subframe,\nwhich over-states the buffer whenever an earlier subframe is shorter.\n\nThe callee cannot absorb a wrong length, because it derives its own\nceiling from the value it is given. Each frame type computes\n\n\ties_len = len - sizeof(struct ethhdr) - TDLS_*_FIX_LEN;\n\nand the element walk is then bounded entirely against that ceiling,\n\n\tfor (end = pos + ies_len; pos + 1 < end; pos += 2 + pos[1]) {\n\t\tu8 ie_len = pos[1];\n\n\t\tif (pos + 2 + ie_len > end)\n\t\t\tbreak;\n\nso a too-large len moves end past the end of the subframe and the walk\nreads and copies beyond it. The A-MSDU layout is chosen by the sender,\nwhich makes the difference between the last subframe and a shorter\nearlier one remotely selectable. Reaching this requires TDLS support in\nfirmware and the TDLS ethertype on the subframe.\n\nThe other caller, mwifiex_process_rx_packet(), is correct: it passes a\npointer and a length that describe the same region of the RX buffer.\n\nPass rx_skb->len, the length of the subframe actually being parsed.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el9"
                     }
                 ]
@@ -8003,6 +8029,19 @@
                     }
                 ]
             },
+            "CVE-2026-89965": {
+                "cve_id": "CVE-2026-89965",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvdimm/btt: reject an arena whose nfree is below the lane count\n\nThe BTT info block's nfree field, the number of reserve free blocks, is\nread from the medium without validation.  btt_freelist_init() and\nbtt_rtt_init() size the per-lane freelist[] and rtt[] arrays by nfree,\nbut the I/O path indexes them by the lane from nd_region_acquire_lane(),\nwhich is bounded by nd_region->num_lanes (ND_MAX_LANES), not by nfree.\nA crafted or foreign arena whose nfree is below the lane count makes\nfreelist[lane]/rtt[lane] run past the allocation: an out-of-bounds write.\n\nbtt.rst documents the nlanes = min(nfree, num_cpus) invariant, which the\ncode does not currently honor: num_lanes is ND_MAX_LANES regardless of\nnfree.  Reject an arena whose nfree is below num_lanes at discovery,\nbefore the per-lane arrays are allocated, enforcing that invariant.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-89972": {
                 "cve_id": "CVE-2026-89972",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -8041,6 +8080,19 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-687.58.1.el9_8",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-90057": {
+                "cve_id": "CVE-2026-90057",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nslip: remove slip_hangup() to fix use-after-free in slip_receive_buf()\n\nJaeyoung Chung and Eulgyu Kim reported a slab-use-after-free read\nin slip_receive_buf() when racing against tty hangup.\n\ntty_ldisc_hangup() calls ld->ops->hangup() while holding only\na read lock on tty->ldisc_sem (via tty_ldisc_ref()).\nBecause slip_hangup() simply called slip_close(), it ran concurrently\nwith reader functions such as slip_receive_buf().\n\nslip_close() unregisters and frees the net device and its private\nstruct slip, causing concurrent reader threads in slip_receive_buf()\nto dereference freed memory.\n\nLine discipline close() is already guaranteed to be called under\nthe write lock of tty->ldisc_sem during hangup processing\n(in tty_ldisc_reinit() or tty_ldisc_kill()).\n\nRemove slip_hangup() so teardown is serialized cleanly by slip_close().",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el9"
                     }
                 ]
@@ -8386,6 +8438,19 @@
                     }
                 ]
             },
+            "CVE-2026-98323": {
+                "cve_id": "CVE-2026-98323",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/siw: Bound fragmented header copies by the remaining length\n\nsiw_get_hdr() can receive an extended DDP/RDMAP header across more than\none TCP callback. The first callback may receive most of the header,\nwhile the next one still limits the copy to hdrlen - MIN_DDP_HDR instead\nof the number of missing bytes. This makes the destination move past the\nend of the header and overwrite the receive state, including\nfpdu_part_rcvd. A later callback can then use a negative fpdu_part_rcvd\nvalue as a copy offset, which creates an OOB write.\n\nUse the number of header bytes already received when calculating the\nnext copy length.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    }
+                ]
+            },
             "CVE-2026-98364": {
                 "cve_id": "CVE-2026-98364",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -8494,6 +8559,19 @@
                     {
                         "introduced": "5.14.0-687.5.1.el9_8",
                         "fixed": "5.14.0-741.22.1.el9_9",
+                        "identifier": "el9"
+                    }
+                ]
+            },
+            "CVE-2026-99064": {
+                "cve_id": "CVE-2026-99064",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncipso: adjust cached option offsets when removing CIPSO\n\ncipso_v4_skbuff_delattr() removes the CIPSO bytes but does not adjust\ncached offsets for options that follow them.\n\nFor example, with a valid 10-byte CIPSO option followed by a seven-byte\nRR option, parsing records rr at offset 30.  Removing CIPSO moves RR to\noffset 20, while the cached offset remains 30.  Consumers such as\nip_forward_options() and __ip_options_echo() then access the wrong bytes;\nthe latter may interpret packet data as the option length and copy it into\nfixed-size option storage.\n\nMirror cipso_v4_delopt() and subtract cipso_len from the srr, rr, ts and\nrouter_alert offsets when they follow CIPSO.  cipso_len is the distance\nthe first memmove() shifts those options.  The later header move and\nnetwork-header reset relocate the bytes and their offset base together.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
                         "identifier": "el9"
                     }
                 ]
@@ -64038,19 +64116,6 @@
                     }
                 ]
             },
-            "CVE-2026-68326": {
-                "cve_id": "CVE-2026-68326",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mwifiex: bound uAP association event IEs to the event buffer\n\nmwifiex_process_uap_event() handles EVENT_UAP_STA_ASSOC by exposing the\n(re)association request IEs that the firmware copies into the event:\n\n\tsinfo->assoc_req_ies = &event->data[len];\n\tlen = (u8 *)sinfo->assoc_req_ies - (u8 *)&event->frame_control;\n\tsinfo->assoc_req_ies_len = le16_to_cpu(event->len) - (u16)len;\n\nevent->len is supplied by the device firmware and is never validated,\nand the subtraction is unchecked.  assoc_req_ies points into\nadapter->event_body[MAX_EVENT_SIZE], a fixed-size array embedded in the\nkmalloc()'d struct mwifiex_adapter.\n\nOn the ap_11n_enabled path mwifiex_set_sta_ht_cap() walks these IEs with\ncfg80211_find_ie(), whose for_each_element() loop dereferences each\nelement header.  A firmware-reported event->len larger than the bytes\nactually received makes assoc_req_ies_len describe IEs that extend past\nevent_body, so the walk reads out of the adapter slab object, a\nslab-out-of-bounds read (KASAN: slab-out-of-bounds in cfg80211_find_ie).\nAn event->len smaller than the header instead makes the int subtraction\nnegative, which wraps to a huge size_t when stored in assoc_req_ies_len.\nThe same length is handed to cfg80211_new_sta(), so a more modest\nover-claim can also copy stale event_body bytes into the\nNL80211_CMD_NEW_STATION notification.\n\nA malicious or malfunctioning mwifiex device (USB/SDIO/PCIe) can deliver\nsuch an event while the interface is in AP/uAP mode.\n\nValidate event->len before use: reject a length that underflows the\nheader or that would place the IEs outside the event_body[] buffer the\nevent was copied into.  event->len here is struct mwifiex_assoc_event.len,\na payload field internal to this event, not the transport frame length,\nso it is validated in this handler rather than at the generic\nMWIFIEX_TYPE_EVENT receive path, which only sees the event cause and the\ntransport frame length.  The bound is against event_body[MAX_EVENT_SIZE]\nrather than the actually-received length because the transports store the\nevent differently (USB and SDIO leave the 4-byte event header in\nevent_skb, PCIe strips it via skb_pull), whereas event_body is the single\nfixed buffer all of them copy the event into.  This is the event-path\nanalogue of the receive-path bounds checks added in commit 119585281617\n(\"wifi: mwifiex: Fix OOB and integer underflow when rx packets\").",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-68328": {
                 "cve_id": "CVE-2026-68328",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -69594,19 +69659,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbinfmt_misc: restore write access when removing an entry\n\nRegistering an entry with the MISC_FMT_OPEN_FILE flag opens the\ninterpreter via open_exec() which denies write access to it for as\nlong as the entry exists. Removing the entry closes the interpreter\nfile via filp_close() but never restores write access, leaving the\ninode's i_writecount permanently negative. Opening the interpreter\nfor writing keeps failing with ETXTBSY long after the entry is gone\nuntil the inode is evicted from the inode cache.\n\nCommit 90f601b497d7 (\"binfmt_misc: restore write access before\nclosing files opened by open_exec()\") fixed the same imbalance in the\nerror path of bm_register_write() but the actual removal path has\nbeen leaking the write denial since the introduction of the flag.\n\nRestore write access in put_binfmt_handler() before closing the\ninterpreter file.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-74488": {
-                "cve_id": "CVE-2026-74488",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nwifi: mwifiex: use the subframe length when parsing A-MSDU TDLS frames\n\nmwifiex_11n_dispatch_amsdu_pkt() splits an A-MSDU with\nieee80211_amsdu_to_8023s() and walks the resulting subframes. For each\nsubframe it passes the subframe data pointer to\nmwifiex_process_tdls_action_frame(), but pairs it with skb->len, the\nlength of the A-MSDU parent, instead of rx_skb->len:\n\n\trx_skb = __skb_dequeue(&list);\n\trx_hdr = (struct rx_packet_hdr *)rx_skb->data;\n\tif (ISSUPP_TDLS_ENABLED(priv->adapter->fw_cap_info) &&\n\t    ntohs(rx_hdr->eth803_hdr.h_proto) == ETH_P_TDLS) {\n\t\tmwifiex_process_tdls_action_frame(priv, (u8 *)rx_hdr,\n\t\t\t\t\t\t  skb->len);\n\t}\n\nThe parent is not a valid description of that buffer, and may not be\nvalid memory at all. ieee80211_amsdu_to_8023s() ends with\n\n\tif (!reuse_skb)\n\t\tdev_kfree_skb(skb);\n\nand it only sets reuse_skb when the parent is linear, is not a\nhead_frag, and is being consumed as the *last* subframe. So when the\nparent does not qualify for reuse it has already been freed, and the\nread of skb->len is a use-after-free. When it is reused, skb->len is\nthe length of the last subframe, applied to every earlier subframe,\nwhich over-states the buffer whenever an earlier subframe is shorter.\n\nThe callee cannot absorb a wrong length, because it derives its own\nceiling from the value it is given. Each frame type computes\n\n\ties_len = len - sizeof(struct ethhdr) - TDLS_*_FIX_LEN;\n\nand the element walk is then bounded entirely against that ceiling,\n\n\tfor (end = pos + ies_len; pos + 1 < end; pos += 2 + pos[1]) {\n\t\tu8 ie_len = pos[1];\n\n\t\tif (pos + 2 + ie_len > end)\n\t\t\tbreak;\n\nso a too-large len moves end past the end of the subframe and the walk\nreads and copies beyond it. The A-MSDU layout is chosen by the sender,\nwhich makes the difference between the last subframe and a shorter\nearlier one remotely selectable. Reaching this requires TDLS support in\nfirmware and the TDLS ethertype on the subframe.\n\nThe other caller, mwifiex_process_rx_packet(), is correct: it passes a\npointer and a length that describe the same region of the RX buffer.\n\nPass rx_skb->len, the length of the subframe actually being parsed.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -78144,19 +78196,6 @@
                     }
                 ]
             },
-            "CVE-2026-89965": {
-                "cve_id": "CVE-2026-89965",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnvdimm/btt: reject an arena whose nfree is below the lane count\n\nThe BTT info block's nfree field, the number of reserve free blocks, is\nread from the medium without validation.  btt_freelist_init() and\nbtt_rtt_init() size the per-lane freelist[] and rtt[] arrays by nfree,\nbut the I/O path indexes them by the lane from nd_region_acquire_lane(),\nwhich is bounded by nd_region->num_lanes (ND_MAX_LANES), not by nfree.\nA crafted or foreign arena whose nfree is below the lane count makes\nfreelist[lane]/rtt[lane] run past the allocation: an out-of-bounds write.\n\nbtt.rst documents the nlanes = min(nfree, num_cpus) invariant, which the\ncode does not currently honor: num_lanes is ND_MAX_LANES regardless of\nnfree.  Reject an arena whose nfree is below num_lanes at discovery,\nbefore the per-lane arrays are allocated, enforcing that invariant.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-89968": {
                 "cve_id": "CVE-2026-89968",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -78709,19 +78748,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: atm: usbatm: fix invalid ci_range initialization\n\nsyzbot reported a shift-out-of-bounds in __vcc_connect():\n\n  UBSAN: shift-out-of-bounds in net/atm/common.c:382:32\n  shift exponent -1 is negative\n  CPU: 0 UID: 0 PID: 5987 Comm: syz.0.18 Not tainted syzkaller #0 PREEMPT(full)\n  Hardware name: Google Compute Engine/Google Compute Engine, BIOS Google 08/05/2026\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0xe8/0x150 lib/dump_stack.c:120\n   ubsan_epilogue+0xa/0x30 lib/ubsan.c:233\n   __ubsan_handle_shift_out_of_bounds+0x36d/0x400 lib/ubsan.c:494\n   __vcc_connect+0x14b4/0x19c0 net/atm/common.c:382\n   vcc_connect+0x328/0x8f0 net/atm/common.c:498\n   pvc_bind+0x272/0x380 net/atm/pvc.c:52\n   __sys_bind+0x2e3/0x410 net/socket.c:1976\n   __x64_sys_bind+0x7a/0x90 net/socket.c:1979\n   ...\n\nATM device ci_range fields (vpi_bits and vci_bits) represent the\nnumber of bits supported for VPI and VCI addressing on the device.\nnet/atm/common.c directly uses these fields as bit shift counts:\n  vpi >> dev->ci_range.vpi_bits\n  vci >> dev->ci_range.vci_bits\n  1 << vcc->dev->ci_range.vpi_bits\n  1 << vcc->dev->ci_range.vci_bits\n\nusbatm_atm_init() sets ci_range.vpi_bits and ci_range.vci_bits to\nATM_CI_MAX (-1), which is defined in <uapi/linux/atmdev.h> as a\nsentinel value for userspace ATM_SETCIRANGE requests, not a valid bit\ncount. Shifting by -1 is undefined behavior and triggers UBSAN\nwarnings.\n\nATM UNI cell headers allow up to 8 bits for VPI (0..255) and 16 bits\nfor VCI (0..65535). Initialize vpi_bits to 8 and vci_bits to 16, as\ndone by solos-pci.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-90057": {
-                "cve_id": "CVE-2026-90057",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nslip: remove slip_hangup() to fix use-after-free in slip_receive_buf()\n\nJaeyoung Chung and Eulgyu Kim reported a slab-use-after-free read\nin slip_receive_buf() when racing against tty hangup.\n\ntty_ldisc_hangup() calls ld->ops->hangup() while holding only\na read lock on tty->ldisc_sem (via tty_ldisc_ref()).\nBecause slip_hangup() simply called slip_close(), it ran concurrently\nwith reader functions such as slip_receive_buf().\n\nslip_close() unregisters and frees the net device and its private\nstruct slip, causing concurrent reader threads in slip_receive_buf()\nto dereference freed memory.\n\nLine discipline close() is already guaranteed to be called under\nthe write lock of tty->ldisc_sem during hangup processing\n(in tty_ldisc_reinit() or tty_ldisc_kill()).\n\nRemove slip_hangup() so teardown is serialized cleanly by slip_close().",
-                "severity": "MEDIUM",
                 "status": "open",
                 "events": [
                     {
@@ -87388,19 +87414,6 @@
                     }
                 ]
             },
-            "CVE-2026-98323": {
-                "cve_id": "CVE-2026-98323",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/siw: Bound fragmented header copies by the remaining length\n\nsiw_get_hdr() can receive an extended DDP/RDMAP header across more than\none TCP callback. The first callback may receive most of the header,\nwhile the next one still limits the copy to hdrlen - MIN_DDP_HDR instead\nof the number of missing bytes. This makes the destination move past the\nend of the header and overwrite the receive state, including\nfpdu_part_rcvd. A later callback can then use a negative fpdu_part_rcvd\nvalue as a copy offset, which creates an OOB write.\n\nUse the number of header bytes already received when calculating the\nnext copy length.",
-                "severity": "HIGH",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-98325": {
                 "cve_id": "CVE-2026-98325",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -92528,19 +92541,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndm ioctl: don't let data_start run past the buffer\n\nstruct dm_ioctl has seven bytes of trailing padding, so the smallest\nbuffer userspace is allowed to ask for, offsetof(struct dm_ioctl, data),\nis seven bytes shorter than sizeof(struct dm_ioctl).\n\nget_result_buffer() sets data_start to sizeof(struct dm_ioctl) without\nlooking at how big the buffer actually is. Ask for the minimum and\ndata_start ends up seven bytes past the end. Callers add it to\ndata_size, and ctl_ioctl() copies that much back to userspace:\n\n  BUG: KASAN: slab-out-of-bounds in _copy_to_user+0xad/0xd0\n  Read of size 312 at addr ffff8880169e4c00 by task repro-dm/140\n   ctl_ioctl+0x5e3/0xcb0\n   dm_ctl_ioctl+0x25/0x40\n  allocated 305-byte region [ffff8880169e4c00, ffff8880169e4d31)\n\nA DM_LIST_DEVICES with data_size set to 305 is enough to hit it, and the\nseven bytes that leak are whatever sat next to the allocation.\n\nClamp data_start to the buffer size.\n\nNote that this is not a security bug because the out-of-bounds read can\nonly be triggered by root.",
                 "severity": "LOW",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
-            "CVE-2026-99064": {
-                "cve_id": "CVE-2026-99064",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ncipso: adjust cached option offsets when removing CIPSO\n\ncipso_v4_skbuff_delattr() removes the CIPSO bytes but does not adjust\ncached offsets for options that follow them.\n\nFor example, with a valid 10-byte CIPSO option followed by a seven-byte\nRR option, parsing records rr at offset 30.  Removing CIPSO moves RR to\noffset 20, while the cached offset remains 30.  Consumers such as\nip_forward_options() and __ip_options_echo() then access the wrong bytes;\nthe latter may interpret packet data as the option length and copy it into\nfixed-size option storage.\n\nMirror cipso_v4_delopt() and subtract cipso_len from the srr, rr, ts and\nrouter_alert offsets when they follow CIPSO.  cipso_len is the distance\nthe first memmove() shifts those options.  The later header move and\nnetwork-header reset relocate the bytes and their offset base together.",
-                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
