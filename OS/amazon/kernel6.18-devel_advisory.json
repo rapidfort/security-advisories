@@ -32766,7 +32766,7 @@
                 "cve_id": "CVE-2026-97477",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nRDMA/counter: Fix num_counters leak on bind_qp failure in alloc_and_bind()\n\nWhen __rdma_counter_bind_qp() fails in alloc_and_bind(), the error path\njumps to err_mode which frees the counter without decrementing\nport_counter->num_counters. The only place that decrements is\nrdma_counter_free(), which is unreachable since the counter was never\nsuccessfully bound.\n\nThis leak accumulates across repeated failures, permanently preventing\nthe port from switching to AUTO mode (-EBUSY in __counter_set_mode())\nand blocking the MANUAL\u2192NONE auto-revert in rdma_counter_free(). When\nthe mode was NONE before the call, the MANUAL mode set by\n__counter_set_mode() also leaks since the revert logic is never\nreached.\n\nAdd an err_bind label between the num_counters increment and the\nexisting err_mode label. It decrements num_counters and mirrors the\nMANUAL\u2192NONE revert from rdma_counter_free(), ensuring the port state\nis fully restored on bind failure.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32780,7 +32780,7 @@
                 "cve_id": "CVE-2026-97479",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ndriver core: Avoid warning when removing a device while its supplier is unbinding\n\nDuring driver removal, the following warning can appear:\n   WARNING: CPU: 1 PID: 139 at drivers/base/core.c:1497 __device_links_no_driver+0xcc/0xfc\n   ...\n   Call trace:\n     __device_links_no_driver+0xcc/0xfc (P)\n     device_links_driver_cleanup+0xa8/0xf0\n     device_release_driver_internal+0x208/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     device_links_unbind_consumers+0xe0/0x108\n     device_release_driver_internal+0xec/0x23c\n     driver_detach+0xa0/0x12c\n     bus_remove_driver+0x6c/0xbc\n     driver_unregister+0x30/0x60\n     pci_unregister_driver+0x20/0x9c\n     lan966x_pci_driver_exit+0x18/0xa90 [lan966x_pci]\n\nThis warning is triggered when a consumer is removed because the links\nstatus of its supplier is not DL_DEV_DRIVER_BOUND and the link flag\nDL_FLAG_SYNC_STATE_ONLY is not set.\n\nThe topology in terms of consumers/suppliers used was the following\n(consumer ---> supplier):\n\n      i2c -----------> OIC ----> PCI device\n       |                ^\n       |                |\n       +---> pinctrl ---+\n\nWhen the PCI device is removed, the OIC (interrupt controller) has to be\nremoved. In order to remove the OIC, pinctrl and i2c need to be removed\nand to remove pinctrl, i2c need to be removed. The removal order is:\n  1) i2c\n  2) pinctrl\n  3) OIC\n  4) PCI device\n\nIn details, the removal sequence is the following (with 0000:01:00.0 the\nPCI device):\n  driver_detach: call device_release_driver_internal(0000:01:00.0)...\n    device_links_busy(0000:01:00.0):\n      links->status = DL_DEV_UNBINDING\n    device_links_unbind_consumers(0000:01:00.0):\n      0000:01:00.0--oic link->status = DL_STATE_SUPPLIER_UNBIND\n      call device_release_driver_internal(oic)...\n        device_links_busy(oic):\n          links->status = DL_DEV_UNBINDING\n        device_links_unbind_consumers(oic):\n          oic--pinctrl link->status = DL_STATE_SUPPLIER_UNBIND\n          call device_release_driver_internal(pinctrl)...\n            device_links_busy(pinctrl):\n              links->status = DL_DEV_UNBINDING\n            device_links_unbind_consumers(pinctrl):\n              pinctrl--i2c link->status = DL_STATE_SUPPLIER_UNBIND\n              call device_release_driver_internal(i2c)...\n                device_links_busy(i2c): links->status = DL_DEV_UNBINDING\n                __device_links_no_driver(i2c)...\n                  pinctrl--i2c link->status is DL_STATE_SUPPLIER_UNBIND\n                  oic--i2c link->status is DL_STATE_ACTIVE\n                  oic--i2c link->supplier->links.status is DL_DEV_UNBINDING\n\nThe warning is triggered by the i2c removal because the OIC (supplier)\nlinks status is not DL_DEV_DRIVER_BOUND. Its links status is indeed set\nto DL_DEV_UNBINDING.\n\nIt is perfectly legit to have the links status set to DL_DEV_UNBINDING\nin that case. Indeed we had started to unbind the OIC which triggered\nthe consumer unbinding and didn't finish yet when the i2c is unbound.\n\nAvoid the warning when the supplier links status is set to\nDL_DEV_UNBINDING and thus support this removal sequence without any\nwarnings.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32794,7 +32794,7 @@
                 "cve_id": "CVE-2026-97480",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ntty: serial: 8250: protect against NULL uart->port.dev in register\n\nserial8250_register_8250_port() conditionally copies uart->port.dev\nfrom up->port.dev only when up->port.dev is non-NULL:\n\n\tif (up->port.dev) {\n\t\tuart->port.dev = up->port.dev;\n\t\t...\n\t}\n\nSo if both the existing uart slot and up have a NULL ->dev,\nuart->port.dev remains NULL. The very next ACPI companion check\nthen dereferences it unconditionally:\n\n\tif (!has_acpi_companion(uart->port.dev)) {\n\nhas_acpi_companion() reads dev->fwnode without a NULL guard\n(include/linux/acpi.h), so this NULL-derefs the kernel for the\nremaining no-dev case rather than just skipping the\nmctrl_gpio_init() initialisation as intended.\n\nsmatch flags the inconsistency:\n\n  drivers/tty/serial/8250/8250_core.c:767\n  serial8250_register_8250_port() error: 'uart->port.dev' could be\n  null (see line 719)\n\nGuard the call with a NULL check so register continues to work\nfor callers that legitimately have no parent device (legacy\nnon-OF/non-ACPI registrations).\n\nNo functional change for callers that pass a non-NULL ->dev.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32808,7 +32808,7 @@
                 "cve_id": "CVE-2026-97481",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nserial: 8250: fix possible ISR soft lockup\n\nThere are rare cases in which the host gets stuck in the ISR because it\nis flooded with messages during the startup phase.\n\nThe reason for the soft lockup in the ISR is the missing FIFO error IRQ\n(FIFOE) handling. Not handling it and reporting IRQ_HANDLED triggers\nthe IRQ immediately again.\n\nFix this by adding a check for the FIFOE status and clearing the FIFO\nif no data is ready (DR).\n\nThis behavior was observed on an AM62L device which uses the OMAP 8250\ndriver. Fix it for all 8250 drivers, since the OMAP driver's special\nIRQ setup handling may trigger this behavior more frequently, but it\nis not ensured that other 8250 drivers aren't affected.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32822,7 +32822,7 @@
                 "cve_id": "CVE-2026-97483",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusb: core: hcd: fix possible deadlock in rh control transfers\n\n>From within the SCSI error handler memory allocations must not\ntrigger IO. Handling errors in UAS and the storage driver may\ninvolve resetting a device. The thread doing the reset itself\nrelies on VM magic. However, that is insufficient, as resetting\na device involves resuming it. Resumption as well as resetting\ninvolves conrol transfers to the parent of the device to be reset.\nThat may be a root hub. Hence usbcore must heed the flags passed\nto usb_submit_urb() processing control transfers to root hubs.\n\nThe problem exist since the storage driver has been merged.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32836,7 +32836,7 @@
                 "cve_id": "CVE-2026-97484",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nusbip: vhci_hcd: fix NULL deref in status_show_vhci\n\nplatform_get_drvdata() can return NULL if a VHCI host controller's\nprobe failed (e.g. due to USB bus number exhaustion). status_show_vhci()\nchecked for a NULL pdev but not for a NULL hcd returned by\nplatform_get_drvdata(). Passing NULL to hcd_to_vhci_hcd() does not\nreturn NULL - it returns a pointer offset of 0x260, causing a NULL\npointer dereference when that value is subsequently dereferenced.\n\nAdd a NULL check on hcd before calling hcd_to_vhci_hcd(). Move\nstatus_show_not_ready() above status_show_vhci() to make it callable\nfrom the new error path without a forward declaration.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32850,7 +32850,7 @@
                 "cve_id": "CVE-2026-97503",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ngenirq/proc: Size interrupt directory names for 10-digit interrupt numbers\n\n/proc/irq/<n>/ directory names are built in `char name[10]` buffers\nwith `sprintf(name, \"%u\", irq)`.\n\nTen-digit IRQ numbers already need 11 bytes including the trailing NUL, and\ncurrent sparse-IRQ configurations allow interrupt numbers in that range.\n\nSize the temporary name buffer for the current decimal form and switch\nto bounded formatting when creating or removing the proc entry.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32864,7 +32864,7 @@
                 "cve_id": "CVE-2026-97505",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nPCI/sysfs: Add CAP_SYS_ADMIN check to __resource_resize_store()\n\nCurrently, the __resource_resize_store() allows writing to the\nresourceN_resize sysfs attribute to change a BAR's size without checking\nfor capabilities, currently relying only on the file access check.\n\nResizing a BAR modifies PCI device configuration and can disrupt active\ndrivers.  After the upcoming conversion to static attributes, it will also\ntrigger resource file updates via sysfs_update_groups().\n\nAdd a CAP_SYS_ADMIN check to prevent unprivileged users from performing BAR\nresize operations.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32878,7 +32878,7 @@
                 "cve_id": "CVE-2026-97522",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nmptcp: fix bad accounting in __mptcp_subflow_push_pending()\n\nIf __subflow_push_pending() errors out we should avoid updating the\ncopied byte counters, to avoid mismatch push call later on.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32934,7 +32934,7 @@
                 "cve_id": "CVE-2026-97533",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nx86/mm/pat: Acquire init_mm read lock on attribute changes to avoid UAF\n\nA previous commit protected against races between ptdump and CPA collapse,\nhowever one still exists between attribute changes and collapse as reported\nby Denis V. Lunev (linked).\n\nWhen an attribute change arises, a lockless page table walker obtains a PTE\nentry, which is later written to via set_pte_atomic():\n\n  ...\n  -> change_page_attr_set_clr()\n  -> __change_page_attr_set_clr()\n  -> __change_page_attr()\n\t-> _lookup_address_cpa()\n\t-> lookup_address_in_pgd_attr()\n\t-> [ lockless page table walker ]\n  -> set_pte_atomic()\n\nThere is nothing preventing a concurrent CPA collapse which can free the\nPTE that was retrieved here, resulting in a use-after-free.\n\nWith the mmap write lock taken on init_mm over CPA collapse, resolve this\nrace by acquiring an mmap read lock on init_mm over\n__change_page_attr_set_clr().\n\nThis locks across the whole operation over which the walk and the PTE\nentry write occurs, solving the race.\n\nIt is safe to do this here, as no spinlocks are held upon entry to\n__change_page_attr_set_clr().\n\nHowever, the lock must not be held over an allocation, as allocation can\ntrigger reclaim and shrinkers may call into CPA recursively, making\ndeadlocks possible (init_mm -> ... -> fs_reclaim -> init_mm).\n\nA page table is allocated when a huge page needs to be split:\n\n  -> change_page_attr_set_clr()\n  -> __change_page_attr_set_clr()\n  -> __change_page_attr()\n  -> split_large_page()\n  [ pagetable_alloc() ]\n  -> __split_large_page()\n\nAvoid deadlocks by dropping the mmap lock across pagetable_alloc() in\nsplit_large_page() and track whether this is needed by adding a new\n'init_mm_read_locked' flag to struct cpa_data.\n\nThis is safe as __split_large_page() (called with locks re-established)\nrevalidates that the page table entry is the same as it was prior to the\nlocks being dropped and __change_page_attr() repeats the entire page table\nwalk whenever a split occurs, so concurrent split and collapse are\naccounted for.\n\nConcurrent ptdump is also safe as the lock is only dropped over page table\nallocation during which time the page table has not yet been modified.\n\nThe CPA_COLLAPSE flag is only set by set_memory_rox(), which exclusively\noperates upon vmalloc ranges, and on x86 only within the module mapping\nspace.\n\nThis is important, because some callers directly invoke\n__change_page_attr_set_clr(), bypassing this lock. However, none of these\noperate within the module mapping space.\n\n  * cpa_process_alias() - a recursive helper called by\n    __change_page_attr_set_clr().\n  * __set_memory_enc_pgtable() - operates on the direct mapping and (via\n    __vmbus_establish_gpadl()) the vmalloc mapping space.\n  * __set_pages_[n]p() - called by set_direct_map_[invalid, default,\n    valid]_noflush(), __kernel_map_pages() - operates on the direct map.\n  * kernel_[un]map_pages_in_pgd() - operates on EFI ranges.\n\nThis work is based upon Denis V. Lunev's excellent analysis of the bug\nwith gratitude.\n\n[ dhansen: move to imperative voice in changelog ]",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32948,7 +32948,7 @@
                 "cve_id": "CVE-2026-97547",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: fix exchange-range reflink flag clearing issue with INO1_WRITTEN\n\nWhen exchanging two full-file ranges, xmi_can_exchange_reflink_flags()\ncan move the reflink inode flag from the file that currently has it to\nthe other file, as long as exactly one side is marked.  This assumes\nthat the file contents, and therefore all shared extents, are exchanged.\n\nThat assumption is not true when XFS_EXCHMAPS_INO1_WRITTEN is set.\nxfs_exchmaps_can_skip_mapping() can skip hole and unwritten mappings\nfrom file1, so an exchange can complete without moving every mapping\nthat the earlier flag-swap decision accounted for.  In that case the\npost-operation cleanup can clear the reflink flag from an inode that\nstill owns shared written extents.  Later writes then take the\nnon-reflink write path and may update blocks that should still have\nbeen protected by CoW, which shows up as data corruption between\nreflink-related files.\n\nFix this by disabling the reflink flag exchange whenever\nXFS_EXCHMAPS_INO1_WRITTEN is requested.  The contents exchange can still\nproceed; the conservative outcome is that both inodes keep the reflink\nflag.  The regular reflink flag cleanup path can drop the extra flag\nlater once the inode no longer has shared extents.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32962,7 +32962,7 @@
                 "cve_id": "CVE-2026-97551",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nxfs: initialise args->total for parent pointer updates\n\nxfs_parent_da_args_init() builds an xfs_da_args from a zeroed\nxfs_parent_args (kmem_cache_zalloc), leaving args->total == 0.\nxfs_da_grow_inode_int() treats that field as a running block reservation\nand subtracts from it; because it is an xfs_extlen_t (uint32_t), the\nfirst attr-fork growth wraps it to ~0U.  That defeats the free-space\ncheck in xfs_alloc_space_available(), and when it coincides with an AG\nthat has exactly zero available blocks the allocation is clamped to\nmaxlen 0 and returns -ENOSPC, which xfs_defer_finish_noroll() escalates\nto a filesystem shutdown.\n\nSet args->total the way the log recovery path does\n(xfs_attri_recover_work(), xfs_attr_item.c:706), in the add and replace\npaths that can grow the fork.  Removals and lookups never grow it, so\nthey leave the field alone, matching that switch.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -32990,7 +32990,7 @@
                 "cve_id": "CVE-2026-97556",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: avoid leaking refcount when cifs_sb_tlink() fails\n\ncifs_oplock_break() takes over the reference that\ncifs_queue_oplock_break() acquired when it queued the work, and drops it\nwith _cifsFileInfo_put() once the break has been processed.\n\nOnly in setups with \"-o multiuser\", cifs_sb_tlink() may fail, at which\npoint cifs_oplock_break() returns without putting the file reference,\nmirroring the reference leak we already fixed in the companion patch to\ncifs_queue_oplock_break().\n\nThis would trigger a crash due to busy inodes on the next unmount:\n\n  BUG: Dentry ... still in use (1) [unmount of cifs cifs]\n  VFS: Busy inodes after unmount of cifs (cifs)\n\nDrop the reference on that path as well. Doing so before the out label\nmirrors the normal path, which also puts the reference before\ncifs_done_oplock_break().\n\nFound by Sashiko code review. The failure path was not exercised at\nruntime.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33018,7 +33018,7 @@
                 "cve_id": "CVE-2026-97558",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix cifsFileInfo reference leak in deferred close\n\nWhen cifs_close() defers a close, it hands the cifsFileInfo reference\nof the closing struct file to the queued work. Each execution of\nsmb2_deferred_work_close() drops one such reference.\n\ndeferred_close_scheduled can be false while the work is pending: the\nworkqueue clears PENDING when the callback starts to run, before the\ncallback clears the flag under deferred_lock. A close in that\ninterval requeues the running work, and the callback then clears the\nflag, leaving the requeued work pending with the flag down. A later\ncifs_open() can reuse the handle and its cifs_close() reaches the\nsame branch: queue_delayed_work() fails because the work is still\npending, but cifs_close() returns without dropping the closing file's\nreference. The cifsFileInfo count stays pinned and its tlink, dentry\nand server handle are leaked.\n\nCheck the return value and hand off the reference only when work was\nactually queued. Otherwise, use the shared _cifsFileInfo_put(), like\nthe mod_delayed_work() branch above: the pending execution already\nowns its reference.\n\nThis issue was found by an in-house static analysis tool.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33032,7 +33032,7 @@
                 "cve_id": "CVE-2026-97559",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fail DACL rewrite when the new DACL exceeds 64K\n\nreplace_sids_and_copy_aces() and set_chmod_dacl() accumulate the size of\nthe DACL they build in a u16. That accumulator can wrap.\n\nvalidate_dacl() caps num_aces at (dacl_size - sizeof(struct smb_acl)) /\n20, i.e. 3276 for a maximally sized DACL, while each rewritten ACE can\ngrow to sizeof(struct smb_ace) (76 bytes) once its SID is replaced with\none carrying SID_MAX_SUB_AUTHORITIES sub-authorities. The worst case is\ntherefore sizeof(struct smb_acl) + 3276 * 76 = 248984 bytes, far beyond\nwhat a u16 can hold. A wraparound is reached with 863 ACEs.\n\nAfter the wraparound, ndacl_ptr->size becomes meaningless and the offset\nwill point anywhere in the ACE array. As a result, we will see\ncorruption of the DACL, which then gets sent to the server. This is not\nan out-of-bounds write as the allocation now covers the worst-case\nexpansion, so writes will always go into the buffer.\n\nAdjust the code to use a u32 internally and return -EOVERFLOW in the\noverflow case. The operation must be refused, because a DACL can only\nhold 2^16-1 bytes on the wire and larger DACLs cannot be represented.\n\nset_chmod_dacl() carries the same pattern and is fixed the same way. It\nonly wraps once the source DACL comes within roughly 380 bytes of the\n64K ceiling, but the failure mode is identical.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33046,7 +33046,7 @@
                 "cve_id": "CVE-2026-97560",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: fix one-byte OOB read in smb2_parse_native_symlink()\n\nWhen parsing a share-root relative native symlink, memcpy copies\nsmb_target+1 (skipping the leading separator) but uses\nstrlen(smb_target)+1 as the length, reading one byte past the\nallocated buffer.\n\nThis fixes the following KASAN splat when accessing an SMB symlink\nwith a target of '\\a\\b':\n\n  BUG: KASAN: slab-out-of-bounds in smb2_parse_native_symlink+0x4f5/0xca0\n  Read of size 5 at addr ffff88800878fe21 by task netfsfuzz-execu/1\n  CPU: 1 UID: 0 PID: 1 Comm: netfsfuzz-execu Tainted: G N\n  7.2.0-11943-g2709dd5ae32f-dirty #1 PREEMPT(lazy)\n  Hardware name: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix,\n  1996)\n  Call Trace:\n   <TASK>\n   dump_stack_lvl+0x7b/0xa0\n   print_report+0xd0/0x630\n   kasan_report+0xe5/0x120\n   kasan_check_range+0x105/0x1b0\n   __asan_memcpy+0x23/0x60\n   smb2_parse_native_symlink+0x4f5/0xca0\n   parse_reparse_point+0x68a/0x1530\n   reparse_info_to_fattr+0x752/0xa20\n   cifs_get_fattr+0x873/0x15b0\n   cifs_get_inode_info+0xc0/0x310\n   cifs_lookup+0x308/0xa70\n   __lookup_slow+0x122/0x2b0\n   lookup_slow+0x50/0x70\n   path_lookupat+0x525/0xaf0\n   filename_lookup+0x1f2/0x550\n   vfs_statx+0xd1/0x1a0\n   vfs_fstatat+0x65/0xc0\n   __do_sys_newfstatat+0x9a/0x120\n   do_syscall_64+0xdd/0x4a0\n   entry_SYSCALL_64_after_hwframe+0x77/0x7f",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -33074,7 +33074,7 @@
                 "cve_id": "CVE-2026-97563",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nsmb: client: reject out-of-bounds DataOffset in CIFSSMBRead()\n\nThe SMB1 synchronous read helper CIFSSMBRead() validates the server's\nDataLength against CIFSMaxBufSize and the caller's count, but never\nvalidates DataOffset. The copy source is formed as\n\n\t&pSMBr->hdr.Protocol + le16_to_cpu(pSMBr->DataOffset)\n\nand memcpy()'d for DataLength bytes with no check that the\n[DataOffset, DataOffset + DataLength) range lies within the response\nactually received from the server.\n\nA malicious or compromised SMB1 server can return a response carrying\nan in-range DataLength and a large DataOffset, driving the source\npointer past the end of the response buffer. The memcpy() then copies\nadjacent kernel heap into the caller's read buffer (information\ndisclosure), or reads unmapped memory and oopses (denial of service).\nSMB1 is not negotiated by default; reaching this code requires an\nexplicit vers=1.0 mount.\n\nBoth DataOffset and the received response length recorded in\nrsp_iov.iov_len are relative to the start of the SMB header, so reject\nthe response unless DataOffset + DataLength fits within that length,\nusing overflow-safe arithmetic, before forming the source pointer.\nThe response length has been validated by the previous patch, so the\nDataOffset and DataLength fields can be read safely here.\n\nWhile here, make data_length unsigned. It holds a length derived from\nunsigned on-the-wire fields and is only ever compared against unsigned\nquantities; print it with %u accordingly, and add __func__ to the\ncifs_dbg() calls in this function.",
-                "severity": "UNKNOWN",
+                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
