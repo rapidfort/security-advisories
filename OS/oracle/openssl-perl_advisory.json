@@ -754,7 +754,7 @@
             "CVE-2026-107494": {
                 "cve_id": "CVE-2026-107494",
                 "title": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame ...",
-                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\nThis allows a malicious remote QUIC stack to trigger an out-of-memory (OOM)\ncondition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
+                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\n\nThis issue allows a malicious remote QUIC stack to trigger an unbounded\nallocation of memory and eventually an out-of-memory (OOM) condition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -776,6 +776,20 @@
                         "introduced": "0",
                         "identifier": "el9"
                     },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-121482": {
+                "cve_id": "CVE-2026-121482",
+                "title": "Issue summary: Verifying a maliciously crafted CMS or PKCS#7 Sign ...",
+                "description": "Issue summary: Verifying a maliciously crafted CMS or PKCS#7 SignedData\nmessage with CRL checking enabled may consume excessive CPU time, growing with\nthe square of the message size.\n\nImpact summary: An attacker who can submit a CMS or PKCS#7 SignedData message\nto an application that verifies it with CRL checking enabled can occupy a CPU\ncore for seconds to minutes, causing Denial of Service. Applications that\nleave CRL checking disabled are not affected.\n\nCWE: CWE-407: Inefficient Algorithmic Complexity\n\nDescription: With CRL checking enabled, OpenSSL compares each CRL distribution\npoint of a certificate against the issuing distribution point of every\ncandidate CRL. For a nameRelativeToCRLIssuer distribution point, the full name\nis the CRL issuer name with the relative name appended. Since the change that\ndeferred this computation, crl_crldp_check() rebuilds that full name for each\ncandidate CRL and frees it again.\n\nCMS_verify() and PKCS7_verify() take both the distribution points and the\ncandidate CRLs from the message, and this scoring runs before any signature is\nchecked. An application is exposed only if it sets X509_V_FLAG_CRL_CHECK on\nthe store and does not pass CMS_NOCRL or PKCS7_NOCRL; CRL checking is off by\ndefault. In TLS the CRLs come from the local store, so a peer controls only\nthe distribution point count.\n\nThe cost grows with the product of the distribution point count, the CRL count\nand the issuer name length, all chosen by the message author; a few hundred\nkilobytes can occupy a CPU core for tens of seconds. Verification still fails\nas it should, with no crash, no incorrect result and no memory growth.\nRequiring CRL checking is what limits the severity.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
                     {
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
@@ -1113,6 +1127,20 @@
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
                         "fixed": "1:3.5.9-1.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-35190": {
+                "cve_id": "CVE-2026-35190",
+                "title": "Issue summary: A server configured with the Suite B certificate f ...",
+                "description": "Issue summary: A server configured with the Suite B certificate flag through\nSSL_CTX_set_cert_flags() and with TLS 1.3 enabled may read past the end of a\nfixed group list when it processes a ClientHello whose supported_groups and\nkey_share contain no Suite B group.\n\nImpact summary: A remote client can send a ClientHello that makes the server\nread past the end of a static array. The values read are never returned to the\nclient, so no memory is disclosed; on builds with sanitizers or hardened\nallocators the read may crash the process, causing Denial of Service.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: When the Suite B certificate flag is set, OpenSSL restricts the\naccepted groups to P-256 and P-384 by substituting a fixed two-element list\nfor the configured group list. The tuple machinery used for key-share\nselection was not updated for this substitution: tls1_get_group_tuples() still\nreturns the configured tuples, which by default describe eight groups. The\nserver-side walk in tls_parse_ctos_key_share() then advances through the\ntwo-element list using those tuple counts without checking the cumulative\noffset against the number of groups present.\n\nOnly applications that call SSL_CTX_set_cert_flags() with\nSSL_CERT_FLAG_SUITEB_128_LOS and leave TLS 1.3 enabled are affected. The\nopenssl s_server -suiteB_128 option sets an X.509 verification parameter\ninstead, so the stock command line server is not vulnerable. Default\nconfigurations do not reach this code.\n\nA client that offers only groups outside the Suite B set, such as X25519,\nforces every tuple to be walked and the read to run past the array. The bytes\nread are compared against client group IDs and never sent back, so no memory\nis disclosed. On builds with address sanitizers or hardened allocators the\nread can abort the process; in ordinary release builds it reads a few bytes of\nadjacent constant data.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
                     }
                 ]
             },
@@ -1749,6 +1777,34 @@
                     }
                 ]
             },
+            "CVE-2026-95691": {
+                "cve_id": "CVE-2026-95691",
+                "title": "Issue summary: A retransmitted QUIC CRYPTO frame can release pack ...",
+                "description": "Issue summary: A retransmitted QUIC CRYPTO frame can release packet storage\nwhile the TLS record layer retains a direct pointer into that storage causing\nuse after free.\n\nImpact summary: A malicious QUIC server can cause a heap-use-after-free read\nin the OpenSSL QUIC client. The server can also identify one allocator-adjacent\nbyte through the client's protected Handshake response.\n\nCWE: CWE-416: Use After Free\n\nDescription: During CRYPTO stream processing, a pointer into the first frame's\nmemory on the stream is lent to the TLS handshake processing. The memory\nmust remain stable until it is processed and released. However the processing\nof retransmitted CRYPTO frames could release the memory if the retransmitted\nframe fully overlapped the existing frame. This then causes use-after-free read\nwhen the TLS handshake processing continues.\n\nThe use-after-free read can lead to a Denial-of-Service of the client\napplication or a minor leak of information about the heap memory contents\nthat might be overwritten with other data, subsequently allocated by\nthe application, to the peer.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside of\nthe OpenSSL FIPS module boundary.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-95692": {
+                "cve_id": "CVE-2026-95692",
+                "title": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expecte ...",
+                "description": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expected nonce\nlength via EVP_CipherInit_ex() may trigger a heap out-of-bounds read.\nSupplying a longer IV is silently truncated instead of rejected.\n\nImpact summary: An application passing a caller-supplied IV of the wrong\nlength may crash or read beyond its buffer. Because trailing IV bytes are\nignored, an attacker who knows one message and tag may forge messages under a\ndifferent IV.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: AES-GCM-SIV copies the caller-supplied IV or nonce into its\ninternal state using a copy whose length is taken from the expected nonce size\nrather than from the length the caller actually provided. When the caller\npasses a shorter IV, the copy reads past the end of the caller's buffer;\nAddressSanitizer confirms a heap out-of-bounds read reached through\nEVP_CipherInit_ex() into ossl_aes_gcm_siv_init(). When the caller passes a\nlonger IV, the implementation silently discards the trailing bytes instead of\nrejecting the length.\n\nThe truncation breaks the binding between the IV and the computed\nauthentication tag. An attacker who has observed a message and its tag under\none IV can produce a message and tag that verify under a different IV whose\nfirst bytes match, since the surplus bytes never influence the computation.\nThe message itself is unchanged, so this is a failure of IV commitment rather\nthan a classic existential forgery.\n\nOnly applications that call EVP_CipherInit_ex() (or the equivalent provider\ncipher initialization) with an IV length other than the standard 12 bytes for\nAES-GCM-SIV are affected. The severity is limited because the out-of-bounds\nread is small and attacker-controlled only in length, and the forgery requires\nan unusual IV length choice by the application.\n\nFIPS impact: no\nThe FIPS modules are not affected by this issue, as AES-GCM-SIV is not an\napproved algorithm.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
             "CVE-2025-9231": {
                 "cve_id": "CVE-2025-9231",
                 "title": "Issue summary: A timing side-channel which could potentially allo ...",
@@ -1763,25 +1819,11 @@
                     }
                 ]
             },
-            "CVE-2026-121482": {
-                "cve_id": "CVE-2026-121482",
-                "title": "Verifying a maliciously crafted CMS or PKCS#7 SignedData message  ...",
-                "description": "Verifying a maliciously crafted CMS or PKCS#7 SignedData message with CRL checking enabled may consume excessive CPU time, growing with the square of the message size.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-35190": {
-                "cve_id": "CVE-2026-35190",
-                "title": "Issue summary: A server configured with the Suite B certificate f ...",
-                "description": "Issue summary: A server configured with the Suite B certificate flag through\nSSL_CTX_set_cert_flags() and with TLS 1.3 enabled may read past the end of a\nfixed group list when it processes a ClientHello whose supported_groups and\nkey_share contain no Suite B group.\n\nImpact summary: A remote client can send a ClientHello that makes the server\nread past the end of a static array. The values read are never returned to the\nclient, so no memory is disclosed; on builds with sanitizers or hardened\nallocators the read may crash the process, causing Denial of Service.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: When the Suite B certificate flag is set, OpenSSL restricts the\naccepted groups to P-256 and P-384 by substituting a fixed two-element list\nfor the configured group list. The tuple machinery used for key-share\nselection was not updated for this substitution: tls1_get_group_tuples() still\nreturns the configured tuples, which by default describe eight groups. The\nserver-side walk in tls_parse_ctos_key_share() then advances through the\ntwo-element list using those tuple counts without checking the cumulative\noffset against the number of groups present.\n\nOnly applications that call SSL_CTX_set_cert_flags() with\nSSL_CERT_FLAG_SUITEB_128_LOS and leave TLS 1.3 enabled are affected. The\nopenssl s_server -suiteB_128 option sets an X.509 verification parameter\ninstead, so the stock command line server is not vulnerable. Default\nconfigurations do not reach this code.\n\nA client that offers only groups outside the Suite B set, such as X25519,\nforces every tuple to be walked and the read to run past the array. The bytes\nread are compared against client group IDs and never sent back, so no memory\nis disclosed. On builds with address sanitizers or hardened allocators the\nread can abort the process; in ordinary release builds it reads a few bytes of\nadjacent constant data.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
-                "severity": "MEDIUM",
+            "CVE-2026-84785": {
+                "cve_id": "CVE-2026-84785",
+                "title": "Issue summary: A QUIC peer that sends many small out-of-order STR ...",
+                "description": "Issue summary: A QUIC peer that sends many small out-of-order STREAM fragments\nwhile withholding the first byte of the stream may cause OpenSSL to buffer\na large number of reassembly nodes occupying much larger memory than\nthe actual data sent.\n\nImpact summary: A remote peer can pin large amounts of memory on a server that\naccepts incoming QUIC streams, potentially exhausting memory and causing\nDenial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: QUIC receive flow control limits the highest byte offset a peer\nmay reach on a stream. It does not limit how many out-of-order fragments the\nreceiver buffers. OpenSSL allocates a reassembly node for each non-adjacent\nSTREAM fragment and never caps the count. A peer that opens a stream and sends\nmany one-byte fragments at increasing offsets, while withholding the first\nbyte, makes the receiver retain one node per fragment without delivering any\ndata.\n\nOnly applications that accept incoming streams are exposed. With the default\npolicy, which rejects peer-initiated streams, the stream is torn down before\nstate accumulates. Because the read side never advances past the missing\nprefix, the flow control window never slides and the nodes stay pinned for the\nlife of the connection.\n\nThe per-stream window bounds the highest offset, so the memory one stream can\npin is finite, but it can reach tens of megabytes and, across many streams and\nconnections, drive memory pressure and Denial of Service. The severity is\nlimited because the exhaustion is bounded by flow control and requires a\nnon-default configuration.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "UNKNOWN",
                 "status": "fixed",
                 "events": [
                     {
@@ -1809,34 +1851,6 @@
                 "cve_id": "CVE-2026-88823",
                 "title": "Issue summary: The AES-GCM-SIV implementation treats a zero-lengt ...",
                 "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95691": {
-                "cve_id": "CVE-2026-95691",
-                "title": "Issue summary: A retransmitted QUIC CRYPTO frame can release pack ...",
-                "description": "Issue summary: A retransmitted QUIC CRYPTO frame can release packet storage\nwhile the TLS record layer retains a direct pointer into that storage causing\nuse after free.\n\nImpact summary: A malicious QUIC server can cause a heap-use-after-free read\nin the OpenSSL QUIC client. The server can also identify one allocator-adjacent\nbyte through the client's protected Handshake response.\n\nCWE: CWE-416: Use After Free\n\nDescription: During CRYPTO stream processing, a pointer into the first frame's\nmemory on the stream is lent to the TLS handshake processing. The memory\nmust remain stable until it is processed and released. However the processing\nof retransmitted CRYPTO frames could release the memory if the retransmitted\nframe fully overlapped the existing frame. This then causes use-after-free read\nwhen the TLS handshake processing continues.\n\nThe use-after-free read can lead to a Denial-of-Service of the client\napplication or a minor leak of information about the heap memory contents\nthat might be overwritten with other data, subsequently allocated by\nthe application, to the peer.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside of\nthe OpenSSL FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95692": {
-                "cve_id": "CVE-2026-95692",
-                "title": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expecte ...",
-                "description": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expected nonce\nlength via EVP_CipherInit_ex() may trigger a heap out-of-bounds read.\nSupplying a longer IV is silently truncated instead of rejected.\n\nImpact summary: An application passing a caller-supplied IV of the wrong\nlength may crash or read beyond its buffer. Because trailing IV bytes are\nignored, an attacker who knows one message and tag may forge messages under a\ndifferent IV.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: AES-GCM-SIV copies the caller-supplied IV or nonce into its\ninternal state using a copy whose length is taken from the expected nonce size\nrather than from the length the caller actually provided. When the caller\npasses a shorter IV, the copy reads past the end of the caller's buffer;\nAddressSanitizer confirms a heap out-of-bounds read reached through\nEVP_CipherInit_ex() into ossl_aes_gcm_siv_init(). When the caller passes a\nlonger IV, the implementation silently discards the trailing bytes instead of\nrejecting the length.\n\nThe truncation breaks the binding between the IV and the computed\nauthentication tag. An attacker who has observed a message and its tag under\none IV can produce a message and tag that verify under a different IV whose\nfirst bytes match, since the surplus bytes never influence the computation.\nThe message itself is unchanged, so this is a failure of IV commitment rather\nthan a classic existential forgery.\n\nOnly applications that call EVP_CipherInit_ex() (or the equivalent provider\ncipher initialization) with an IV length other than the standard 12 bytes for\nAES-GCM-SIV are affected. The severity is limited because the out-of-bounds\nread is small and attacker-controlled only in length, and the forgery requires\nan unusual IV length choice by the application.\n\nFIPS impact: no\nThe FIPS modules are not affected by this issue, as AES-GCM-SIV is not an\napproved algorithm.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -2117,7 +2131,7 @@
             "CVE-2026-107494": {
                 "cve_id": "CVE-2026-107494",
                 "title": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame ...",
-                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\nThis allows a malicious remote QUIC stack to trigger an out-of-memory (OOM)\ncondition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
+                "description": "Issue summary: The QUIC stack queues a RETIRE_CONNECTION_ID frame also for\nretransmitted NEW_CONNECTION_ID frames. This allows a remote malicious\nQUIC stack to queue an unlimited number of RETIRE_CONNECTION_ID frames.\n\nImpact summary: A malicious remote QUIC peer can trigger an out-of-memory\ncondition causing a Denial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: The earlier fix for CVE-2026-84784 was not complete. It\nfailed to ignore retransmissions of the NEW_CONNECTION_ID frame. The QUIC\nimplementation created and inserted a RETIRE_CONNECTION_ID frame for every\nretransmitted NEW_CONNECTION_ID frame it received and there was no limit\non how many RETIRE_CONNECTION_ID frames were queued.\n\nThis issue allows a malicious remote QUIC stack to trigger an unbounded\nallocation of memory and eventually an out-of-memory (OOM) condition.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside the\nOpenSSL FIPS module boundary.",
                 "severity": "HIGH",
                 "status": "open",
                 "events": [
@@ -2136,9 +2150,31 @@
                 "cve_id": "CVE-2026-107496",
                 "title": "Issue summary: Encrypting a CMS message to an EC certificate whos ...",
                 "description": "Issue summary: Encrypting a CMS message to an EC certificate whose group order\nis 1 may cause CMS_encrypt() or CMS_encrypt_ex() to loop indefinitely.\n\nImpact summary: An attacker able to supply the recipient certificate to an\napplication performing CMS encryption can cause that application to loop\nindefinitely, consuming CPU and resulting in Denial of Service.\n\nCWE: CWE-835: Loop with Unreachable Exit Condition ('Infinite Loop')\n\nDescription: CMS_encrypt() and CMS_encrypt_ex() encrypt a message to one or\nmore recipient certificates and, for an EC recipient, generate an ephemeral\nkey in the recipient's group. If the certificate declares a group order of 1,\nrandom scalar generation can only produce zero. The key generation routine\nthen retries without limit while waiting for a nonzero private scalar, so the\ncall never returns.\n\nThe OpenSSL TLS and QUIC implementations do not use this path. An application\nis exposed only if it calls CMS_encrypt() or CMS_encrypt_ex() with a recipient\ncertificate whose EC parameters are attacker-controlled. Certificates with\nnormal EC group orders do not trigger the loop.\n\nOpenSSL 4.0 and later reject unknown explicit EC groups in default builds.\nThese versions are affected only when configured with the\nenable-ec_explicit_curves option.\n\nThe result is a hang that consumes a CPU core until the process is\ninterrupted, a Denial of Service. The severity is Low because the attacker\nmust supply the recipient certificate and the application must choose to\nencrypt to it; ordinary CMS encryption to trusted recipients is unaffected.\n\nThe fix makes EC key generation fail when the group has no valid nonzero\nprivate scalar, instead of retrying indefinitely.\n\nFIPS impact: no\nThe FIPS modules in 4.1, 4.0, 3.5 and 3.0 are not affected. The FIPS provider\ndoes not support arbitrary explicit EC domain parameters, so an order-1 group\nis rejected during key import before the vulnerable key generation path is\nreached.",
-                "severity": "HIGH",
-                "status": "fixed",
+                "severity": "MEDIUM",
+                "status": "open",
                 "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-121482": {
+                "cve_id": "CVE-2026-121482",
+                "title": "Issue summary: Verifying a maliciously crafted CMS or PKCS#7 Sign ...",
+                "description": "Issue summary: Verifying a maliciously crafted CMS or PKCS#7 SignedData\nmessage with CRL checking enabled may consume excessive CPU time, growing with\nthe square of the message size.\n\nImpact summary: An attacker who can submit a CMS or PKCS#7 SignedData message\nto an application that verifies it with CRL checking enabled can occupy a CPU\ncore for seconds to minutes, causing Denial of Service. Applications that\nleave CRL checking disabled are not affected.\n\nCWE: CWE-407: Inefficient Algorithmic Complexity\n\nDescription: With CRL checking enabled, OpenSSL compares each CRL distribution\npoint of a certificate against the issuing distribution point of every\ncandidate CRL. For a nameRelativeToCRLIssuer distribution point, the full name\nis the CRL issuer name with the relative name appended. Since the change that\ndeferred this computation, crl_crldp_check() rebuilds that full name for each\ncandidate CRL and frees it again.\n\nCMS_verify() and PKCS7_verify() take both the distribution points and the\ncandidate CRLs from the message, and this scoring runs before any signature is\nchecked. An application is exposed only if it sets X509_V_FLAG_CRL_CHECK on\nthe store and does not pass CMS_NOCRL or PKCS7_NOCRL; CRL checking is off by\ndefault. In TLS the CRLs come from the local store, so a peer controls only\nthe distribution point count.\n\nThe cost grows with the product of the distribution point count, the CRL count\nand the issuer name length, all chosen by the message author; a few hundred\nkilobytes can occupy a CPU core for tens of seconds. Verification still fails\nas it should, with no crash, no incorrect result and no memory growth.\nRequiring CRL checking is what limits the severity.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
                     {
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
@@ -2457,13 +2493,31 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
                         "fixed": "1:3.5.9-1.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-35190": {
+                "cve_id": "CVE-2026-35190",
+                "title": "Issue summary: A server configured with the Suite B certificate f ...",
+                "description": "Issue summary: A server configured with the Suite B certificate flag through\nSSL_CTX_set_cert_flags() and with TLS 1.3 enabled may read past the end of a\nfixed group list when it processes a ClientHello whose supported_groups and\nkey_share contain no Suite B group.\n\nImpact summary: A remote client can send a ClientHello that makes the server\nread past the end of a static array. The values read are never returned to the\nclient, so no memory is disclosed; on builds with sanitizers or hardened\nallocators the read may crash the process, causing Denial of Service.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: When the Suite B certificate flag is set, OpenSSL restricts the\naccepted groups to P-256 and P-384 by substituting a fixed two-element list\nfor the configured group list. The tuple machinery used for key-share\nselection was not updated for this substitution: tls1_get_group_tuples() still\nreturns the configured tuples, which by default describe eight groups. The\nserver-side walk in tls_parse_ctos_key_share() then advances through the\ntwo-element list using those tuple counts without checking the cumulative\noffset against the number of groups present.\n\nOnly applications that call SSL_CTX_set_cert_flags() with\nSSL_CERT_FLAG_SUITEB_128_LOS and leave TLS 1.3 enabled are affected. The\nopenssl s_server -suiteB_128 option sets an X.509 verification parameter\ninstead, so the stock command line server is not vulnerable. Default\nconfigurations do not reach this code.\n\nA client that offers only groups outside the Suite B set, such as X25519,\nforces every tuple to be walked and the read to run past the array. The bytes\nread are compared against client group IDs and never sent back, so no memory\nis disclosed. On builds with address sanitizers or hardened allocators the\nread can abort the process; in ordinary release builds it reads a few bytes of\nadjacent constant data.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
                     }
                 ]
             },
@@ -2476,7 +2530,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2609,7 +2663,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2685,7 +2739,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2704,7 +2758,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2742,7 +2796,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2856,7 +2910,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2908,7 +2962,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2927,7 +2981,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2946,7 +3000,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -2965,7 +3019,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -3017,7 +3071,7 @@
                 "events": [
                     {
                         "introduced": "1:3.2.2-16.0.1.el10",
-                        "fixed": "1:3.5.9-1.el10_3",
+                        "fixed": "1:3.5.9-1.0.1.el10_3",
                         "identifier": "el10"
                     },
                     {
@@ -3031,9 +3085,13 @@
                 "cve_id": "CVE-2026-84786",
                 "title": "Issue summary: A DANE-enabled TLS client may crash by dereferenci ...",
                 "description": "Issue summary: A DANE-enabled TLS client may crash by dereferencing a NULL\npointer when processing an unusual combination of certificate and TLSA\nrecords.\n\nImpact summary: The impact is limited to a client crash (potential Denial\nof Service).\n\nCWE: CWE-476: NULL Pointer Dereference\n\nDescription: A DANE-enabled TLS client that supports TLSA records with at\nleast one of the PKIX-TA(0) or PKIX-EE(1) usages alongside the DANE-TA(2)\nusage may crash by dereferencing a NULL pointer if the server claims a trusted\nCA's certificate to be its end-entity certificate and has an unusual mix of\nassociated TLSA records.\n\nDANE SMTP clients should not be affected since only the\nDANE-TA(2) and DANE-EE(3) TLSA record usages are specified applicable\nin SMTP.  For example, the Postfix MTA is not affected, while the Exim\nMTA does not at present use OpenSSL's DANE implementation.\n\nUse of DANE in validation of RFC7250 raw public keys (RPKs) is also\nunaffected, as these only use DANE-EE(3) TLSA records.\n\nOnly applications that support combining the DANE PKI with a traditional PKI\nare potentially affected.  A DANE-enabled browser or similar, that uses\nOpenSSL's DANE API could be affected.\n\nFIPS impact: no\nThe DANE API is outside the FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
+                "severity": "MEDIUM",
+                "status": "open",
                 "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
                     {
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
@@ -3065,8 +3123,48 @@
                 "title": "Issue summary: Receiving crafted out-of-sequence DTLS handshake f ...",
                 "description": "Issue summary: Receiving crafted out-of-sequence DTLS handshake fragments may\ncause OpenSSL to allocate a full message-length reassembly buffer for each\nbuffered message, so a small amount of wire data consumes a large amount of\nmemory.\n\nImpact summary: A remote attacker can send a few small crafted DTLS handshake\nfragments to make a DTLS server or client allocate well over a megabyte of\nmemory per connection, which may lead to memory exhaustion and Denial of\nService if many connections are made.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: DTLS handshake messages can arrive out of order and fragmented,\nso OpenSSL buffers fragments of up to ten out-of-sequence messages until\nreassembly is possible. When the first fragment of a new message arrives,\nOpenSSL allocates a buffer sized to the full message length declared in the\nfragment header, plus a reassembly bitmap, instead of storing only the bytes\nactually received. The declared length is capped by the maximum certificate\nlist size, 128KB by default, and that cap applies to every handshake message\ntype rather than only to Certificate messages.\n\nOnly DTLS endpoints reach this code. TLS, QUIC and applications that do not\nuse DTLS are unaffected. An attacker sends fragments that declare a large\nmessage length but carry almost no data, using up to ten distinct message\nsequence numbers.\n\nA single connection can then hold roughly 1.4MB of buffers from about 156\nbytes on the wire. Because the number of buffered messages is capped, memory\nexhaustion requires many connections or many peers, which is why the severity\nis Low.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
                 "severity": "MEDIUM",
-                "status": "fixed",
+                "status": "open",
                 "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-95691": {
+                "cve_id": "CVE-2026-95691",
+                "title": "Issue summary: A retransmitted QUIC CRYPTO frame can release pack ...",
+                "description": "Issue summary: A retransmitted QUIC CRYPTO frame can release packet storage\nwhile the TLS record layer retains a direct pointer into that storage causing\nuse after free.\n\nImpact summary: A malicious QUIC server can cause a heap-use-after-free read\nin the OpenSSL QUIC client. The server can also identify one allocator-adjacent\nbyte through the client's protected Handshake response.\n\nCWE: CWE-416: Use After Free\n\nDescription: During CRYPTO stream processing, a pointer into the first frame's\nmemory on the stream is lent to the TLS handshake processing. The memory\nmust remain stable until it is processed and released. However the processing\nof retransmitted CRYPTO frames could release the memory if the retransmitted\nframe fully overlapped the existing frame. This then causes use-after-free read\nwhen the TLS handshake processing continues.\n\nThe use-after-free read can lead to a Denial-of-Service of the client\napplication or a minor leak of information about the heap memory contents\nthat might be overwritten with other data, subsequently allocated by\nthe application, to the peer.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside of\nthe OpenSSL FIPS module boundary.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "1:3.5.1-2.fc43",
+                        "identifier": "fc43",
+                        "fixed": "1:3.5.9-2.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-95692": {
+                "cve_id": "CVE-2026-95692",
+                "title": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expecte ...",
+                "description": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expected nonce\nlength via EVP_CipherInit_ex() may trigger a heap out-of-bounds read.\nSupplying a longer IV is silently truncated instead of rejected.\n\nImpact summary: An application passing a caller-supplied IV of the wrong\nlength may crash or read beyond its buffer. Because trailing IV bytes are\nignored, an attacker who knows one message and tag may forge messages under a\ndifferent IV.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: AES-GCM-SIV copies the caller-supplied IV or nonce into its\ninternal state using a copy whose length is taken from the expected nonce size\nrather than from the length the caller actually provided. When the caller\npasses a shorter IV, the copy reads past the end of the caller's buffer;\nAddressSanitizer confirms a heap out-of-bounds read reached through\nEVP_CipherInit_ex() into ossl_aes_gcm_siv_init(). When the caller passes a\nlonger IV, the implementation silently discards the trailing bytes instead of\nrejecting the length.\n\nThe truncation breaks the binding between the IV and the computed\nauthentication tag. An attacker who has observed a message and its tag under\none IV can produce a message and tag that verify under a different IV whose\nfirst bytes match, since the surplus bytes never influence the computation.\nThe message itself is unchanged, so this is a failure of IV commitment rather\nthan a classic existential forgery.\n\nOnly applications that call EVP_CipherInit_ex() (or the equivalent provider\ncipher initialization) with an IV length other than the standard 12 bytes for\nAES-GCM-SIV are affected. The severity is limited because the out-of-bounds\nread is small and attacker-controlled only in length, and the forgery requires\nan unusual IV length choice by the application.\n\nFIPS impact: no\nThe FIPS modules are not affected by this issue, as AES-GCM-SIV is not an\napproved algorithm.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
                     {
                         "introduced": "1:3.5.1-2.fc43",
                         "identifier": "fc43",
@@ -3088,25 +3186,11 @@
                     }
                 ]
             },
-            "CVE-2026-121482": {
-                "cve_id": "CVE-2026-121482",
-                "title": "Verifying a maliciously crafted CMS or PKCS#7 SignedData message  ...",
-                "description": "Verifying a maliciously crafted CMS or PKCS#7 SignedData message with CRL checking enabled may consume excessive CPU time, growing with the square of the message size.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-35190": {
-                "cve_id": "CVE-2026-35190",
-                "title": "Issue summary: A server configured with the Suite B certificate f ...",
-                "description": "Issue summary: A server configured with the Suite B certificate flag through\nSSL_CTX_set_cert_flags() and with TLS 1.3 enabled may read past the end of a\nfixed group list when it processes a ClientHello whose supported_groups and\nkey_share contain no Suite B group.\n\nImpact summary: A remote client can send a ClientHello that makes the server\nread past the end of a static array. The values read are never returned to the\nclient, so no memory is disclosed; on builds with sanitizers or hardened\nallocators the read may crash the process, causing Denial of Service.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: When the Suite B certificate flag is set, OpenSSL restricts the\naccepted groups to P-256 and P-384 by substituting a fixed two-element list\nfor the configured group list. The tuple machinery used for key-share\nselection was not updated for this substitution: tls1_get_group_tuples() still\nreturns the configured tuples, which by default describe eight groups. The\nserver-side walk in tls_parse_ctos_key_share() then advances through the\ntwo-element list using those tuple counts without checking the cumulative\noffset against the number of groups present.\n\nOnly applications that call SSL_CTX_set_cert_flags() with\nSSL_CERT_FLAG_SUITEB_128_LOS and leave TLS 1.3 enabled are affected. The\nopenssl s_server -suiteB_128 option sets an X.509 verification parameter\ninstead, so the stock command line server is not vulnerable. Default\nconfigurations do not reach this code.\n\nA client that offers only groups outside the Suite B set, such as X25519,\nforces every tuple to be walked and the read to run past the array. The bytes\nread are compared against client group IDs and never sent back, so no memory\nis disclosed. On builds with address sanitizers or hardened allocators the\nread can abort the process; in ordinary release builds it reads a few bytes of\nadjacent constant data.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
-                "severity": "MEDIUM",
+            "CVE-2026-84785": {
+                "cve_id": "CVE-2026-84785",
+                "title": "Issue summary: A QUIC peer that sends many small out-of-order STR ...",
+                "description": "Issue summary: A QUIC peer that sends many small out-of-order STREAM fragments\nwhile withholding the first byte of the stream may cause OpenSSL to buffer\na large number of reassembly nodes occupying much larger memory than\nthe actual data sent.\n\nImpact summary: A remote peer can pin large amounts of memory on a server that\naccepts incoming QUIC streams, potentially exhausting memory and causing\nDenial of Service.\n\nCWE: CWE-770: Allocation of Resources Without Limits or Throttling\n\nDescription: QUIC receive flow control limits the highest byte offset a peer\nmay reach on a stream. It does not limit how many out-of-order fragments the\nreceiver buffers. OpenSSL allocates a reassembly node for each non-adjacent\nSTREAM fragment and never caps the count. A peer that opens a stream and sends\nmany one-byte fragments at increasing offsets, while withholding the first\nbyte, makes the receiver retain one node per fragment without delivering any\ndata.\n\nOnly applications that accept incoming streams are exposed. With the default\npolicy, which rejects peer-initiated streams, the stream is torn down before\nstate accumulates. Because the read side never advances past the missing\nprefix, the flow control window never slides and the nodes stay pinned for the\nlife of the connection.\n\nThe per-stream window bounds the highest offset, so the memory one stream can\npin is finite, but it can reach tens of megabytes and, across many streams and\nconnections, drive memory pressure and Denial of Service. The severity is\nlimited because the exhaustion is bounded by flow control and requires a\nnon-default configuration.\n\nFIPS impact: no\nThe affected code is outside the FIPS module boundary.",
+                "severity": "UNKNOWN",
                 "status": "fixed",
                 "events": [
                     {
@@ -3134,34 +3218,6 @@
                 "cve_id": "CVE-2026-88823",
                 "title": "Issue summary: The AES-GCM-SIV implementation treats a zero-lengt ...",
                 "description": "Issue summary: The AES-GCM-SIV implementation treats a zero-length Additional\nAuthenticated Data (AAD) update as a reset of all the AAD supplied so far,\ninstead of leaving the AAD unchanged. An application that supplies its AAD in\nseveral fragments, one of which is empty, therefore produces or verifies\nmessages whose authentication tag does not cover the AAD supplied before\nthe empty fragment.\n\nImpact summary: Data an application intended to authenticate alongside a\nmessage is silently left unauthenticated. An attacker can forge the AAD of such\na message.\n\nCWE: CWE-325: Missing Cryptographic Step\n\nDescription: An application passing AAD in multiple chunks of which some have\nzero length will have the previous AAD chunks effectively unauthenticated. Also,\non context re-initialisation, the AAD was not reset, which meant that any AAD\naccumulated from the previous context usage were also included in the AAD of the\nnew message.\n\nThe fix makes a zero-length AAD update a no-op and clears any accumulated AAD\nwhenever the context is re-initialised with a key or a nonce.\nA re-initialisation that only changes parameters keeps the AAD.\n\nFIPS impact: no\nThe FIPS modules are not affected, as AES-GCM-SIV is not a FIPS approved\nalgorithm and is implemented only in the default provider, outside the\nOpenSSL FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95691": {
-                "cve_id": "CVE-2026-95691",
-                "title": "Issue summary: A retransmitted QUIC CRYPTO frame can release pack ...",
-                "description": "Issue summary: A retransmitted QUIC CRYPTO frame can release packet storage\nwhile the TLS record layer retains a direct pointer into that storage causing\nuse after free.\n\nImpact summary: A malicious QUIC server can cause a heap-use-after-free read\nin the OpenSSL QUIC client. The server can also identify one allocator-adjacent\nbyte through the client's protected Handshake response.\n\nCWE: CWE-416: Use After Free\n\nDescription: During CRYPTO stream processing, a pointer into the first frame's\nmemory on the stream is lent to the TLS handshake processing. The memory\nmust remain stable until it is processed and released. However the processing\nof retransmitted CRYPTO frames could release the memory if the retransmitted\nframe fully overlapped the existing frame. This then causes use-after-free read\nwhen the TLS handshake processing continues.\n\nThe use-after-free read can lead to a Denial-of-Service of the client\napplication or a minor leak of information about the heap memory contents\nthat might be overwritten with other data, subsequently allocated by\nthe application, to the peer.\n\nFIPS impact: no\nThe FIPS module is not affected as the QUIC implementation is outside of\nthe OpenSSL FIPS module boundary.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "1:3.5.1-2.fc43",
-                        "identifier": "fc43",
-                        "fixed": "1:3.5.9-2.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-95692": {
-                "cve_id": "CVE-2026-95692",
-                "title": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expecte ...",
-                "description": "Issue summary: Setting an AES-GCM-SIV IV shorter than the expected nonce\nlength via EVP_CipherInit_ex() may trigger a heap out-of-bounds read.\nSupplying a longer IV is silently truncated instead of rejected.\n\nImpact summary: An application passing a caller-supplied IV of the wrong\nlength may crash or read beyond its buffer. Because trailing IV bytes are\nignored, an attacker who knows one message and tag may forge messages under a\ndifferent IV.\n\nCWE: CWE-125: Out-of-bounds Read\n\nDescription: AES-GCM-SIV copies the caller-supplied IV or nonce into its\ninternal state using a copy whose length is taken from the expected nonce size\nrather than from the length the caller actually provided. When the caller\npasses a shorter IV, the copy reads past the end of the caller's buffer;\nAddressSanitizer confirms a heap out-of-bounds read reached through\nEVP_CipherInit_ex() into ossl_aes_gcm_siv_init(). When the caller passes a\nlonger IV, the implementation silently discards the trailing bytes instead of\nrejecting the length.\n\nThe truncation breaks the binding between the IV and the computed\nauthentication tag. An attacker who has observed a message and its tag under\none IV can produce a message and tag that verify under a different IV whose\nfirst bytes match, since the surplus bytes never influence the computation.\nThe message itself is unchanged, so this is a failure of IV commitment rather\nthan a classic existential forgery.\n\nOnly applications that call EVP_CipherInit_ex() (or the equivalent provider\ncipher initialization) with an IV length other than the standard 12 bytes for\nAES-GCM-SIV are affected. The severity is limited because the out-of-bounds\nread is small and attacker-controlled only in length, and the forgery requires\nan unusual IV length choice by the application.\n\nFIPS impact: no\nThe FIPS modules are not affected by this issue, as AES-GCM-SIV is not an\napproved algorithm.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
