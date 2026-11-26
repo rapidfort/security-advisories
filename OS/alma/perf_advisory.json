@@ -60549,6 +60549,24 @@
                     }
                 ]
             },
+            "CVE-2026-74691": {
+                "cve_id": "CVE-2026-74691",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: thunderbolt: Tear down DMA paths before stopping the rings\n\ntbnet_tear_down() stops both rings and frees their frame buffers before\ncalling tb_xdomain_disable_paths().  tb_ring_stop() zeroes the ring's\ndescriptor base and tbnet_free_buffers() unmaps and frees the pages the\nframes sit in, so by the time __tb_path_deactivate_hop() polls the hop's\n'pending' bit, anything still in flight has nowhere to drain to.\n\nThe teardown sequence has been in this order since the driver was added.\nThe setup path has not: commit ff7cd07f3064 (\"net: thunderbolt: Enable\nDMA paths only after rings are enabled\") moved the path enable to the end\nof tbnet_connected_work() and documented why:\n\n\t/* Both logins successful so enable the rings, high-speed DMA\n\t * paths and start the network device queue.\n\t *\n\t * Note we enable the DMA paths last to make sure we have primed\n\t * the Rx ring before any incoming packets are allowed to\n\t * arrive.\n\t */\n\nTeardown was never updated to match, so the rings and the paths now come\ndown in the same order they go up instead of in reverse.\n\nOn an ASMedia ASM4242 host router the 'pending' bit then never clears:\nevery teardown burns the full 500 ms timeout and\n__tb_path_deactivate_hop() returns -ETIMEDOUT.  Raising the timeout to\n5 s does not help, so the hop is not slow to drain, it never drains\nat all.\n\nThe failure is invisible above the thunderbolt core.\n__tb_path_deactivate_hops() is void and only calls tb_port_warn();\ntb_path_deactivate(), tb_tunnel_deactivate() and\n__tb_disconnect_xdomain_paths() are void as well, and\ntb_disconnect_xdomain_paths() ends in an unconditional \"return 0\".  So\ntb_xdomain_disable_paths() reports success and the netdev_warn() below\nit never fires.  Repeated teardowns eventually take the XDomain control\nchannel down, after which the peer node is gone and only a power cycle\nbrings the controller back.\n\nDeactivating the paths first fixes it.  Measured with kretprobes on a\nstock v6.17 tree with no other patches applied, on a link that was up\nand had just carried traffic:\n\n  before: __tb_path_deactivate_hop() returns 0 for the first hop, then\n          -ETIMEDOUT for the second 500335 us later\n  after:  0 for both, 525 us apart\n\nAlternating the two orderings ABBA over three load levels, four\nteardowns per arm: every teardown failed before the change (21 of 21\nthat ran), none failed after (0 of 24).  The before arms ran short\nbecause the link died partway through.  The same split shows up when\nthe interface is enslaved to a bond instead of just brought down, which\nis how I ran into this in the first place.  Throughput and latency after\nthe change are unchanged.\n\nHosts whose routers drain the hop despite the stale descriptor base see\nno functional difference, since the paths end up deactivated either way.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el9"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.5-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-74692": {
                 "cve_id": "CVE-2026-74692",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -120872,19 +120890,6 @@
                     }
                 ]
             },
-            "CVE-2026-74691": {
-                "cve_id": "CVE-2026-74691",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: thunderbolt: Tear down DMA paths before stopping the rings\n\ntbnet_tear_down() stops both rings and frees their frame buffers before\ncalling tb_xdomain_disable_paths().  tb_ring_stop() zeroes the ring's\ndescriptor base and tbnet_free_buffers() unmaps and frees the pages the\nframes sit in, so by the time __tb_path_deactivate_hop() polls the hop's\n'pending' bit, anything still in flight has nowhere to drain to.\n\nThe teardown sequence has been in this order since the driver was added.\nThe setup path has not: commit ff7cd07f3064 (\"net: thunderbolt: Enable\nDMA paths only after rings are enabled\") moved the path enable to the end\nof tbnet_connected_work() and documented why:\n\n\t/* Both logins successful so enable the rings, high-speed DMA\n\t * paths and start the network device queue.\n\t *\n\t * Note we enable the DMA paths last to make sure we have primed\n\t * the Rx ring before any incoming packets are allowed to\n\t * arrive.\n\t */\n\nTeardown was never updated to match, so the rings and the paths now come\ndown in the same order they go up instead of in reverse.\n\nOn an ASMedia ASM4242 host router the 'pending' bit then never clears:\nevery teardown burns the full 500 ms timeout and\n__tb_path_deactivate_hop() returns -ETIMEDOUT.  Raising the timeout to\n5 s does not help, so the hop is not slow to drain, it never drains\nat all.\n\nThe failure is invisible above the thunderbolt core.\n__tb_path_deactivate_hops() is void and only calls tb_port_warn();\ntb_path_deactivate(), tb_tunnel_deactivate() and\n__tb_disconnect_xdomain_paths() are void as well, and\ntb_disconnect_xdomain_paths() ends in an unconditional \"return 0\".  So\ntb_xdomain_disable_paths() reports success and the netdev_warn() below\nit never fires.  Repeated teardowns eventually take the XDomain control\nchannel down, after which the peer node is gone and only a power cycle\nbrings the controller back.\n\nDeactivating the paths first fixes it.  Measured with kretprobes on a\nstock v6.17 tree with no other patches applied, on a link that was up\nand had just carried traffic:\n\n  before: __tb_path_deactivate_hop() returns 0 for the first hop, then\n          -ETIMEDOUT for the second 500335 us later\n  after:  0 for both, 525 us apart\n\nAlternating the two orderings ABBA over three load levels, four\nteardowns per arm: every teardown failed before the change (21 of 21\nthat ran), none failed after (0 of 24).  The before arms ran short\nbecause the link died partway through.  The same split shows up when\nthe interface is enslaved to a bond instead of just brought down, which\nis how I ran into this in the first place.  Throughput and latency after\nthe change are unchanged.\n\nHosts whose routers drain the hop despite the stale descriptor base see\nno functional difference, since the paths end up deactivated either way.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el9"
-                    }
-                ]
-            },
             "CVE-2026-74715": {
                 "cve_id": "CVE-2026-74715",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -179765,6 +179770,24 @@
                 "cve_id": "CVE-2026-74690",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\ns390/ism: Fix UAF of sba and ieq during ism_dev_exit()\n\nA ism interrupt handler can be active in parallel with ism_dev_exit(),\naccessing freed data structures.\n\nNo new interrupts will be generated after unregister_ieq(). Drain ongoing\ninterrupt handlers by free_irq(), before freeing ism data structures.",
+                "severity": "MEDIUM",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el10"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.5-101.fc43"
+                    }
+                ]
+            },
+            "CVE-2026-74691": {
+                "cve_id": "CVE-2026-74691",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: thunderbolt: Tear down DMA paths before stopping the rings\n\ntbnet_tear_down() stops both rings and frees their frame buffers before\ncalling tb_xdomain_disable_paths().  tb_ring_stop() zeroes the ring's\ndescriptor base and tbnet_free_buffers() unmaps and frees the pages the\nframes sit in, so by the time __tb_path_deactivate_hop() polls the hop's\n'pending' bit, anything still in flight has nowhere to drain to.\n\nThe teardown sequence has been in this order since the driver was added.\nThe setup path has not: commit ff7cd07f3064 (\"net: thunderbolt: Enable\nDMA paths only after rings are enabled\") moved the path enable to the end\nof tbnet_connected_work() and documented why:\n\n\t/* Both logins successful so enable the rings, high-speed DMA\n\t * paths and start the network device queue.\n\t *\n\t * Note we enable the DMA paths last to make sure we have primed\n\t * the Rx ring before any incoming packets are allowed to\n\t * arrive.\n\t */\n\nTeardown was never updated to match, so the rings and the paths now come\ndown in the same order they go up instead of in reverse.\n\nOn an ASMedia ASM4242 host router the 'pending' bit then never clears:\nevery teardown burns the full 500 ms timeout and\n__tb_path_deactivate_hop() returns -ETIMEDOUT.  Raising the timeout to\n5 s does not help, so the hop is not slow to drain, it never drains\nat all.\n\nThe failure is invisible above the thunderbolt core.\n__tb_path_deactivate_hops() is void and only calls tb_port_warn();\ntb_path_deactivate(), tb_tunnel_deactivate() and\n__tb_disconnect_xdomain_paths() are void as well, and\ntb_disconnect_xdomain_paths() ends in an unconditional \"return 0\".  So\ntb_xdomain_disable_paths() reports success and the netdev_warn() below\nit never fires.  Repeated teardowns eventually take the XDomain control\nchannel down, after which the peer node is gone and only a power cycle\nbrings the controller back.\n\nDeactivating the paths first fixes it.  Measured with kretprobes on a\nstock v6.17 tree with no other patches applied, on a link that was up\nand had just carried traffic:\n\n  before: __tb_path_deactivate_hop() returns 0 for the first hop, then\n          -ETIMEDOUT for the second 500335 us later\n  after:  0 for both, 525 us apart\n\nAlternating the two orderings ABBA over three load levels, four\nteardowns per arm: every teardown failed before the change (21 of 21\nthat ran), none failed after (0 of 24).  The before arms ran short\nbecause the link died partway through.  The same split shows up when\nthe interface is enslaved to a bond instead of just brought down, which\nis how I ran into this in the first place.  Throughput and latency after\nthe change are unchanged.\n\nHosts whose routers drain the hop despite the stale descriptor base see\nno functional difference, since the paths end up deactivated either way.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
@@ -276949,6 +276972,24 @@
                     }
                 ]
             },
+            "CVE-2026-74691": {
+                "cve_id": "CVE-2026-74691",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: thunderbolt: Tear down DMA paths before stopping the rings\n\ntbnet_tear_down() stops both rings and frees their frame buffers before\ncalling tb_xdomain_disable_paths().  tb_ring_stop() zeroes the ring's\ndescriptor base and tbnet_free_buffers() unmaps and frees the pages the\nframes sit in, so by the time __tb_path_deactivate_hop() polls the hop's\n'pending' bit, anything still in flight has nowhere to drain to.\n\nThe teardown sequence has been in this order since the driver was added.\nThe setup path has not: commit ff7cd07f3064 (\"net: thunderbolt: Enable\nDMA paths only after rings are enabled\") moved the path enable to the end\nof tbnet_connected_work() and documented why:\n\n\t/* Both logins successful so enable the rings, high-speed DMA\n\t * paths and start the network device queue.\n\t *\n\t * Note we enable the DMA paths last to make sure we have primed\n\t * the Rx ring before any incoming packets are allowed to\n\t * arrive.\n\t */\n\nTeardown was never updated to match, so the rings and the paths now come\ndown in the same order they go up instead of in reverse.\n\nOn an ASMedia ASM4242 host router the 'pending' bit then never clears:\nevery teardown burns the full 500 ms timeout and\n__tb_path_deactivate_hop() returns -ETIMEDOUT.  Raising the timeout to\n5 s does not help, so the hop is not slow to drain, it never drains\nat all.\n\nThe failure is invisible above the thunderbolt core.\n__tb_path_deactivate_hops() is void and only calls tb_port_warn();\ntb_path_deactivate(), tb_tunnel_deactivate() and\n__tb_disconnect_xdomain_paths() are void as well, and\ntb_disconnect_xdomain_paths() ends in an unconditional \"return 0\".  So\ntb_xdomain_disable_paths() reports success and the netdev_warn() below\nit never fires.  Repeated teardowns eventually take the XDomain control\nchannel down, after which the peer node is gone and only a power cycle\nbrings the controller back.\n\nDeactivating the paths first fixes it.  Measured with kretprobes on a\nstock v6.17 tree with no other patches applied, on a link that was up\nand had just carried traffic:\n\n  before: __tb_path_deactivate_hop() returns 0 for the first hop, then\n          -ETIMEDOUT for the second 500335 us later\n  after:  0 for both, 525 us apart\n\nAlternating the two orderings ABBA over three load levels, four\nteardowns per arm: every teardown failed before the change (21 of 21\nthat ran), none failed after (0 of 24).  The before arms ran short\nbecause the link died partway through.  The same split shows up when\nthe interface is enslaved to a bond instead of just brought down, which\nis how I ran into this in the first place.  Throughput and latency after\nthe change are unchanged.\n\nHosts whose routers drain the hop despite the stale descriptor base see\nno functional difference, since the paths end up deactivated either way.",
+                "severity": "HIGH",
+                "status": "open",
+                "events": [
+                    {
+                        "introduced": "0",
+                        "identifier": "el8"
+                    },
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.5-101.fc43"
+                    }
+                ]
+            },
             "CVE-2026-74692": {
                 "cve_id": "CVE-2026-74692",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -323119,19 +323160,6 @@
                 "cve_id": "CVE-2026-74689",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet/atm: fix slab-out-of-bounds read in vcc_setsockopt()\n\nvcc_setsockopt() contained an ineffective optlen check:\n  if (__SO_LEVEL_MATCH(optname, level) && optlen != __SO_SIZE(optname))\n      return -EINVAL;\n\nIf __SO_LEVEL_MATCH(optname, level) evaluated to false (e.g. if the caller\npassed a mismatched level), the length check optlen != __SO_SIZE(optname)\nwas short-circuited and bypassed. Execution then fell through to switch(optname),\ncalling copy_from_sockptr() assuming optval contained sufficient space.\n\nFurthermore, even if level matched, a cgroup BPF setsockopt filter could shrink\noptlen after entry. Because copy_from_sockptr() on kernel pointers uses memcpy(),\nthis leads to a KASAN slab-out-of-bounds read when optlen is smaller than the\nexpected structure size.\n\nFix this by using copy_safe_from_sockptr(), which unconditionally validates\nthat optlen is at least the expected size before copying. Also change the local\n'value' variable type from 'unsigned long' to 'int' so that SO_SETCLP matches\nits sizeof(int) ABI encoding on 64-bit systems.",
-                "severity": "MEDIUM",
-                "status": "open",
-                "events": [
-                    {
-                        "introduced": "0",
-                        "identifier": "el8"
-                    }
-                ]
-            },
-            "CVE-2026-74691": {
-                "cve_id": "CVE-2026-74691",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnet: thunderbolt: Tear down DMA paths before stopping the rings\n\ntbnet_tear_down() stops both rings and frees their frame buffers before\ncalling tb_xdomain_disable_paths().  tb_ring_stop() zeroes the ring's\ndescriptor base and tbnet_free_buffers() unmaps and frees the pages the\nframes sit in, so by the time __tb_path_deactivate_hop() polls the hop's\n'pending' bit, anything still in flight has nowhere to drain to.\n\nThe teardown sequence has been in this order since the driver was added.\nThe setup path has not: commit ff7cd07f3064 (\"net: thunderbolt: Enable\nDMA paths only after rings are enabled\") moved the path enable to the end\nof tbnet_connected_work() and documented why:\n\n\t/* Both logins successful so enable the rings, high-speed DMA\n\t * paths and start the network device queue.\n\t *\n\t * Note we enable the DMA paths last to make sure we have primed\n\t * the Rx ring before any incoming packets are allowed to\n\t * arrive.\n\t */\n\nTeardown was never updated to match, so the rings and the paths now come\ndown in the same order they go up instead of in reverse.\n\nOn an ASMedia ASM4242 host router the 'pending' bit then never clears:\nevery teardown burns the full 500 ms timeout and\n__tb_path_deactivate_hop() returns -ETIMEDOUT.  Raising the timeout to\n5 s does not help, so the hop is not slow to drain, it never drains\nat all.\n\nThe failure is invisible above the thunderbolt core.\n__tb_path_deactivate_hops() is void and only calls tb_port_warn();\ntb_path_deactivate(), tb_tunnel_deactivate() and\n__tb_disconnect_xdomain_paths() are void as well, and\ntb_disconnect_xdomain_paths() ends in an unconditional \"return 0\".  So\ntb_xdomain_disable_paths() reports success and the netdev_warn() below\nit never fires.  Repeated teardowns eventually take the XDomain control\nchannel down, after which the peer node is gone and only a power cycle\nbrings the controller back.\n\nDeactivating the paths first fixes it.  Measured with kretprobes on a\nstock v6.17 tree with no other patches applied, on a link that was up\nand had just carried traffic:\n\n  before: __tb_path_deactivate_hop() returns 0 for the first hop, then\n          -ETIMEDOUT for the second 500335 us later\n  after:  0 for both, 525 us apart\n\nAlternating the two orderings ABBA over three load levels, four\nteardowns per arm: every teardown failed before the change (21 of 21\nthat ran), none failed after (0 of 24).  The before arms ran short\nbecause the link died partway through.  The same split shows up when\nthe interface is enslaved to a bond instead of just brought down, which\nis how I ran into this in the first place.  Throughput and latency after\nthe change are unchanged.\n\nHosts whose routers drain the hop despite the stale descriptor base see\nno functional difference, since the paths end up deactivated either way.",
                 "severity": "MEDIUM",
                 "status": "open",
                 "events": [
