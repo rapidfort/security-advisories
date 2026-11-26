@@ -77,6 +77,120 @@
                         "fixed": "3.16.0-r0"
                     }
                 ]
+            },
+            "GHSA-6frq-4g8m-8xw9": {
+                "cve_id": "GHSA-6frq-4g8m-8xw9",
+                "title": "Default clone step was not treated as a plugin, so pipeline config could reach it while it held the repo owner's forge credentials",
+                "description": "### Summary Before 3.19.0, Woodpecker did not treat the default clone step as a plugin step when it got clone credentials. This happens for private repositories, and for all repositories when `WOODPECKER_AUTHENTICATE_PUBLIC_REPOS` is on. So the plugin protections did not apply to the one step that holds the forge token of the repository owner. A user who can change the pipeline config could use `workspace.base` to make the clone plugin write its `.netrc` into the shared workspace. Matrix values and manual pipeline variables also still reached the clone step after the 3.18.0 fix for plugin steps (GHSA-xwpq-2mq8-p55x). ### Details Woodpecker gives plugin steps extra protection. The compiler treats a step as a plugin only if `IsPlugin()` is true: no `commands`, no `entrypoint` and no `environment`. For plugin steps: - the workspace is always mounted at `/woodpecker`, so `workspace.base` cannot move it (fix for CVE-2024-41121, since 2.7.0) - matrix values and manual pipeline variables are not added to the environment (#7036 and #7040, since 3.18.0) Woodpecker uses the default clone step when a workflow has no `clone:` section and does not set `skip_clone`. The compiler wrote the clone credentials (`CI_NETRC_USERNAME`, `CI_NETRC_PASSWORD`, `CI_NETRC_MACHINE`) into `container.Environment` of this step before it called `createProcess`. `IsPlugin()` then saw a non-empty environment and returned false. So both protections were skipped, but only when credentials were present: - `workspace.base` from the pipeline config also moved the workspace of the clone step. If it points to the home directory of the clone plugin, the `.netrc` the plugin writes there lands in the shared workspace volume, and later steps can read it. - Matrix values and manual pipeline variables were added to the environment of the clone step. Pipeline config could change how the clone plugin and git run while the credentials were in that environment. The credentials are the forge token of the repository owner, the user who activated the repository in Woodpecker. Custom clone steps were not affected. There the credentials are added after `createProcess`, and only for trusted clone plugins or trusted repositories. The fix in #7157 (409e2b9fc6ce7d24a857ece34f9266b55a24112c, released in 3.19.0) adds the clone credentials to the step after `createProcess`. The default clone step is a plugin again, and both protections apply. Related: - GHSA-xwpq-2mq8-p55x: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xwpq-2mq8-p55x - CVE-2024-41121: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xw35-rrcp-g7xm - CVE-2024-41122: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-3wf2-2pq4-4rvc ### Proof of concept We do not publish a step-by-step exploit. The fix adds the regression test `TestCompilerCompileDefaultCloneStep` in `pipeline/frontend/yaml/compiler/compiler_test.go`. It compiles a default clone step with a custom workspace base and clone credentials: https://github.com/woodpecker-ci/woodpecker/pull/7157 ### Impact Anyone who can change the pipeline config of a repository that clones with credentials can get the forge token of the repository owner. That includes users with push access, and pull requests that run without approval or get approved. With the token they can act as the owner on the forge: read and write every repository the owner can reach, and more if the owner is a forge admin. Woodpecker does not mask the token in logs. Upgrade to 3.19.0 or later. ### Workarounds Set 'Approval requirements' to 'All events from forge' and review config changes before you approve a pipeline. Cron and manual pipelines and users on the allowed users list skip approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.19.0-r0"
+                    },
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.19.0-r0"
+                    },
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.19.0-r0"
+                    }
+                ]
+            },
+            "GHSA-7852-27mj-v5c9": {
+                "cve_id": "GHSA-7852-27mj-v5c9",
+                "title": "Login page renders error_uri as a link without scheme check (reflected XSS)",
+                "description": "### Summary The login page shows OAuth errors from the query string. The `error_uri` parameter was rendered as a link with no check of the URL scheme, so a crafted login URL could show a `javascript:` link inside the Woodpecker error box. When a victim clicks it, the script can run in the context of the Woodpecker web UI, with the victim's session. No login is needed to open the page; the attack needs one click by the victim. ### Details `web/src/views/Login.vue` took the parameter straight from the route: const errorUri = ref<string>(route.query.error_uri as string); and bound it to a link inside the error box, which is shown when `error` is set: <a v-if='errorUri' :href='errorUri' target='_blank' ...> <span>{{ errorUri }}</span> </a> Vue does not filter `javascript:` URLs in `:href`, and Woodpecker sends no Content-Security-Policy header, so nothing blocked the scheme. The link was added in v2.7.0 (#3807). Fixed in v3.20.0 by #7318 (57721450): `errorUri` is now computed and only set when the value starts with `http`. ### Proof of concept Note: the link opens with target='_blank'. In our tests, current browsers did not run the javascript: URL from this link, so exploitation depends on the browser and its settings. The unsafe link is fixed in v3.20.0 either way. ### Impact Reflected cross-site scripting in the Woodpecker web UI. Who is impacted: users of instances < 3.20.0 who open a crafted login link and click the link in the error box. If the script runs in the Woodpecker origin, it can act as the victim through the web UI and API: read pipeline logs, repo settings and the names of secrets, change repo settings, or start pipelines. The script cannot read secret values, because the API does not return them. The attacker needs no account. The victim must open the link and click once, so the impact depends on how convincing the error message looks. Workaround, if you cannot update: add a Content-Security-Policy header at the reverse proxy that blocks inline script (no `unsafe-inline`), for example `script-src 'self'`.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.20.1-r0"
+                    },
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.20.1-r0"
+                    },
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-fhhx-3cvv-6473": {
+                "cve_id": "GHSA-fhhx-3cvv-6473",
+                "title": "Agent gRPC Next request without label filter crashes the server",
+                "description": "### Summary An agent that sends a `Next` request without a label filter makes the Woodpecker server panic. The gRPC server has no panic recovery, so the whole server process exits. This stops the web UI, the API, webhooks and all running pipelines until the server restarts. Any valid agent credential is enough. Since org and user agents exist (v3.0.0), org admins and users can create such agents and get their own agent token, so this does not need server admin rights. ### Details `WoodpeckerServer.Next` (`server/rpc/server.go`) builds the agent filter from the request: Labels: req.GetFilter().GetLabels(), When the request has no filter, or a filter without labels, this is a nil Go map. `RPC.Next` (`server/rpc/rpc.go`) then writes the server-enforced labels into it, and these always include `org-id`: maps.Copy(agentFilter.Labels, agentServerLabels) Writing into a nil map panics with `assignment to entry in nil map`. The gRPC server has no recovery interceptor, so the panic ends the `woodpecker-server` process. The stock agent always sends labels, so this needs a modified agent or a hand-made gRPC request. The server label enforcement was added in v3.0.0 (#3539). Fixed in v3.20.0 by #7336 (60981de), which creates an empty map before adding the server labels. The regression test is `TestRPCNext` in `server/rpc/rpc_test.go`. ### Proof of concept Setup: Woodpecker server >= 3.0.0 and < 3.20.0, and a valid agent token (for example an org agent created by an org admin in the org settings). 1. Connect to the server gRPC port and authenticate with the agent token, as the stock agent does. 2. Call `Next` with an empty `NextRequest` (no filter, or a filter with no labels). 3. The server logs `panic: assignment to entry in nil map` from `RPC.Next` and the process exits. Without a running setup, the upstream test `TestRPCNext` in `server/rpc/rpc_test.go` (added by #7336) calls `Next` with a filter without labels. Before the fix it panics; after the fix it passes. ### Impact Denial of service of the whole Woodpecker server. Who is impacted: all v3 instances before 3.20.0 where untrusted people can hold an agent token. With org and user agents, this includes every org admin and user who can register an agent. The attacker also needs network access to the gRPC port. Each request crashes the server again, so an attacker can keep the instance down. Workaround, if you cannot update: restrict network access to the gRPC port to known agent hosts, and remove agents that you do not trust.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.20.1-r0"
+                    },
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-gjxg-ff5f-mq9f": {
+                "cve_id": "GHSA-gjxg-ff5f-mq9f",
+                "title": "GitLab: tag pipelines take their author from the git commit, so approval can be skipped (incomplete fix of CVE-2026-58370)",
+                "description": "### Summary For GitLab tag events, Woodpecker could overwrite the pipeline author with the author name of the git commit. That name is set by whoever made the commit and is not checked by GitLab. Repositories can list users whose pipelines do not need approval. Because the author was matched against this list, a user with push access could set their git author name to a listed user, push an annotated tag, and the tag pipeline ran without approval. CVE-2026-58370 fixed the same problem for the webhook data, but not for this tag path. ### Details `convertTagHook` (`server/forge/gitlab/convert.go`) sets the author from the authenticated webhook user, which is safe: pipeline.Author = hook.UserUsername For an annotated tag the webhook has no commit message, so `Hook()` (`server/forge/gitlab/gitlab.go`) loads the commit with `loadCommitFromSHA`. That function then overwrote the author with the git commit metadata: pipeline.Author = cm.AuthorName `needsApproval` (`server/pipeline/gated.go`) skips approval when the author is in the repo allow list: if slices.Contains(repo.ApprovalAllowedUsers, pipeline.Author) { The commit fallback was added in v3.14.0 (#6196). The fix for CVE-2026-58370 (#6653, v3.15.0) changed the webhook conversion, but not `loadCommitFromSHA`. Fixed in v3.20.0 by #7397 (bb1f8a14): `loadCommitFromSHA` no longer sets the author, so the author from the authenticated webhook stays. The regression test `TestTagAuthorNotSpoofedFromCommit` covers this. Only the GitLab forge is affected. ### Proof of concept Setup: Woodpecker >= 3.14.0 and < 3.20.0 with the GitLab forge. A repository that requires approval for tag events (or all events), with `alice` in the list of users that do not need approval. The attacker `mallory` has Developer (push) access to the GitLab project. 1. As mallory, make a commit with alice as the git author name: git -c user.name=alice -c user.email=mallory@example.com commit --allow-empty -m 'test' 2. Create and push an annotated tag on that commit: git tag -a v0.0.1-test -m 'test' git push origin HEAD v0.0.1-test 3. In Woodpecker, the tag pipeline shows `alice` as author and starts without waiting for approval. On v3.20.0 and later, the tag pipeline shows `mallory` as author and waits for approval. The upstream regression test `TestTagAuthorNotSpoofedFromCommit` in `server/forge/gitlab/gitlab_test.go` reproduces this without a GitLab instance: before the fix, the author becomes the commit author name; after the fix, it stays the webhook user. ### Impact Who is impacted: instances using the GitLab forge, on repositories that require approval and use the list of users whose pipelines do not need approval. A user with push access can skip the approval step for tag pipelines. The pipeline then runs code from that user with the secrets and agents available to tag events of the repository. Workaround, if you cannot update: remove all users from the approval allow list of GitLab repositories, so every pipeline needs approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-v6jr-fc8m-whr3": {
+                "cve_id": "GHSA-v6jr-fc8m-whr3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.18.1-r0"
+                    },
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.18.1-r0"
+                    },
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
+            },
+            "GHSA-xwpq-2mq8-p55x": {
+                "cve_id": "GHSA-xwpq-2mq8-p55x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.18.1-r0"
+                    },
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.18.1-r0"
+                    },
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
             }
         },
         "3.21": {
@@ -129,6 +243,88 @@
                     {
                         "introduced": "2.8.0-r5",
                         "fixed": "3.16.0-r0"
+                    }
+                ]
+            },
+            "GHSA-6frq-4g8m-8xw9": {
+                "cve_id": "GHSA-6frq-4g8m-8xw9",
+                "title": "Default clone step was not treated as a plugin, so pipeline config could reach it while it held the repo owner's forge credentials",
+                "description": "### Summary Before 3.19.0, Woodpecker did not treat the default clone step as a plugin step when it got clone credentials. This happens for private repositories, and for all repositories when `WOODPECKER_AUTHENTICATE_PUBLIC_REPOS` is on. So the plugin protections did not apply to the one step that holds the forge token of the repository owner. A user who can change the pipeline config could use `workspace.base` to make the clone plugin write its `.netrc` into the shared workspace. Matrix values and manual pipeline variables also still reached the clone step after the 3.18.0 fix for plugin steps (GHSA-xwpq-2mq8-p55x). ### Details Woodpecker gives plugin steps extra protection. The compiler treats a step as a plugin only if `IsPlugin()` is true: no `commands`, no `entrypoint` and no `environment`. For plugin steps: - the workspace is always mounted at `/woodpecker`, so `workspace.base` cannot move it (fix for CVE-2024-41121, since 2.7.0) - matrix values and manual pipeline variables are not added to the environment (#7036 and #7040, since 3.18.0) Woodpecker uses the default clone step when a workflow has no `clone:` section and does not set `skip_clone`. The compiler wrote the clone credentials (`CI_NETRC_USERNAME`, `CI_NETRC_PASSWORD`, `CI_NETRC_MACHINE`) into `container.Environment` of this step before it called `createProcess`. `IsPlugin()` then saw a non-empty environment and returned false. So both protections were skipped, but only when credentials were present: - `workspace.base` from the pipeline config also moved the workspace of the clone step. If it points to the home directory of the clone plugin, the `.netrc` the plugin writes there lands in the shared workspace volume, and later steps can read it. - Matrix values and manual pipeline variables were added to the environment of the clone step. Pipeline config could change how the clone plugin and git run while the credentials were in that environment. The credentials are the forge token of the repository owner, the user who activated the repository in Woodpecker. Custom clone steps were not affected. There the credentials are added after `createProcess`, and only for trusted clone plugins or trusted repositories. The fix in #7157 (409e2b9fc6ce7d24a857ece34f9266b55a24112c, released in 3.19.0) adds the clone credentials to the step after `createProcess`. The default clone step is a plugin again, and both protections apply. Related: - GHSA-xwpq-2mq8-p55x: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xwpq-2mq8-p55x - CVE-2024-41121: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xw35-rrcp-g7xm - CVE-2024-41122: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-3wf2-2pq4-4rvc ### Proof of concept We do not publish a step-by-step exploit. The fix adds the regression test `TestCompilerCompileDefaultCloneStep` in `pipeline/frontend/yaml/compiler/compiler_test.go`. It compiles a default clone step with a custom workspace base and clone credentials: https://github.com/woodpecker-ci/woodpecker/pull/7157 ### Impact Anyone who can change the pipeline config of a repository that clones with credentials can get the forge token of the repository owner. That includes users with push access, and pull requests that run without approval or get approved. With the token they can act as the owner on the forge: read and write every repository the owner can reach, and more if the owner is a forge admin. Woodpecker does not mask the token in logs. Upgrade to 3.19.0 or later. ### Workarounds Set 'Approval requirements' to 'All events from forge' and review config changes before you approve a pipeline. Cron and manual pipelines and users on the allowed users list skip approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.19.0-r0"
+                    }
+                ]
+            },
+            "GHSA-7852-27mj-v5c9": {
+                "cve_id": "GHSA-7852-27mj-v5c9",
+                "title": "Login page renders error_uri as a link without scheme check (reflected XSS)",
+                "description": "### Summary The login page shows OAuth errors from the query string. The `error_uri` parameter was rendered as a link with no check of the URL scheme, so a crafted login URL could show a `javascript:` link inside the Woodpecker error box. When a victim clicks it, the script can run in the context of the Woodpecker web UI, with the victim's session. No login is needed to open the page; the attack needs one click by the victim. ### Details `web/src/views/Login.vue` took the parameter straight from the route: const errorUri = ref<string>(route.query.error_uri as string); and bound it to a link inside the error box, which is shown when `error` is set: <a v-if='errorUri' :href='errorUri' target='_blank' ...> <span>{{ errorUri }}</span> </a> Vue does not filter `javascript:` URLs in `:href`, and Woodpecker sends no Content-Security-Policy header, so nothing blocked the scheme. The link was added in v2.7.0 (#3807). Fixed in v3.20.0 by #7318 (57721450): `errorUri` is now computed and only set when the value starts with `http`. ### Proof of concept Note: the link opens with target='_blank'. In our tests, current browsers did not run the javascript: URL from this link, so exploitation depends on the browser and its settings. The unsafe link is fixed in v3.20.0 either way. ### Impact Reflected cross-site scripting in the Woodpecker web UI. Who is impacted: users of instances < 3.20.0 who open a crafted login link and click the link in the error box. If the script runs in the Woodpecker origin, it can act as the victim through the web UI and API: read pipeline logs, repo settings and the names of secrets, change repo settings, or start pipelines. The script cannot read secret values, because the API does not return them. The attacker needs no account. The victim must open the link and click once, so the impact depends on how convincing the error message looks. Workaround, if you cannot update: add a Content-Security-Policy header at the reverse proxy that blocks inline script (no `unsafe-inline`), for example `script-src 'self'`.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-fhhx-3cvv-6473": {
+                "cve_id": "GHSA-fhhx-3cvv-6473",
+                "title": "Agent gRPC Next request without label filter crashes the server",
+                "description": "### Summary An agent that sends a `Next` request without a label filter makes the Woodpecker server panic. The gRPC server has no panic recovery, so the whole server process exits. This stops the web UI, the API, webhooks and all running pipelines until the server restarts. Any valid agent credential is enough. Since org and user agents exist (v3.0.0), org admins and users can create such agents and get their own agent token, so this does not need server admin rights. ### Details `WoodpeckerServer.Next` (`server/rpc/server.go`) builds the agent filter from the request: Labels: req.GetFilter().GetLabels(), When the request has no filter, or a filter without labels, this is a nil Go map. `RPC.Next` (`server/rpc/rpc.go`) then writes the server-enforced labels into it, and these always include `org-id`: maps.Copy(agentFilter.Labels, agentServerLabels) Writing into a nil map panics with `assignment to entry in nil map`. The gRPC server has no recovery interceptor, so the panic ends the `woodpecker-server` process. The stock agent always sends labels, so this needs a modified agent or a hand-made gRPC request. The server label enforcement was added in v3.0.0 (#3539). Fixed in v3.20.0 by #7336 (60981de), which creates an empty map before adding the server labels. The regression test is `TestRPCNext` in `server/rpc/rpc_test.go`. ### Proof of concept Setup: Woodpecker server >= 3.0.0 and < 3.20.0, and a valid agent token (for example an org agent created by an org admin in the org settings). 1. Connect to the server gRPC port and authenticate with the agent token, as the stock agent does. 2. Call `Next` with an empty `NextRequest` (no filter, or a filter with no labels). 3. The server logs `panic: assignment to entry in nil map` from `RPC.Next` and the process exits. Without a running setup, the upstream test `TestRPCNext` in `server/rpc/rpc_test.go` (added by #7336) calls `Next` with a filter without labels. Before the fix it panics; after the fix it passes. ### Impact Denial of service of the whole Woodpecker server. Who is impacted: all v3 instances before 3.20.0 where untrusted people can hold an agent token. With org and user agents, this includes every org admin and user who can register an agent. The attacker also needs network access to the gRPC port. Each request crashes the server again, so an attacker can keep the instance down. Workaround, if you cannot update: restrict network access to the gRPC port to known agent hosts, and remove agents that you do not trust.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.20.1-r0"
+                    },
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-gjxg-ff5f-mq9f": {
+                "cve_id": "GHSA-gjxg-ff5f-mq9f",
+                "title": "GitLab: tag pipelines take their author from the git commit, so approval can be skipped (incomplete fix of CVE-2026-58370)",
+                "description": "### Summary For GitLab tag events, Woodpecker could overwrite the pipeline author with the author name of the git commit. That name is set by whoever made the commit and is not checked by GitLab. Repositories can list users whose pipelines do not need approval. Because the author was matched against this list, a user with push access could set their git author name to a listed user, push an annotated tag, and the tag pipeline ran without approval. CVE-2026-58370 fixed the same problem for the webhook data, but not for this tag path. ### Details `convertTagHook` (`server/forge/gitlab/convert.go`) sets the author from the authenticated webhook user, which is safe: pipeline.Author = hook.UserUsername For an annotated tag the webhook has no commit message, so `Hook()` (`server/forge/gitlab/gitlab.go`) loads the commit with `loadCommitFromSHA`. That function then overwrote the author with the git commit metadata: pipeline.Author = cm.AuthorName `needsApproval` (`server/pipeline/gated.go`) skips approval when the author is in the repo allow list: if slices.Contains(repo.ApprovalAllowedUsers, pipeline.Author) { The commit fallback was added in v3.14.0 (#6196). The fix for CVE-2026-58370 (#6653, v3.15.0) changed the webhook conversion, but not `loadCommitFromSHA`. Fixed in v3.20.0 by #7397 (bb1f8a14): `loadCommitFromSHA` no longer sets the author, so the author from the authenticated webhook stays. The regression test `TestTagAuthorNotSpoofedFromCommit` covers this. Only the GitLab forge is affected. ### Proof of concept Setup: Woodpecker >= 3.14.0 and < 3.20.0 with the GitLab forge. A repository that requires approval for tag events (or all events), with `alice` in the list of users that do not need approval. The attacker `mallory` has Developer (push) access to the GitLab project. 1. As mallory, make a commit with alice as the git author name: git -c user.name=alice -c user.email=mallory@example.com commit --allow-empty -m 'test' 2. Create and push an annotated tag on that commit: git tag -a v0.0.1-test -m 'test' git push origin HEAD v0.0.1-test 3. In Woodpecker, the tag pipeline shows `alice` as author and starts without waiting for approval. On v3.20.0 and later, the tag pipeline shows `mallory` as author and waits for approval. The upstream regression test `TestTagAuthorNotSpoofedFromCommit` in `server/forge/gitlab/gitlab_test.go` reproduces this without a GitLab instance: before the fix, the author becomes the commit author name; after the fix, it stays the webhook user. ### Impact Who is impacted: instances using the GitLab forge, on repositories that require approval and use the list of users whose pipelines do not need approval. A user with push access can skip the approval step for tag pipelines. The pipeline then runs code from that user with the secrets and agents available to tag events of the repository. Workaround, if you cannot update: remove all users from the approval allow list of GitLab repositories, so every pipeline needs approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-v6jr-fc8m-whr3": {
+                "cve_id": "GHSA-v6jr-fc8m-whr3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
+            },
+            "GHSA-xwpq-2mq8-p55x": {
+                "cve_id": "GHSA-xwpq-2mq8-p55x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2.8.0-r5",
+                        "fixed": "3.18.1-r0"
                     }
                 ]
             }
@@ -185,6 +381,84 @@
                         "fixed": "3.16.0-r0"
                     }
                 ]
+            },
+            "GHSA-6frq-4g8m-8xw9": {
+                "cve_id": "GHSA-6frq-4g8m-8xw9",
+                "title": "Default clone step was not treated as a plugin, so pipeline config could reach it while it held the repo owner's forge credentials",
+                "description": "### Summary Before 3.19.0, Woodpecker did not treat the default clone step as a plugin step when it got clone credentials. This happens for private repositories, and for all repositories when `WOODPECKER_AUTHENTICATE_PUBLIC_REPOS` is on. So the plugin protections did not apply to the one step that holds the forge token of the repository owner. A user who can change the pipeline config could use `workspace.base` to make the clone plugin write its `.netrc` into the shared workspace. Matrix values and manual pipeline variables also still reached the clone step after the 3.18.0 fix for plugin steps (GHSA-xwpq-2mq8-p55x). ### Details Woodpecker gives plugin steps extra protection. The compiler treats a step as a plugin only if `IsPlugin()` is true: no `commands`, no `entrypoint` and no `environment`. For plugin steps: - the workspace is always mounted at `/woodpecker`, so `workspace.base` cannot move it (fix for CVE-2024-41121, since 2.7.0) - matrix values and manual pipeline variables are not added to the environment (#7036 and #7040, since 3.18.0) Woodpecker uses the default clone step when a workflow has no `clone:` section and does not set `skip_clone`. The compiler wrote the clone credentials (`CI_NETRC_USERNAME`, `CI_NETRC_PASSWORD`, `CI_NETRC_MACHINE`) into `container.Environment` of this step before it called `createProcess`. `IsPlugin()` then saw a non-empty environment and returned false. So both protections were skipped, but only when credentials were present: - `workspace.base` from the pipeline config also moved the workspace of the clone step. If it points to the home directory of the clone plugin, the `.netrc` the plugin writes there lands in the shared workspace volume, and later steps can read it. - Matrix values and manual pipeline variables were added to the environment of the clone step. Pipeline config could change how the clone plugin and git run while the credentials were in that environment. The credentials are the forge token of the repository owner, the user who activated the repository in Woodpecker. Custom clone steps were not affected. There the credentials are added after `createProcess`, and only for trusted clone plugins or trusted repositories. The fix in #7157 (409e2b9fc6ce7d24a857ece34f9266b55a24112c, released in 3.19.0) adds the clone credentials to the step after `createProcess`. The default clone step is a plugin again, and both protections apply. Related: - GHSA-xwpq-2mq8-p55x: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xwpq-2mq8-p55x - CVE-2024-41121: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xw35-rrcp-g7xm - CVE-2024-41122: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-3wf2-2pq4-4rvc ### Proof of concept We do not publish a step-by-step exploit. The fix adds the regression test `TestCompilerCompileDefaultCloneStep` in `pipeline/frontend/yaml/compiler/compiler_test.go`. It compiles a default clone step with a custom workspace base and clone credentials: https://github.com/woodpecker-ci/woodpecker/pull/7157 ### Impact Anyone who can change the pipeline config of a repository that clones with credentials can get the forge token of the repository owner. That includes users with push access, and pull requests that run without approval or get approved. With the token they can act as the owner on the forge: read and write every repository the owner can reach, and more if the owner is a forge admin. Woodpecker does not mask the token in logs. Upgrade to 3.19.0 or later. ### Workarounds Set 'Approval requirements' to 'All events from forge' and review config changes before you approve a pipeline. Cron and manual pipelines and users on the allowed users list skip approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.19.0-r0"
+                    }
+                ]
+            },
+            "GHSA-7852-27mj-v5c9": {
+                "cve_id": "GHSA-7852-27mj-v5c9",
+                "title": "Login page renders error_uri as a link without scheme check (reflected XSS)",
+                "description": "### Summary The login page shows OAuth errors from the query string. The `error_uri` parameter was rendered as a link with no check of the URL scheme, so a crafted login URL could show a `javascript:` link inside the Woodpecker error box. When a victim clicks it, the script can run in the context of the Woodpecker web UI, with the victim's session. No login is needed to open the page; the attack needs one click by the victim. ### Details `web/src/views/Login.vue` took the parameter straight from the route: const errorUri = ref<string>(route.query.error_uri as string); and bound it to a link inside the error box, which is shown when `error` is set: <a v-if='errorUri' :href='errorUri' target='_blank' ...> <span>{{ errorUri }}</span> </a> Vue does not filter `javascript:` URLs in `:href`, and Woodpecker sends no Content-Security-Policy header, so nothing blocked the scheme. The link was added in v2.7.0 (#3807). Fixed in v3.20.0 by #7318 (57721450): `errorUri` is now computed and only set when the value starts with `http`. ### Proof of concept Note: the link opens with target='_blank'. In our tests, current browsers did not run the javascript: URL from this link, so exploitation depends on the browser and its settings. The unsafe link is fixed in v3.20.0 either way. ### Impact Reflected cross-site scripting in the Woodpecker web UI. Who is impacted: users of instances < 3.20.0 who open a crafted login link and click the link in the error box. If the script runs in the Woodpecker origin, it can act as the victim through the web UI and API: read pipeline logs, repo settings and the names of secrets, change repo settings, or start pipelines. The script cannot read secret values, because the API does not return them. The attacker needs no account. The victim must open the link and click once, so the impact depends on how convincing the error message looks. Workaround, if you cannot update: add a Content-Security-Policy header at the reverse proxy that blocks inline script (no `unsafe-inline`), for example `script-src 'self'`.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-fhhx-3cvv-6473": {
+                "cve_id": "GHSA-fhhx-3cvv-6473",
+                "title": "Agent gRPC Next request without label filter crashes the server",
+                "description": "### Summary An agent that sends a `Next` request without a label filter makes the Woodpecker server panic. The gRPC server has no panic recovery, so the whole server process exits. This stops the web UI, the API, webhooks and all running pipelines until the server restarts. Any valid agent credential is enough. Since org and user agents exist (v3.0.0), org admins and users can create such agents and get their own agent token, so this does not need server admin rights. ### Details `WoodpeckerServer.Next` (`server/rpc/server.go`) builds the agent filter from the request: Labels: req.GetFilter().GetLabels(), When the request has no filter, or a filter without labels, this is a nil Go map. `RPC.Next` (`server/rpc/rpc.go`) then writes the server-enforced labels into it, and these always include `org-id`: maps.Copy(agentFilter.Labels, agentServerLabels) Writing into a nil map panics with `assignment to entry in nil map`. The gRPC server has no recovery interceptor, so the panic ends the `woodpecker-server` process. The stock agent always sends labels, so this needs a modified agent or a hand-made gRPC request. The server label enforcement was added in v3.0.0 (#3539). Fixed in v3.20.0 by #7336 (60981de), which creates an empty map before adding the server labels. The regression test is `TestRPCNext` in `server/rpc/rpc_test.go`. ### Proof of concept Setup: Woodpecker server >= 3.0.0 and < 3.20.0, and a valid agent token (for example an org agent created by an org admin in the org settings). 1. Connect to the server gRPC port and authenticate with the agent token, as the stock agent does. 2. Call `Next` with an empty `NextRequest` (no filter, or a filter with no labels). 3. The server logs `panic: assignment to entry in nil map` from `RPC.Next` and the process exits. Without a running setup, the upstream test `TestRPCNext` in `server/rpc/rpc_test.go` (added by #7336) calls `Next` with a filter without labels. Before the fix it panics; after the fix it passes. ### Impact Denial of service of the whole Woodpecker server. Who is impacted: all v3 instances before 3.20.0 where untrusted people can hold an agent token. With org and user agents, this includes every org admin and user who can register an agent. The attacker also needs network access to the gRPC port. Each request crashes the server again, so an attacker can keep the instance down. Workaround, if you cannot update: restrict network access to the gRPC port to known agent hosts, and remove agents that you do not trust.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-gjxg-ff5f-mq9f": {
+                "cve_id": "GHSA-gjxg-ff5f-mq9f",
+                "title": "GitLab: tag pipelines take their author from the git commit, so approval can be skipped (incomplete fix of CVE-2026-58370)",
+                "description": "### Summary For GitLab tag events, Woodpecker could overwrite the pipeline author with the author name of the git commit. That name is set by whoever made the commit and is not checked by GitLab. Repositories can list users whose pipelines do not need approval. Because the author was matched against this list, a user with push access could set their git author name to a listed user, push an annotated tag, and the tag pipeline ran without approval. CVE-2026-58370 fixed the same problem for the webhook data, but not for this tag path. ### Details `convertTagHook` (`server/forge/gitlab/convert.go`) sets the author from the authenticated webhook user, which is safe: pipeline.Author = hook.UserUsername For an annotated tag the webhook has no commit message, so `Hook()` (`server/forge/gitlab/gitlab.go`) loads the commit with `loadCommitFromSHA`. That function then overwrote the author with the git commit metadata: pipeline.Author = cm.AuthorName `needsApproval` (`server/pipeline/gated.go`) skips approval when the author is in the repo allow list: if slices.Contains(repo.ApprovalAllowedUsers, pipeline.Author) { The commit fallback was added in v3.14.0 (#6196). The fix for CVE-2026-58370 (#6653, v3.15.0) changed the webhook conversion, but not `loadCommitFromSHA`. Fixed in v3.20.0 by #7397 (bb1f8a14): `loadCommitFromSHA` no longer sets the author, so the author from the authenticated webhook stays. The regression test `TestTagAuthorNotSpoofedFromCommit` covers this. Only the GitLab forge is affected. ### Proof of concept Setup: Woodpecker >= 3.14.0 and < 3.20.0 with the GitLab forge. A repository that requires approval for tag events (or all events), with `alice` in the list of users that do not need approval. The attacker `mallory` has Developer (push) access to the GitLab project. 1. As mallory, make a commit with alice as the git author name: git -c user.name=alice -c user.email=mallory@example.com commit --allow-empty -m 'test' 2. Create and push an annotated tag on that commit: git tag -a v0.0.1-test -m 'test' git push origin HEAD v0.0.1-test 3. In Woodpecker, the tag pipeline shows `alice` as author and starts without waiting for approval. On v3.20.0 and later, the tag pipeline shows `mallory` as author and waits for approval. The upstream regression test `TestTagAuthorNotSpoofedFromCommit` in `server/forge/gitlab/gitlab_test.go` reproduces this without a GitLab instance: before the fix, the author becomes the commit author name; after the fix, it stays the webhook user. ### Impact Who is impacted: instances using the GitLab forge, on repositories that require approval and use the list of users whose pipelines do not need approval. A user with push access can skip the approval step for tag pipelines. The pipeline then runs code from that user with the secrets and agents available to tag events of the repository. Workaround, if you cannot update: remove all users from the approval allow list of GitLab repositories, so every pipeline needs approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-v6jr-fc8m-whr3": {
+                "cve_id": "GHSA-v6jr-fc8m-whr3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
+            },
+            "GHSA-xwpq-2mq8-p55x": {
+                "cve_id": "GHSA-xwpq-2mq8-p55x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.6.0-r5",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
             }
         },
         "3.23": {
@@ -226,6 +500,84 @@
                         "fixed": "3.16.0-r0"
                     }
                 ]
+            },
+            "GHSA-6frq-4g8m-8xw9": {
+                "cve_id": "GHSA-6frq-4g8m-8xw9",
+                "title": "Default clone step was not treated as a plugin, so pipeline config could reach it while it held the repo owner's forge credentials",
+                "description": "### Summary Before 3.19.0, Woodpecker did not treat the default clone step as a plugin step when it got clone credentials. This happens for private repositories, and for all repositories when `WOODPECKER_AUTHENTICATE_PUBLIC_REPOS` is on. So the plugin protections did not apply to the one step that holds the forge token of the repository owner. A user who can change the pipeline config could use `workspace.base` to make the clone plugin write its `.netrc` into the shared workspace. Matrix values and manual pipeline variables also still reached the clone step after the 3.18.0 fix for plugin steps (GHSA-xwpq-2mq8-p55x). ### Details Woodpecker gives plugin steps extra protection. The compiler treats a step as a plugin only if `IsPlugin()` is true: no `commands`, no `entrypoint` and no `environment`. For plugin steps: - the workspace is always mounted at `/woodpecker`, so `workspace.base` cannot move it (fix for CVE-2024-41121, since 2.7.0) - matrix values and manual pipeline variables are not added to the environment (#7036 and #7040, since 3.18.0) Woodpecker uses the default clone step when a workflow has no `clone:` section and does not set `skip_clone`. The compiler wrote the clone credentials (`CI_NETRC_USERNAME`, `CI_NETRC_PASSWORD`, `CI_NETRC_MACHINE`) into `container.Environment` of this step before it called `createProcess`. `IsPlugin()` then saw a non-empty environment and returned false. So both protections were skipped, but only when credentials were present: - `workspace.base` from the pipeline config also moved the workspace of the clone step. If it points to the home directory of the clone plugin, the `.netrc` the plugin writes there lands in the shared workspace volume, and later steps can read it. - Matrix values and manual pipeline variables were added to the environment of the clone step. Pipeline config could change how the clone plugin and git run while the credentials were in that environment. The credentials are the forge token of the repository owner, the user who activated the repository in Woodpecker. Custom clone steps were not affected. There the credentials are added after `createProcess`, and only for trusted clone plugins or trusted repositories. The fix in #7157 (409e2b9fc6ce7d24a857ece34f9266b55a24112c, released in 3.19.0) adds the clone credentials to the step after `createProcess`. The default clone step is a plugin again, and both protections apply. Related: - GHSA-xwpq-2mq8-p55x: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xwpq-2mq8-p55x - CVE-2024-41121: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xw35-rrcp-g7xm - CVE-2024-41122: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-3wf2-2pq4-4rvc ### Proof of concept We do not publish a step-by-step exploit. The fix adds the regression test `TestCompilerCompileDefaultCloneStep` in `pipeline/frontend/yaml/compiler/compiler_test.go`. It compiles a default clone step with a custom workspace base and clone credentials: https://github.com/woodpecker-ci/woodpecker/pull/7157 ### Impact Anyone who can change the pipeline config of a repository that clones with credentials can get the forge token of the repository owner. That includes users with push access, and pull requests that run without approval or get approved. With the token they can act as the owner on the forge: read and write every repository the owner can reach, and more if the owner is a forge admin. Woodpecker does not mask the token in logs. Upgrade to 3.19.0 or later. ### Workarounds Set 'Approval requirements' to 'All events from forge' and review config changes before you approve a pipeline. Cron and manual pipelines and users on the allowed users list skip approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.19.0-r0"
+                    }
+                ]
+            },
+            "GHSA-7852-27mj-v5c9": {
+                "cve_id": "GHSA-7852-27mj-v5c9",
+                "title": "Login page renders error_uri as a link without scheme check (reflected XSS)",
+                "description": "### Summary The login page shows OAuth errors from the query string. The `error_uri` parameter was rendered as a link with no check of the URL scheme, so a crafted login URL could show a `javascript:` link inside the Woodpecker error box. When a victim clicks it, the script can run in the context of the Woodpecker web UI, with the victim's session. No login is needed to open the page; the attack needs one click by the victim. ### Details `web/src/views/Login.vue` took the parameter straight from the route: const errorUri = ref<string>(route.query.error_uri as string); and bound it to a link inside the error box, which is shown when `error` is set: <a v-if='errorUri' :href='errorUri' target='_blank' ...> <span>{{ errorUri }}</span> </a> Vue does not filter `javascript:` URLs in `:href`, and Woodpecker sends no Content-Security-Policy header, so nothing blocked the scheme. The link was added in v2.7.0 (#3807). Fixed in v3.20.0 by #7318 (57721450): `errorUri` is now computed and only set when the value starts with `http`. ### Proof of concept Note: the link opens with target='_blank'. In our tests, current browsers did not run the javascript: URL from this link, so exploitation depends on the browser and its settings. The unsafe link is fixed in v3.20.0 either way. ### Impact Reflected cross-site scripting in the Woodpecker web UI. Who is impacted: users of instances < 3.20.0 who open a crafted login link and click the link in the error box. If the script runs in the Woodpecker origin, it can act as the victim through the web UI and API: read pipeline logs, repo settings and the names of secrets, change repo settings, or start pipelines. The script cannot read secret values, because the API does not return them. The attacker needs no account. The victim must open the link and click once, so the impact depends on how convincing the error message looks. Workaround, if you cannot update: add a Content-Security-Policy header at the reverse proxy that blocks inline script (no `unsafe-inline`), for example `script-src 'self'`.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-fhhx-3cvv-6473": {
+                "cve_id": "GHSA-fhhx-3cvv-6473",
+                "title": "Agent gRPC Next request without label filter crashes the server",
+                "description": "### Summary An agent that sends a `Next` request without a label filter makes the Woodpecker server panic. The gRPC server has no panic recovery, so the whole server process exits. This stops the web UI, the API, webhooks and all running pipelines until the server restarts. Any valid agent credential is enough. Since org and user agents exist (v3.0.0), org admins and users can create such agents and get their own agent token, so this does not need server admin rights. ### Details `WoodpeckerServer.Next` (`server/rpc/server.go`) builds the agent filter from the request: Labels: req.GetFilter().GetLabels(), When the request has no filter, or a filter without labels, this is a nil Go map. `RPC.Next` (`server/rpc/rpc.go`) then writes the server-enforced labels into it, and these always include `org-id`: maps.Copy(agentFilter.Labels, agentServerLabels) Writing into a nil map panics with `assignment to entry in nil map`. The gRPC server has no recovery interceptor, so the panic ends the `woodpecker-server` process. The stock agent always sends labels, so this needs a modified agent or a hand-made gRPC request. The server label enforcement was added in v3.0.0 (#3539). Fixed in v3.20.0 by #7336 (60981de), which creates an empty map before adding the server labels. The regression test is `TestRPCNext` in `server/rpc/rpc_test.go`. ### Proof of concept Setup: Woodpecker server >= 3.0.0 and < 3.20.0, and a valid agent token (for example an org agent created by an org admin in the org settings). 1. Connect to the server gRPC port and authenticate with the agent token, as the stock agent does. 2. Call `Next` with an empty `NextRequest` (no filter, or a filter with no labels). 3. The server logs `panic: assignment to entry in nil map` from `RPC.Next` and the process exits. Without a running setup, the upstream test `TestRPCNext` in `server/rpc/rpc_test.go` (added by #7336) calls `Next` with a filter without labels. Before the fix it panics; after the fix it passes. ### Impact Denial of service of the whole Woodpecker server. Who is impacted: all v3 instances before 3.20.0 where untrusted people can hold an agent token. With org and user agents, this includes every org admin and user who can register an agent. The attacker also needs network access to the gRPC port. Each request crashes the server again, so an attacker can keep the instance down. Workaround, if you cannot update: restrict network access to the gRPC port to known agent hosts, and remove agents that you do not trust.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-gjxg-ff5f-mq9f": {
+                "cve_id": "GHSA-gjxg-ff5f-mq9f",
+                "title": "GitLab: tag pipelines take their author from the git commit, so approval can be skipped (incomplete fix of CVE-2026-58370)",
+                "description": "### Summary For GitLab tag events, Woodpecker could overwrite the pipeline author with the author name of the git commit. That name is set by whoever made the commit and is not checked by GitLab. Repositories can list users whose pipelines do not need approval. Because the author was matched against this list, a user with push access could set their git author name to a listed user, push an annotated tag, and the tag pipeline ran without approval. CVE-2026-58370 fixed the same problem for the webhook data, but not for this tag path. ### Details `convertTagHook` (`server/forge/gitlab/convert.go`) sets the author from the authenticated webhook user, which is safe: pipeline.Author = hook.UserUsername For an annotated tag the webhook has no commit message, so `Hook()` (`server/forge/gitlab/gitlab.go`) loads the commit with `loadCommitFromSHA`. That function then overwrote the author with the git commit metadata: pipeline.Author = cm.AuthorName `needsApproval` (`server/pipeline/gated.go`) skips approval when the author is in the repo allow list: if slices.Contains(repo.ApprovalAllowedUsers, pipeline.Author) { The commit fallback was added in v3.14.0 (#6196). The fix for CVE-2026-58370 (#6653, v3.15.0) changed the webhook conversion, but not `loadCommitFromSHA`. Fixed in v3.20.0 by #7397 (bb1f8a14): `loadCommitFromSHA` no longer sets the author, so the author from the authenticated webhook stays. The regression test `TestTagAuthorNotSpoofedFromCommit` covers this. Only the GitLab forge is affected. ### Proof of concept Setup: Woodpecker >= 3.14.0 and < 3.20.0 with the GitLab forge. A repository that requires approval for tag events (or all events), with `alice` in the list of users that do not need approval. The attacker `mallory` has Developer (push) access to the GitLab project. 1. As mallory, make a commit with alice as the git author name: git -c user.name=alice -c user.email=mallory@example.com commit --allow-empty -m 'test' 2. Create and push an annotated tag on that commit: git tag -a v0.0.1-test -m 'test' git push origin HEAD v0.0.1-test 3. In Woodpecker, the tag pipeline shows `alice` as author and starts without waiting for approval. On v3.20.0 and later, the tag pipeline shows `mallory` as author and waits for approval. The upstream regression test `TestTagAuthorNotSpoofedFromCommit` in `server/forge/gitlab/gitlab_test.go` reproduces this without a GitLab instance: before the fix, the author becomes the commit author name; after the fix, it stays the webhook user. ### Impact Who is impacted: instances using the GitLab forge, on repositories that require approval and use the list of users whose pipelines do not need approval. A user with push access can skip the approval step for tag pipelines. The pipeline then runs code from that user with the secrets and agents available to tag events of the repository. Workaround, if you cannot update: remove all users from the approval allow list of GitLab repositories, so every pipeline needs approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-v6jr-fc8m-whr3": {
+                "cve_id": "GHSA-v6jr-fc8m-whr3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
+            },
+            "GHSA-xwpq-2mq8-p55x": {
+                "cve_id": "GHSA-xwpq-2mq8-p55x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
             }
         },
         "3.24": {
@@ -265,6 +617,84 @@
                     {
                         "introduced": "3.14.1-r0",
                         "fixed": "3.16.0-r0"
+                    }
+                ]
+            },
+            "GHSA-6frq-4g8m-8xw9": {
+                "cve_id": "GHSA-6frq-4g8m-8xw9",
+                "title": "Default clone step was not treated as a plugin, so pipeline config could reach it while it held the repo owner's forge credentials",
+                "description": "### Summary Before 3.19.0, Woodpecker did not treat the default clone step as a plugin step when it got clone credentials. This happens for private repositories, and for all repositories when `WOODPECKER_AUTHENTICATE_PUBLIC_REPOS` is on. So the plugin protections did not apply to the one step that holds the forge token of the repository owner. A user who can change the pipeline config could use `workspace.base` to make the clone plugin write its `.netrc` into the shared workspace. Matrix values and manual pipeline variables also still reached the clone step after the 3.18.0 fix for plugin steps (GHSA-xwpq-2mq8-p55x). ### Details Woodpecker gives plugin steps extra protection. The compiler treats a step as a plugin only if `IsPlugin()` is true: no `commands`, no `entrypoint` and no `environment`. For plugin steps: - the workspace is always mounted at `/woodpecker`, so `workspace.base` cannot move it (fix for CVE-2024-41121, since 2.7.0) - matrix values and manual pipeline variables are not added to the environment (#7036 and #7040, since 3.18.0) Woodpecker uses the default clone step when a workflow has no `clone:` section and does not set `skip_clone`. The compiler wrote the clone credentials (`CI_NETRC_USERNAME`, `CI_NETRC_PASSWORD`, `CI_NETRC_MACHINE`) into `container.Environment` of this step before it called `createProcess`. `IsPlugin()` then saw a non-empty environment and returned false. So both protections were skipped, but only when credentials were present: - `workspace.base` from the pipeline config also moved the workspace of the clone step. If it points to the home directory of the clone plugin, the `.netrc` the plugin writes there lands in the shared workspace volume, and later steps can read it. - Matrix values and manual pipeline variables were added to the environment of the clone step. Pipeline config could change how the clone plugin and git run while the credentials were in that environment. The credentials are the forge token of the repository owner, the user who activated the repository in Woodpecker. Custom clone steps were not affected. There the credentials are added after `createProcess`, and only for trusted clone plugins or trusted repositories. The fix in #7157 (409e2b9fc6ce7d24a857ece34f9266b55a24112c, released in 3.19.0) adds the clone credentials to the step after `createProcess`. The default clone step is a plugin again, and both protections apply. Related: - GHSA-xwpq-2mq8-p55x: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xwpq-2mq8-p55x - CVE-2024-41121: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-xw35-rrcp-g7xm - CVE-2024-41122: https://github.com/woodpecker-ci/woodpecker/security/advisories/GHSA-3wf2-2pq4-4rvc ### Proof of concept We do not publish a step-by-step exploit. The fix adds the regression test `TestCompilerCompileDefaultCloneStep` in `pipeline/frontend/yaml/compiler/compiler_test.go`. It compiles a default clone step with a custom workspace base and clone credentials: https://github.com/woodpecker-ci/woodpecker/pull/7157 ### Impact Anyone who can change the pipeline config of a repository that clones with credentials can get the forge token of the repository owner. That includes users with push access, and pull requests that run without approval or get approved. With the token they can act as the owner on the forge: read and write every repository the owner can reach, and more if the owner is a forge admin. Woodpecker does not mask the token in logs. Upgrade to 3.19.0 or later. ### Workarounds Set 'Approval requirements' to 'All events from forge' and review config changes before you approve a pipeline. Cron and manual pipelines and users on the allowed users list skip approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.19.0-r0"
+                    }
+                ]
+            },
+            "GHSA-7852-27mj-v5c9": {
+                "cve_id": "GHSA-7852-27mj-v5c9",
+                "title": "Login page renders error_uri as a link without scheme check (reflected XSS)",
+                "description": "### Summary The login page shows OAuth errors from the query string. The `error_uri` parameter was rendered as a link with no check of the URL scheme, so a crafted login URL could show a `javascript:` link inside the Woodpecker error box. When a victim clicks it, the script can run in the context of the Woodpecker web UI, with the victim's session. No login is needed to open the page; the attack needs one click by the victim. ### Details `web/src/views/Login.vue` took the parameter straight from the route: const errorUri = ref<string>(route.query.error_uri as string); and bound it to a link inside the error box, which is shown when `error` is set: <a v-if='errorUri' :href='errorUri' target='_blank' ...> <span>{{ errorUri }}</span> </a> Vue does not filter `javascript:` URLs in `:href`, and Woodpecker sends no Content-Security-Policy header, so nothing blocked the scheme. The link was added in v2.7.0 (#3807). Fixed in v3.20.0 by #7318 (57721450): `errorUri` is now computed and only set when the value starts with `http`. ### Proof of concept Note: the link opens with target='_blank'. In our tests, current browsers did not run the javascript: URL from this link, so exploitation depends on the browser and its settings. The unsafe link is fixed in v3.20.0 either way. ### Impact Reflected cross-site scripting in the Woodpecker web UI. Who is impacted: users of instances < 3.20.0 who open a crafted login link and click the link in the error box. If the script runs in the Woodpecker origin, it can act as the victim through the web UI and API: read pipeline logs, repo settings and the names of secrets, change repo settings, or start pipelines. The script cannot read secret values, because the API does not return them. The attacker needs no account. The victim must open the link and click once, so the impact depends on how convincing the error message looks. Workaround, if you cannot update: add a Content-Security-Policy header at the reverse proxy that blocks inline script (no `unsafe-inline`), for example `script-src 'self'`.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-fhhx-3cvv-6473": {
+                "cve_id": "GHSA-fhhx-3cvv-6473",
+                "title": "Agent gRPC Next request without label filter crashes the server",
+                "description": "### Summary An agent that sends a `Next` request without a label filter makes the Woodpecker server panic. The gRPC server has no panic recovery, so the whole server process exits. This stops the web UI, the API, webhooks and all running pipelines until the server restarts. Any valid agent credential is enough. Since org and user agents exist (v3.0.0), org admins and users can create such agents and get their own agent token, so this does not need server admin rights. ### Details `WoodpeckerServer.Next` (`server/rpc/server.go`) builds the agent filter from the request: Labels: req.GetFilter().GetLabels(), When the request has no filter, or a filter without labels, this is a nil Go map. `RPC.Next` (`server/rpc/rpc.go`) then writes the server-enforced labels into it, and these always include `org-id`: maps.Copy(agentFilter.Labels, agentServerLabels) Writing into a nil map panics with `assignment to entry in nil map`. The gRPC server has no recovery interceptor, so the panic ends the `woodpecker-server` process. The stock agent always sends labels, so this needs a modified agent or a hand-made gRPC request. The server label enforcement was added in v3.0.0 (#3539). Fixed in v3.20.0 by #7336 (60981de), which creates an empty map before adding the server labels. The regression test is `TestRPCNext` in `server/rpc/rpc_test.go`. ### Proof of concept Setup: Woodpecker server >= 3.0.0 and < 3.20.0, and a valid agent token (for example an org agent created by an org admin in the org settings). 1. Connect to the server gRPC port and authenticate with the agent token, as the stock agent does. 2. Call `Next` with an empty `NextRequest` (no filter, or a filter with no labels). 3. The server logs `panic: assignment to entry in nil map` from `RPC.Next` and the process exits. Without a running setup, the upstream test `TestRPCNext` in `server/rpc/rpc_test.go` (added by #7336) calls `Next` with a filter without labels. Before the fix it panics; after the fix it passes. ### Impact Denial of service of the whole Woodpecker server. Who is impacted: all v3 instances before 3.20.0 where untrusted people can hold an agent token. With org and user agents, this includes every org admin and user who can register an agent. The attacker also needs network access to the gRPC port. Each request crashes the server again, so an attacker can keep the instance down. Workaround, if you cannot update: restrict network access to the gRPC port to known agent hosts, and remove agents that you do not trust.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-gjxg-ff5f-mq9f": {
+                "cve_id": "GHSA-gjxg-ff5f-mq9f",
+                "title": "GitLab: tag pipelines take their author from the git commit, so approval can be skipped (incomplete fix of CVE-2026-58370)",
+                "description": "### Summary For GitLab tag events, Woodpecker could overwrite the pipeline author with the author name of the git commit. That name is set by whoever made the commit and is not checked by GitLab. Repositories can list users whose pipelines do not need approval. Because the author was matched against this list, a user with push access could set their git author name to a listed user, push an annotated tag, and the tag pipeline ran without approval. CVE-2026-58370 fixed the same problem for the webhook data, but not for this tag path. ### Details `convertTagHook` (`server/forge/gitlab/convert.go`) sets the author from the authenticated webhook user, which is safe: pipeline.Author = hook.UserUsername For an annotated tag the webhook has no commit message, so `Hook()` (`server/forge/gitlab/gitlab.go`) loads the commit with `loadCommitFromSHA`. That function then overwrote the author with the git commit metadata: pipeline.Author = cm.AuthorName `needsApproval` (`server/pipeline/gated.go`) skips approval when the author is in the repo allow list: if slices.Contains(repo.ApprovalAllowedUsers, pipeline.Author) { The commit fallback was added in v3.14.0 (#6196). The fix for CVE-2026-58370 (#6653, v3.15.0) changed the webhook conversion, but not `loadCommitFromSHA`. Fixed in v3.20.0 by #7397 (bb1f8a14): `loadCommitFromSHA` no longer sets the author, so the author from the authenticated webhook stays. The regression test `TestTagAuthorNotSpoofedFromCommit` covers this. Only the GitLab forge is affected. ### Proof of concept Setup: Woodpecker >= 3.14.0 and < 3.20.0 with the GitLab forge. A repository that requires approval for tag events (or all events), with `alice` in the list of users that do not need approval. The attacker `mallory` has Developer (push) access to the GitLab project. 1. As mallory, make a commit with alice as the git author name: git -c user.name=alice -c user.email=mallory@example.com commit --allow-empty -m 'test' 2. Create and push an annotated tag on that commit: git tag -a v0.0.1-test -m 'test' git push origin HEAD v0.0.1-test 3. In Woodpecker, the tag pipeline shows `alice` as author and starts without waiting for approval. On v3.20.0 and later, the tag pipeline shows `mallory` as author and waits for approval. The upstream regression test `TestTagAuthorNotSpoofedFromCommit` in `server/forge/gitlab/gitlab_test.go` reproduces this without a GitLab instance: before the fix, the author becomes the commit author name; after the fix, it stays the webhook user. ### Impact Who is impacted: instances using the GitLab forge, on repositories that require approval and use the list of users whose pipelines do not need approval. A user with push access can skip the approval step for tag pipelines. The pipeline then runs code from that user with the secrets and agents available to tag events of the repository. Workaround, if you cannot update: remove all users from the approval allow list of GitLab repositories, so every pipeline needs approval.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.20.1-r0"
+                    }
+                ]
+            },
+            "GHSA-v6jr-fc8m-whr3": {
+                "cve_id": "GHSA-v6jr-fc8m-whr3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.18.1-r0"
+                    }
+                ]
+            },
+            "GHSA-xwpq-2mq8-p55x": {
+                "cve_id": "GHSA-xwpq-2mq8-p55x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "3.14.1-r0",
+                        "fixed": "3.18.1-r0"
                     }
                 ]
             }

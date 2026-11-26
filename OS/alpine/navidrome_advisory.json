@@ -118,6 +118,246 @@
                         "fixed": "0.60.0-r0"
                     }
                 ]
+            },
+            "GHSA-37h4-53gj-cw8m": {
+                "cve_id": "GHSA-37h4-53gj-cw8m",
+                "title": "Player records could be overwritten, and their ownership taken over, by any authenticated user",
+                "description": "## Summary Any authenticated user who knew another user's player id could modify that player, and on one path take ownership of it. Player settings carry the forced transcoding profile, the maximum bit rate, whether real file paths are reported, and whether scrobbling is enabled, so this changed how the victim's client streamed and scrobbled. No library content and no account credentials were exposed. ## Details Two write paths on player records were not scoped to the player's owner. `POST /api/player` (native API) is reachable by any authenticated user. The repository authorized the write with the `userId` taken from the request body, then saved the record using the `id` taken from the body. When that id matched an existing player, the create turned into an `UPDATE ... WHERE id = ?` with no ownership predicate, and the update set was not stripped of `user_id`. A request of the form `{'id':'<victim player id>','userId':'<attacker id>','name':'pwn'}` therefore overwrote the victim's row and reassigned it to the attacker, who could then edit it freely as its owner. The same class of bug was fixed for `PUT /api/player/{id}` in v0.62.0 (GHSA-x65f-m8x9-pjxm); the create path was not covered by that fix. `players.Register`, which resolves the player for each request, reused a player by the id supplied by the client and checked only that the client name matched. The id comes from the Subsonic `nd-player-<hex(username)>` cookie, which is present in the default configuration, or from the Jellyfin `DeviceId` in the `X-Emby-Authorization` header when the Jellyfin API is enabled (`Jellyfin.Enabled`, off by default). A request that carried another user's player id was served with that player attached for the rest of the request, inheriting its transcoding profile and its report-real-path setting, and overwrote its name, user agent, IP and last-seen values on the next write past the one-minute throttle. This path never transferred ownership. ## Impact An authenticated user, with no admin rights, could change another user's player settings, and through `POST /api/player` become its owner. Ownership transfer also removes the player from the victim's own list. The limiting factor is the player id: it is a random 22-character id that is returned only to its owner and to admins. It is not enumerable, and no regular-user endpoint discloses another user's player id. An attacker needs that id from some other source, such as an admin page, a shared log, or a captured request. That is why attack complexity is rated high. ## Patches Fixed in **v0.64.1**. `Save` now always creates a new player and ignores any id supplied in the request body, so a create can never become an unscoped update. Edits keep going through `Update`, which authorizes against the stored `user_id` in the `WHERE` clause. `Register` now reuses a player only when it belongs to the requesting user, and otherwise falls back to matching the user's own players, exactly as it already did when the client name did not match. Fix commit: https://github.com/navidrome/navidrome/commit/9e8811e4c5 ## Workarounds None. Disabling the Jellyfin API removes one entry point for the registration path, but the Subsonic path is present in the default configuration. ## Credits Reported by @RealFakeAccount, who found the `POST /api/player` ownership takeover and identified the registration path, and by @qrn12580, who independently reported the registration path with a working proof of concept and found the Jellyfin `DeviceId` entry point. Both reports came through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-3g4p-jhv2-xrxf": {
+                "cve_id": "GHSA-3g4p-jhv2-xrxf",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-3rwv-f797-f9p3": {
+                "cve_id": "GHSA-3rwv-f797-f9p3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-4p3r-6362-833w": {
+                "cve_id": "GHSA-4p3r-6362-833w",
+                "title": "Transcoding command templates exposed to non-admin users",
+                "description": "## Summary Authenticated non-admin users can read transcoding configuration through the native API when `EnableTranscodingConfig` is enabled. The affected responses include the full transcoding command templates in the `command` field. `EnableTranscodingConfig` defaults to `false`, so a server is only affected if an administrator turned it on. The issue is read-only. Create, update, and delete operations were correctly rejected for the same non-admin user in testing. ## Impact A low-privilege user can retrieve transcoding profiles that are intended to be controlled by administrators, including command templates and target formats. This can disclose local command paths, media processing options, and administrator-configured transcoding behavior. It also weakens the intended security boundary around the transcoding configuration feature. Authentication is required, so the endpoints are not reachable anonymously. What is disclosed is operator-authored configuration, not credentials, user data, or media access. Writes were already restricted to administrators, and streaming is unaffected. ## Reproduction The following was reproduced against the official `deluan/navidrome:0.61.2` image with `ND_ENABLETRANSCODINGCONFIG=true`. 1. Start Navidrome with transcoding configuration enabled. 2. Create or use an administrator account. 3. Create a non-admin user with `isAdmin: false`. 4. Login as the non-admin user and keep the returned JWT. 5. Request `GET /api/transcoding` with `X-ND-Authorization: Bearer <non-admin-token>`. 6. Request `GET /api/transcoding/{id}` with the same token. Observed non-admin list response: ```http GET /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK X-Total-Count: 4 [{'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192}, ...] ``` Observed non-admin single-entry response: ```http GET /api/transcoding/Udt9sUvbUvW48KpqcLCoFr HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK {'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192} ``` Controls: ```http GET /api/transcoding HTTP/1.1 HTTP/1.1 401 Unauthorized {'error':'Not authenticated'} ``` ```http POST /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> Content-Type: application/json {'name':'poc','targetFormat':'poc','command':'poc','defaultBitRate':64} HTTP/1.1 403 Forbidden {'error':'Saving transcoding: Permission denied'} ``` ## Root Cause and Technical Details The native API registers `/transcoding` inside the authenticated route group, not inside the `adminOnlyMiddleware` group: ```go r.Group(func(r chi.Router) { r.Use(server.Authenticator(api.ds)) r.Use(server.JWTRefresher) r.Use(server.UpdateLastAccessMiddleware(api.ds)) // ... api.R(r, '/transcoding', model.Transcoding{}, conf.Server.EnableTranscodingConfig) // ... r.With(adminOnlyMiddleware).Group(func(r chi.Router) { api.addInspectRoute(r) api.addConfigRoute(r) api.addUserLibraryRoute(r) api.RX(r, '/library', api.libs.NewRepository, true) }) }) ``` `api.R` wires REST read methods for authenticated users. In `persistence/transcoding_repository.go`, write methods check `loggedUser(r.ctx).IsAdmin`, but read methods do not: ```go func (r *transcodingRepository) Count(options ...rest.QueryOptions) (int64, error) { return r.count(Select(), r.parseRestOptions(r.ctx, options...)) } func (r *transcodingRepository) Read(id string) (any, error) { return r.Get(id) } func (r *transcodingRepository) ReadAll(options ...rest.QueryOptions) (any, error) { sel := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns('*') res := model.Transcodings{} err := r.queryAll(sel, &res) return res, err } ``` The write paths do enforce administrator privileges. This leaves the read paths exposed to any authenticated user. ## Patch Fixed in 0.62.0, commit `11640f2e4` (#5564). ## Workarounds On affected versions, leave `EnableTranscodingConfig` at its default of `false`. The endpoint only exposes the command templates when it is enabled. Blocking the reads, or moving `/transcoding` under `adminOnlyMiddleware`, was tried first and reverted. The web UI reads this resource in ordinary non-admin flows (the player edit dropdown, the player list, and the share/download format pickers), all of which need only `name` and `targetFormat`. The only sensitive field is `command`, the admin-owned ffmpeg template. The shipped fix is field-level redaction rather than denying the read: - `Read` and `ReadAll` still return the profiles to any authenticated user, but blank the `command` field for non-admins. `Count` stays open, because the UI needs list pagination. - Writes (`Save`, `Update`, `Delete`, `Put`) remain admin-only, as they already were. - Streaming is unaffected. It resolves profiles through `Get` and `FindByFormat` on `model.TranscodingRepository`, which are not redacted, so on-the-fly transcoding keeps working for non-admin users. Regression tests cover non-admin reads returning a blank `command`, admin reads keeping it, non-admin `Get`/`FindByFormat` keeping it, and writes still being denied.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-82gh-4ggp-gfg5": {
+                "cve_id": "GHSA-82gh-4ggp-gfg5",
+                "title": "Share creation trusts a client-supplied userId, exposing other users' library content",
+                "description": "## Summary `POST /api/share` accepted a client-supplied `userId` and stored it as the share owner. The owner decides the library-access context used to resolve and stream the share contents, so on 0.63.x any authenticated user could create a share attributed to a user with wider library access (for example an admin) and, through it, read and stream content from libraries they have no access to. On earlier versions the spoofed owner only mis-attributed the share. ## Details The share repository only filled in the owner when the field was empty, so a spoofed `userId` in the request body persisted. From v0.63.0 the public share page loaded playlist shares, and the public stream endpoint checked library access, as the stored owner. A share of any public playlist, or of albums or tracks the caller could not see (see GHSA-3rwv-f797-f9p3), created with `userId` set to an admin or another user with broader library access, served those tracks to anyone holding the link. Before v0.63.0 playlist shares were loaded with a synthetic admin context regardless of owner, so spoofing changed only who the share was attributed to. The spoofed `userId` must be an existing user id; any public playlist exposes its owner's id as `ownerId` in the native API. The same code path is used by Subsonic `createShare`, but that endpoint has no `userId` parameter, so it is not affected. ## Impact Any logged-in user could: - On v0.63.0 through v0.63.2, read and stream tracks from libraries they have not been granted, by sharing a public playlist (or, combined with GHSA-3rwv-f797-f9p3, albums or tracks) as a user with access to those libraries. - Create shares that show up under another user's name. Sharing is enabled by default since v0.63.0. Before that, only instances with `EnableSharing = true` were affected. Per-user library restrictions must be in use for the cross-library read to matter. The cross-library read requires v0.63.0 or later; the mis-attribution affects every version with sharing. ## Patches Fixed in **v0.64.0**. The share owner is now always the authenticated caller. The client-supplied `userId` is ignored. Fix commit: https://github.com/navidrome/navidrome/commit/1a8463f7d ## Workarounds For versions before 0.64.0, disable sharing (`EnableSharing = false`). ## Related The same report also covered a SQL injection via the artist `role` filter and a plugin HTTP/WebSocket-client SSRF bypass via DNS names. Those are published separately as GHSA-hm54-32q6-3rcr and GHSA-pr2j-mfc8-qjcc. ## Credits Reported by @gigioneggiando through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-8jrh-w926-8rvw": {
+                "cve_id": "GHSA-8jrh-w926-8rvw",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f22h-6qxh-rqq2": {
+                "cve_id": "GHSA-f22h-6qxh-rqq2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f295-6wp9-qqfg": {
+                "cve_id": "GHSA-f295-6wp9-qqfg",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-hm54-32q6-3rcr": {
+                "cve_id": "GHSA-hm54-32q6-3rcr",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.55.2-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-mpgw-cc94-xrpp": {
+                "cve_id": "GHSA-mpgw-cc94-xrpp",
+                "title": "Cross-library playlist import and sharing bypass in Navidrome",
+                "description": "### Summary Navidrome allows an authenticated non-admin user to import an M3U playlist containing paths to media files in libraries the user is not authorized to access. If the attacker knows or guesses a valid restricted media path, the imported playlist can store the restricted track ID. When playlist sharing is enabled, the attacker can share the playlist and expose the restricted track through public share/stream URLs. ### Details The M3U import (`POST /api/playlist` with an M3U body) resolved playlist entries against all configured libraries, and `MediaFileRepository.FindByPaths` had no per-user library filter, so a path under any library root resolved to its media file regardless of the importing user's access. As a result, a non-admin user can add tracks from restricted libraries to a playlist they own. Playlist sharing can further expose those tracks because shared playlist loading retrieves playlist tracks with elevated access. Affected flow: 1. A non-admin authenticated user imports an M3U playlist. 2. The playlist references a valid path to a track in a restricted library. 3. Navidrome resolves the path and stores the restricted media file ID in the attacker-owned playlist. 4. If sharing is enabled, the attacker shares the playlist. 5. Public share/stream URLs expose the restricted track. ### PoC Create an M3U playlist that references a track in a library the importing user cannot access: ``` #EXTM3U /path/to/restricted-library/secret/test.mp3 ``` Import the playlist as a non-admin user with access only to a different library. Observed behavior: - The restricted track is resolved and added to the user's playlist. If playlist sharing is enabled, share the playlist and access the generated public share/stream URL. Observed behavior: - The restricted track is included in the shared playlist and can be streamed through the public URL. ### Impact An authenticated non-admin user can store tracks from libraries they are not authorised to use in their own playlist, provided they know or can guess valid media paths under a library root with an audio file extension. Without sharing, this reveals that the path exists and the track's duration and size through the playlist totals; streaming stays blocked. If playlist sharing is enabled (`EnableSharing`, off by default in all affected versions), the attacker can expose the restricted tracks to unauthenticated users through the public share and stream URLs, because shared playlists were loaded with an admin context and shared streams did not check library access. ### Patches Fixed in **v0.63.0**: `FindByPaths` applies the user's library filter, shared playlists load as the share owner, and shared streams check the owner's library access. Fix commit: https://github.com/navidrome/navidrome/commit/fa138afea576e14c13e7c8150d195fddce15a954 (#5640) ### Workarounds Keep sharing disabled (`EnableSharing = false`, the default on affected versions) to prevent unauthenticated exposure. No configuration prevents the import itself; upgrade to v0.63.0 or later.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.63.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-p994-r776-mw52": {
+                "cve_id": "GHSA-p994-r776-mw52",
+                "title": "Subsonic API allows unauthenticated brute-force of user passwords",
+                "description": "### Summary The Subsonic API endpoints under `/rest/*` validated credentials on every request with no limit on failed attempts, so an unauthenticated client could brute-force the password of any account. The UI login (`POST /auth/login`) and the Jellyfin login were already rate limited through `AuthRequestLimit` / `AuthWindowLength` (enabled by default, 5 requests per 20 seconds), but the Subsonic API had no equivalent protection. ### Details `authenticate()` in `server/subsonic/middlewares.go` checked the `u`+`p`, `t`+`s` and `jwt` credentials of every request without tracking failures, applying a delay, or locking an account out. The Subsonic API is normally exposed to the internet so that mobile players can reach it, so any public instance could be targeted directly. ### PoC Against a default instance with a known username: ```bash for password in $(cat passwords.txt); do RESPONSE=$(curl -s 'http://host:4533/rest/ping?u=admin&p=${password}&v=1.16.1&c=poc&f=json') if echo '$RESPONSE' | grep -q ''status':'ok''; then echo 'FOUND: ${password}' exit 0 fi done ``` No throttling, delay or lockout occurs, regardless of how many attempts fail. The only mitigation was blocking the source IP outside Navidrome, for example with fail2ban. ### Impact No prerequisites beyond network access and a guessable password. Compromising an account exposes that user's library, and for an admin account also user management, server configuration and library operations. ## Patches Fixed in **v0.64.1**. Failed Subsonic logins are now capped per client IP and username, reusing the existing `AuthRequestLimit` and `AuthWindowLength` settings, and `AuthRequestLimit=0` disables the limit as it does for the other login paths. Only failures count, since Subsonic clients send credentials on every request. At most `AuthRequestLimit` credential checks for one key run at a time and failures are recorded after each check, so a concurrent burst can get at most `2*AuthRequestLimit-1` guesses through one window before every further attempt is rejected, while valid parallel requests only wait. A request that is over the limit gets exactly the same response as a wrong password (HTTP 200 with Subsonic error code 40, no `Retry-After`), so an attacker cannot tell a block from a failed guess, and it is answered without a database lookup. Fix commit: https://github.com/navidrome/navidrome/commit/c3b9b4ecb3 ## Workarounds On affected versions, put Navidrome behind a reverse proxy or fail2ban rule that rate limits `/rest/`, and use long, unique passwords. ## Credits Reported by @osageling through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pcjv-h48m-833g": {
+                "cve_id": "GHSA-pcjv-h48m-833g",
+                "title": "Bookmarks, playlist tracks and now-playing skipped the library filter, exposing track metadata from other libraries",
+                "description": "## Summary On a multi-library instance, a user restricted to some libraries could read the metadata of tracks in libraries they had no access to. Subsonic `getBookmarks` and four other reads built their own queries without the per-user library filter that every other media read applies. ## Details - **`getBookmarks` returned bookmarks for any track.** The query joined bookmarks to tracks scoped only by user, never by library. `createBookmark` stored a bookmark for any ID without checking that the caller could read it. A bookmark created while the user had access also kept returning the track after that access was revoked. - **Playlist tracks were readable by position.** `GET /api/playlist/{id}/tracks/{position}` returned the full track without a library check. The position is a small integer, so no track ID was needed, only a public playlist holding tracks from another library. The `X-Total-Count` header counted the hidden tracks too, and the playlist cover grid could show album art from them. - **Playlist writes were unchecked.** Creating a playlist, replacing its tracks, or adding tracks by song, album, artist or disc ID accepted tracks from any library. The stored song count, duration and size counted them too, so a user could tell a hidden track from an unknown ID and learn its duration and size. - **`getNowPlaying` listed every user's playback.** The now-playing list is shared across the server and was returned unfiltered, so any user could see tracks playing from libraries they could not access, including their IDs. ## Impact A non-admin user with access to a subset of libraries could disclose metadata of tracks in other libraries: title, album, artist, duration, bit rate, format, size, and tag data such as MusicBrainz IDs, genres and ISRC. Audio was not exposed: streaming, downloading and cover art stayed filtered for the same IDs. The `path` returned by the Subsonic API is built from tags unless the caller's player has `reportRealPath` enabled, which a user can set on their own player; in that case the on-disk path of the leaked track was returned as well. No prior access to the target library was needed. `getNowPlaying` hands out track IDs from any library while someone plays them, and playlist positions need no ID at all. Only multi-library instances with per-user library restrictions are affected. With one library, or when every user sees every library, no boundary is crossed. Admin users are not affected. ## Patches Fixed in **v0.64.1**. The affected queries now apply the library filter, `createBookmark` rejects tracks the caller cannot read, playlist writes drop them, and `getNowPlaying` only lists tracks from the caller's libraries. Existing bookmarks are hidden rather than deleted, so they come back with their saved position if access is restored. Fix commit: https://github.com/navidrome/navidrome/commit/8e784b6af7baa7ccfcfaf56edaecf56d598ad045 ## Workarounds None through configuration. `EnableNowPlaying = false` does not help: it only stops the web UI notification, and `getNowPlaying` still answers. ## Credits Reported by @sondt99 through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.1-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pr2j-mfc8-qjcc": {
+                "cve_id": "GHSA-pr2j-mfc8-qjcc",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-r5qr-m328-qcf4": {
+                "cve_id": "GHSA-r5qr-m328-qcf4",
+                "title": "Arbitrary file read via symlinks in the music library",
+                "description": "## Summary The scanner classified files by the name of the directory entry, not by what it pointed to. A symlink named `passwd.wav` pointing at `/etc/passwd` was imported as a track, and `/rest/stream` and `/rest/getTranscodeStream` then served the target file's bytes to any user who could play it. ## Details Anyone who can create a symlink inside a music library folder (limited shell access, `rsync`, an FTP or SFTP server that allows symlinks, a shared NAS folder) can point it at any file the Navidrome process can read. After a scan the symlink shows up as a song under an unknown artist and album. Playing it fails, but the stream response still carries the raw bytes of the target file. The `Scanner.FollowSymlinks` option did not help: it only applied to directory symlinks, and file symlinks were followed regardless. ## Impact An attacker with write access to a library folder and a Navidrome account can read any file the server process can access, such as `/etc/passwd`, the configuration file, or `navidrome.db`. A symlink to a real audio file in another library is also imported. That case cannot be told apart from a legitimate out-of-library symlink and is not changed by this fix. Do not give untrusted users write access to library folders. ## Patches Fixed in **v0.63.0**. The scanner now resolves the whole symlink chain and classifies the file by the real target's extension, so a link to a non-audio file is never imported. `Scanner.FollowSymlinks` now also applies to file symlinks; set it to `false` to skip them entirely. v0.63.0 and v0.63.1 had a bug in that resolution that made the scanner skip every file symlink, which broke libraries built from symlinks. **v0.63.2** restores them with full OS-level resolution and also classifies a chain by its final target even when an intermediate link has an audio extension. Upgrade to v0.63.2 or later. Fix commits: https://github.com/navidrome/navidrome/commit/ecba19a08 (v0.63.0), https://github.com/navidrome/navidrome/commit/7fa13761d (v0.63.2) ## Workarounds Do not allow untrusted users to write to library folders. On v0.63.0 or later, `Scanner.FollowSymlinks = false` disables file symlinks completely. ## Credits Reported by @miampf through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-wp9c-pw66-c6j2": {
+                "cve_id": "GHSA-wp9c-pw66-c6j2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-x65f-m8x9-pjxm": {
+                "cve_id": "GHSA-x65f-m8x9-pjxm",
+                "title": "Non-admin user could update another user's player via PUT /api/player/{id}",
+                "description": "# Description ### Impact In Navidrome 0.61.2 and earlier, the native API endpoint `PUT /api/player/{id}` checked ownership against the `userId` field in the request body instead of the stored row. An authenticated non-admin user who knew another user's player id could send a body with their own `userId` to pass the check, while the write still targeted the victim's row. This allowed them to overwrite that player's settings (name, max bit rate, transcoding, scrobble flag) and reassign its ownership to themselves. Player ids are random, and the API does not list other users' players to non-admins, so there is no way to obtain a victim's player id through Navidrome. Reads were already scoped correctly. The realistic impact is a modified or lost player configuration for one user. No data is disclosed and no privileges are gained. Single-user instances are not affected. ### Patches Fixed in #5563, released in v0.62.0. The ownership check is now part of the `UPDATE` statement's `WHERE` clause, so a write can only match a row the caller owns. `user_id` is never written on update, so ownership cannot be reassigned by anyone. The same hardening was applied to share updates. ### Workarounds None. Upgrade to v0.62.0 or later. ### Proof of concept As a non-admin user, with a victim's player id: ``` PUT /api/player/<victim_player_id> {'name':'hijacked','userId':'<attacker_user_id>','maxBitRate':1} ``` Before the fix this returned `200` and moved the player to the attacker. After the fix it returns `403` and the row is unchanged. ### Credit Reported by @tonghuaroot. ### References - https://github.com/navidrome/navidrome/pull/5563",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
             }
         },
         "3.22": {
@@ -222,6 +462,230 @@
                     {
                         "introduced": "0.53.3-r5",
                         "fixed": "0.60.0-r0"
+                    }
+                ]
+            },
+            "GHSA-37h4-53gj-cw8m": {
+                "cve_id": "GHSA-37h4-53gj-cw8m",
+                "title": "Player records could be overwritten, and their ownership taken over, by any authenticated user",
+                "description": "## Summary Any authenticated user who knew another user's player id could modify that player, and on one path take ownership of it. Player settings carry the forced transcoding profile, the maximum bit rate, whether real file paths are reported, and whether scrobbling is enabled, so this changed how the victim's client streamed and scrobbled. No library content and no account credentials were exposed. ## Details Two write paths on player records were not scoped to the player's owner. `POST /api/player` (native API) is reachable by any authenticated user. The repository authorized the write with the `userId` taken from the request body, then saved the record using the `id` taken from the body. When that id matched an existing player, the create turned into an `UPDATE ... WHERE id = ?` with no ownership predicate, and the update set was not stripped of `user_id`. A request of the form `{'id':'<victim player id>','userId':'<attacker id>','name':'pwn'}` therefore overwrote the victim's row and reassigned it to the attacker, who could then edit it freely as its owner. The same class of bug was fixed for `PUT /api/player/{id}` in v0.62.0 (GHSA-x65f-m8x9-pjxm); the create path was not covered by that fix. `players.Register`, which resolves the player for each request, reused a player by the id supplied by the client and checked only that the client name matched. The id comes from the Subsonic `nd-player-<hex(username)>` cookie, which is present in the default configuration, or from the Jellyfin `DeviceId` in the `X-Emby-Authorization` header when the Jellyfin API is enabled (`Jellyfin.Enabled`, off by default). A request that carried another user's player id was served with that player attached for the rest of the request, inheriting its transcoding profile and its report-real-path setting, and overwrote its name, user agent, IP and last-seen values on the next write past the one-minute throttle. This path never transferred ownership. ## Impact An authenticated user, with no admin rights, could change another user's player settings, and through `POST /api/player` become its owner. Ownership transfer also removes the player from the victim's own list. The limiting factor is the player id: it is a random 22-character id that is returned only to its owner and to admins. It is not enumerable, and no regular-user endpoint discloses another user's player id. An attacker needs that id from some other source, such as an admin page, a shared log, or a captured request. That is why attack complexity is rated high. ## Patches Fixed in **v0.64.1**. `Save` now always creates a new player and ignores any id supplied in the request body, so a create can never become an unscoped update. Edits keep going through `Update`, which authorizes against the stored `user_id` in the `WHERE` clause. `Register` now reuses a player only when it belongs to the requesting user, and otherwise falls back to matching the user's own players, exactly as it already did when the client name did not match. Fix commit: https://github.com/navidrome/navidrome/commit/9e8811e4c5 ## Workarounds None. Disabling the Jellyfin API removes one entry point for the registration path, but the Subsonic path is present in the default configuration. ## Credits Reported by @RealFakeAccount, who found the `POST /api/player` ownership takeover and identified the registration path, and by @qrn12580, who independently reported the registration path with a working proof of concept and found the Jellyfin `DeviceId` entry point. Both reports came through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-3g4p-jhv2-xrxf": {
+                "cve_id": "GHSA-3g4p-jhv2-xrxf",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-3rwv-f797-f9p3": {
+                "cve_id": "GHSA-3rwv-f797-f9p3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-4p3r-6362-833w": {
+                "cve_id": "GHSA-4p3r-6362-833w",
+                "title": "Transcoding command templates exposed to non-admin users",
+                "description": "## Summary Authenticated non-admin users can read transcoding configuration through the native API when `EnableTranscodingConfig` is enabled. The affected responses include the full transcoding command templates in the `command` field. `EnableTranscodingConfig` defaults to `false`, so a server is only affected if an administrator turned it on. The issue is read-only. Create, update, and delete operations were correctly rejected for the same non-admin user in testing. ## Impact A low-privilege user can retrieve transcoding profiles that are intended to be controlled by administrators, including command templates and target formats. This can disclose local command paths, media processing options, and administrator-configured transcoding behavior. It also weakens the intended security boundary around the transcoding configuration feature. Authentication is required, so the endpoints are not reachable anonymously. What is disclosed is operator-authored configuration, not credentials, user data, or media access. Writes were already restricted to administrators, and streaming is unaffected. ## Reproduction The following was reproduced against the official `deluan/navidrome:0.61.2` image with `ND_ENABLETRANSCODINGCONFIG=true`. 1. Start Navidrome with transcoding configuration enabled. 2. Create or use an administrator account. 3. Create a non-admin user with `isAdmin: false`. 4. Login as the non-admin user and keep the returned JWT. 5. Request `GET /api/transcoding` with `X-ND-Authorization: Bearer <non-admin-token>`. 6. Request `GET /api/transcoding/{id}` with the same token. Observed non-admin list response: ```http GET /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK X-Total-Count: 4 [{'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192}, ...] ``` Observed non-admin single-entry response: ```http GET /api/transcoding/Udt9sUvbUvW48KpqcLCoFr HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK {'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192} ``` Controls: ```http GET /api/transcoding HTTP/1.1 HTTP/1.1 401 Unauthorized {'error':'Not authenticated'} ``` ```http POST /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> Content-Type: application/json {'name':'poc','targetFormat':'poc','command':'poc','defaultBitRate':64} HTTP/1.1 403 Forbidden {'error':'Saving transcoding: Permission denied'} ``` ## Root Cause and Technical Details The native API registers `/transcoding` inside the authenticated route group, not inside the `adminOnlyMiddleware` group: ```go r.Group(func(r chi.Router) { r.Use(server.Authenticator(api.ds)) r.Use(server.JWTRefresher) r.Use(server.UpdateLastAccessMiddleware(api.ds)) // ... api.R(r, '/transcoding', model.Transcoding{}, conf.Server.EnableTranscodingConfig) // ... r.With(adminOnlyMiddleware).Group(func(r chi.Router) { api.addInspectRoute(r) api.addConfigRoute(r) api.addUserLibraryRoute(r) api.RX(r, '/library', api.libs.NewRepository, true) }) }) ``` `api.R` wires REST read methods for authenticated users. In `persistence/transcoding_repository.go`, write methods check `loggedUser(r.ctx).IsAdmin`, but read methods do not: ```go func (r *transcodingRepository) Count(options ...rest.QueryOptions) (int64, error) { return r.count(Select(), r.parseRestOptions(r.ctx, options...)) } func (r *transcodingRepository) Read(id string) (any, error) { return r.Get(id) } func (r *transcodingRepository) ReadAll(options ...rest.QueryOptions) (any, error) { sel := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns('*') res := model.Transcodings{} err := r.queryAll(sel, &res) return res, err } ``` The write paths do enforce administrator privileges. This leaves the read paths exposed to any authenticated user. ## Patch Fixed in 0.62.0, commit `11640f2e4` (#5564). ## Workarounds On affected versions, leave `EnableTranscodingConfig` at its default of `false`. The endpoint only exposes the command templates when it is enabled. Blocking the reads, or moving `/transcoding` under `adminOnlyMiddleware`, was tried first and reverted. The web UI reads this resource in ordinary non-admin flows (the player edit dropdown, the player list, and the share/download format pickers), all of which need only `name` and `targetFormat`. The only sensitive field is `command`, the admin-owned ffmpeg template. The shipped fix is field-level redaction rather than denying the read: - `Read` and `ReadAll` still return the profiles to any authenticated user, but blank the `command` field for non-admins. `Count` stays open, because the UI needs list pagination. - Writes (`Save`, `Update`, `Delete`, `Put`) remain admin-only, as they already were. - Streaming is unaffected. It resolves profiles through `Get` and `FindByFormat` on `model.TranscodingRepository`, which are not redacted, so on-the-fly transcoding keeps working for non-admin users. Regression tests cover non-admin reads returning a blank `command`, admin reads keeping it, non-admin `Get`/`FindByFormat` keeping it, and writes still being denied.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-82gh-4ggp-gfg5": {
+                "cve_id": "GHSA-82gh-4ggp-gfg5",
+                "title": "Share creation trusts a client-supplied userId, exposing other users' library content",
+                "description": "## Summary `POST /api/share` accepted a client-supplied `userId` and stored it as the share owner. The owner decides the library-access context used to resolve and stream the share contents, so on 0.63.x any authenticated user could create a share attributed to a user with wider library access (for example an admin) and, through it, read and stream content from libraries they have no access to. On earlier versions the spoofed owner only mis-attributed the share. ## Details The share repository only filled in the owner when the field was empty, so a spoofed `userId` in the request body persisted. From v0.63.0 the public share page loaded playlist shares, and the public stream endpoint checked library access, as the stored owner. A share of any public playlist, or of albums or tracks the caller could not see (see GHSA-3rwv-f797-f9p3), created with `userId` set to an admin or another user with broader library access, served those tracks to anyone holding the link. Before v0.63.0 playlist shares were loaded with a synthetic admin context regardless of owner, so spoofing changed only who the share was attributed to. The spoofed `userId` must be an existing user id; any public playlist exposes its owner's id as `ownerId` in the native API. The same code path is used by Subsonic `createShare`, but that endpoint has no `userId` parameter, so it is not affected. ## Impact Any logged-in user could: - On v0.63.0 through v0.63.2, read and stream tracks from libraries they have not been granted, by sharing a public playlist (or, combined with GHSA-3rwv-f797-f9p3, albums or tracks) as a user with access to those libraries. - Create shares that show up under another user's name. Sharing is enabled by default since v0.63.0. Before that, only instances with `EnableSharing = true` were affected. Per-user library restrictions must be in use for the cross-library read to matter. The cross-library read requires v0.63.0 or later; the mis-attribution affects every version with sharing. ## Patches Fixed in **v0.64.0**. The share owner is now always the authenticated caller. The client-supplied `userId` is ignored. Fix commit: https://github.com/navidrome/navidrome/commit/1a8463f7d ## Workarounds For versions before 0.64.0, disable sharing (`EnableSharing = false`). ## Related The same report also covered a SQL injection via the artist `role` filter and a plugin HTTP/WebSocket-client SSRF bypass via DNS names. Those are published separately as GHSA-hm54-32q6-3rcr and GHSA-pr2j-mfc8-qjcc. ## Credits Reported by @gigioneggiando through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-8jrh-w926-8rvw": {
+                "cve_id": "GHSA-8jrh-w926-8rvw",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f22h-6qxh-rqq2": {
+                "cve_id": "GHSA-f22h-6qxh-rqq2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f295-6wp9-qqfg": {
+                "cve_id": "GHSA-f295-6wp9-qqfg",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-hm54-32q6-3rcr": {
+                "cve_id": "GHSA-hm54-32q6-3rcr",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.55.2-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-mpgw-cc94-xrpp": {
+                "cve_id": "GHSA-mpgw-cc94-xrpp",
+                "title": "Cross-library playlist import and sharing bypass in Navidrome",
+                "description": "### Summary Navidrome allows an authenticated non-admin user to import an M3U playlist containing paths to media files in libraries the user is not authorized to access. If the attacker knows or guesses a valid restricted media path, the imported playlist can store the restricted track ID. When playlist sharing is enabled, the attacker can share the playlist and expose the restricted track through public share/stream URLs. ### Details The M3U import (`POST /api/playlist` with an M3U body) resolved playlist entries against all configured libraries, and `MediaFileRepository.FindByPaths` had no per-user library filter, so a path under any library root resolved to its media file regardless of the importing user's access. As a result, a non-admin user can add tracks from restricted libraries to a playlist they own. Playlist sharing can further expose those tracks because shared playlist loading retrieves playlist tracks with elevated access. Affected flow: 1. A non-admin authenticated user imports an M3U playlist. 2. The playlist references a valid path to a track in a restricted library. 3. Navidrome resolves the path and stores the restricted media file ID in the attacker-owned playlist. 4. If sharing is enabled, the attacker shares the playlist. 5. Public share/stream URLs expose the restricted track. ### PoC Create an M3U playlist that references a track in a library the importing user cannot access: ``` #EXTM3U /path/to/restricted-library/secret/test.mp3 ``` Import the playlist as a non-admin user with access only to a different library. Observed behavior: - The restricted track is resolved and added to the user's playlist. If playlist sharing is enabled, share the playlist and access the generated public share/stream URL. Observed behavior: - The restricted track is included in the shared playlist and can be streamed through the public URL. ### Impact An authenticated non-admin user can store tracks from libraries they are not authorised to use in their own playlist, provided they know or can guess valid media paths under a library root with an audio file extension. Without sharing, this reveals that the path exists and the track's duration and size through the playlist totals; streaming stays blocked. If playlist sharing is enabled (`EnableSharing`, off by default in all affected versions), the attacker can expose the restricted tracks to unauthenticated users through the public share and stream URLs, because shared playlists were loaded with an admin context and shared streams did not check library access. ### Patches Fixed in **v0.63.0**: `FindByPaths` applies the user's library filter, shared playlists load as the share owner, and shared streams check the owner's library access. Fix commit: https://github.com/navidrome/navidrome/commit/fa138afea576e14c13e7c8150d195fddce15a954 (#5640) ### Workarounds Keep sharing disabled (`EnableSharing = false`, the default on affected versions) to prevent unauthenticated exposure. No configuration prevents the import itself; upgrade to v0.63.0 or later.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.63.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-p994-r776-mw52": {
+                "cve_id": "GHSA-p994-r776-mw52",
+                "title": "Subsonic API allows unauthenticated brute-force of user passwords",
+                "description": "### Summary The Subsonic API endpoints under `/rest/*` validated credentials on every request with no limit on failed attempts, so an unauthenticated client could brute-force the password of any account. The UI login (`POST /auth/login`) and the Jellyfin login were already rate limited through `AuthRequestLimit` / `AuthWindowLength` (enabled by default, 5 requests per 20 seconds), but the Subsonic API had no equivalent protection. ### Details `authenticate()` in `server/subsonic/middlewares.go` checked the `u`+`p`, `t`+`s` and `jwt` credentials of every request without tracking failures, applying a delay, or locking an account out. The Subsonic API is normally exposed to the internet so that mobile players can reach it, so any public instance could be targeted directly. ### PoC Against a default instance with a known username: ```bash for password in $(cat passwords.txt); do RESPONSE=$(curl -s 'http://host:4533/rest/ping?u=admin&p=${password}&v=1.16.1&c=poc&f=json') if echo '$RESPONSE' | grep -q ''status':'ok''; then echo 'FOUND: ${password}' exit 0 fi done ``` No throttling, delay or lockout occurs, regardless of how many attempts fail. The only mitigation was blocking the source IP outside Navidrome, for example with fail2ban. ### Impact No prerequisites beyond network access and a guessable password. Compromising an account exposes that user's library, and for an admin account also user management, server configuration and library operations. ## Patches Fixed in **v0.64.1**. Failed Subsonic logins are now capped per client IP and username, reusing the existing `AuthRequestLimit` and `AuthWindowLength` settings, and `AuthRequestLimit=0` disables the limit as it does for the other login paths. Only failures count, since Subsonic clients send credentials on every request. At most `AuthRequestLimit` credential checks for one key run at a time and failures are recorded after each check, so a concurrent burst can get at most `2*AuthRequestLimit-1` guesses through one window before every further attempt is rejected, while valid parallel requests only wait. A request that is over the limit gets exactly the same response as a wrong password (HTTP 200 with Subsonic error code 40, no `Retry-After`), so an attacker cannot tell a block from a failed guess, and it is answered without a database lookup. Fix commit: https://github.com/navidrome/navidrome/commit/c3b9b4ecb3 ## Workarounds On affected versions, put Navidrome behind a reverse proxy or fail2ban rule that rate limits `/rest/`, and use long, unique passwords. ## Credits Reported by @osageling through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pcjv-h48m-833g": {
+                "cve_id": "GHSA-pcjv-h48m-833g",
+                "title": "Bookmarks, playlist tracks and now-playing skipped the library filter, exposing track metadata from other libraries",
+                "description": "## Summary On a multi-library instance, a user restricted to some libraries could read the metadata of tracks in libraries they had no access to. Subsonic `getBookmarks` and four other reads built their own queries without the per-user library filter that every other media read applies. ## Details - **`getBookmarks` returned bookmarks for any track.** The query joined bookmarks to tracks scoped only by user, never by library. `createBookmark` stored a bookmark for any ID without checking that the caller could read it. A bookmark created while the user had access also kept returning the track after that access was revoked. - **Playlist tracks were readable by position.** `GET /api/playlist/{id}/tracks/{position}` returned the full track without a library check. The position is a small integer, so no track ID was needed, only a public playlist holding tracks from another library. The `X-Total-Count` header counted the hidden tracks too, and the playlist cover grid could show album art from them. - **Playlist writes were unchecked.** Creating a playlist, replacing its tracks, or adding tracks by song, album, artist or disc ID accepted tracks from any library. The stored song count, duration and size counted them too, so a user could tell a hidden track from an unknown ID and learn its duration and size. - **`getNowPlaying` listed every user's playback.** The now-playing list is shared across the server and was returned unfiltered, so any user could see tracks playing from libraries they could not access, including their IDs. ## Impact A non-admin user with access to a subset of libraries could disclose metadata of tracks in other libraries: title, album, artist, duration, bit rate, format, size, and tag data such as MusicBrainz IDs, genres and ISRC. Audio was not exposed: streaming, downloading and cover art stayed filtered for the same IDs. The `path` returned by the Subsonic API is built from tags unless the caller's player has `reportRealPath` enabled, which a user can set on their own player; in that case the on-disk path of the leaked track was returned as well. No prior access to the target library was needed. `getNowPlaying` hands out track IDs from any library while someone plays them, and playlist positions need no ID at all. Only multi-library instances with per-user library restrictions are affected. With one library, or when every user sees every library, no boundary is crossed. Admin users are not affected. ## Patches Fixed in **v0.64.1**. The affected queries now apply the library filter, `createBookmark` rejects tracks the caller cannot read, playlist writes drop them, and `getNowPlaying` only lists tracks from the caller's libraries. Existing bookmarks are hidden rather than deleted, so they come back with their saved position if access is restored. Fix commit: https://github.com/navidrome/navidrome/commit/8e784b6af7baa7ccfcfaf56edaecf56d598ad045 ## Workarounds None through configuration. `EnableNowPlaying = false` does not help: it only stops the web UI notification, and `getNowPlaying` still answers. ## Credits Reported by @sondt99 through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.1-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pr2j-mfc8-qjcc": {
+                "cve_id": "GHSA-pr2j-mfc8-qjcc",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-r5qr-m328-qcf4": {
+                "cve_id": "GHSA-r5qr-m328-qcf4",
+                "title": "Arbitrary file read via symlinks in the music library",
+                "description": "## Summary The scanner classified files by the name of the directory entry, not by what it pointed to. A symlink named `passwd.wav` pointing at `/etc/passwd` was imported as a track, and `/rest/stream` and `/rest/getTranscodeStream` then served the target file's bytes to any user who could play it. ## Details Anyone who can create a symlink inside a music library folder (limited shell access, `rsync`, an FTP or SFTP server that allows symlinks, a shared NAS folder) can point it at any file the Navidrome process can read. After a scan the symlink shows up as a song under an unknown artist and album. Playing it fails, but the stream response still carries the raw bytes of the target file. The `Scanner.FollowSymlinks` option did not help: it only applied to directory symlinks, and file symlinks were followed regardless. ## Impact An attacker with write access to a library folder and a Navidrome account can read any file the server process can access, such as `/etc/passwd`, the configuration file, or `navidrome.db`. A symlink to a real audio file in another library is also imported. That case cannot be told apart from a legitimate out-of-library symlink and is not changed by this fix. Do not give untrusted users write access to library folders. ## Patches Fixed in **v0.63.0**. The scanner now resolves the whole symlink chain and classifies the file by the real target's extension, so a link to a non-audio file is never imported. `Scanner.FollowSymlinks` now also applies to file symlinks; set it to `false` to skip them entirely. v0.63.0 and v0.63.1 had a bug in that resolution that made the scanner skip every file symlink, which broke libraries built from symlinks. **v0.63.2** restores them with full OS-level resolution and also classifies a chain by its final target even when an intermediate link has an audio extension. Upgrade to v0.63.2 or later. Fix commits: https://github.com/navidrome/navidrome/commit/ecba19a08 (v0.63.0), https://github.com/navidrome/navidrome/commit/7fa13761d (v0.63.2) ## Workarounds Do not allow untrusted users to write to library folders. On v0.63.0 or later, `Scanner.FollowSymlinks = false` disables file symlinks completely. ## Credits Reported by @miampf through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-wp9c-pw66-c6j2": {
+                "cve_id": "GHSA-wp9c-pw66-c6j2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-x65f-m8x9-pjxm": {
+                "cve_id": "GHSA-x65f-m8x9-pjxm",
+                "title": "Non-admin user could update another user's player via PUT /api/player/{id}",
+                "description": "# Description ### Impact In Navidrome 0.61.2 and earlier, the native API endpoint `PUT /api/player/{id}` checked ownership against the `userId` field in the request body instead of the stored row. An authenticated non-admin user who knew another user's player id could send a body with their own `userId` to pass the check, while the write still targeted the victim's row. This allowed them to overwrite that player's settings (name, max bit rate, transcoding, scrobble flag) and reassign its ownership to themselves. Player ids are random, and the API does not list other users' players to non-admins, so there is no way to obtain a victim's player id through Navidrome. Reads were already scoped correctly. The realistic impact is a modified or lost player configuration for one user. No data is disclosed and no privileges are gained. Single-user instances are not affected. ### Patches Fixed in #5563, released in v0.62.0. The ownership check is now part of the `UPDATE` statement's `WHERE` clause, so a write can only match a row the caller owns. `user_id` is never written on update, so ownership cannot be reassigned by anyone. The same hardening was applied to share updates. ### Workarounds None. Upgrade to v0.62.0 or later. ### Proof of concept As a non-admin user, with a victim's player id: ``` PUT /api/player/<victim_player_id> {'name':'hijacked','userId':'<attacker_user_id>','maxBitRate':1} ``` Before the fix this returned `200` and moved the player to the attacker. After the fix it returns `403` and the row is unchanged. ### Credit Reported by @tonghuaroot. ### References - https://github.com/navidrome/navidrome/pull/5563",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.62.0-r0"
                     }
                 ]
             }
@@ -347,6 +811,214 @@
                         "fixed": "0.60.0-r0"
                     }
                 ]
+            },
+            "GHSA-37h4-53gj-cw8m": {
+                "cve_id": "GHSA-37h4-53gj-cw8m",
+                "title": "Player records could be overwritten, and their ownership taken over, by any authenticated user",
+                "description": "## Summary Any authenticated user who knew another user's player id could modify that player, and on one path take ownership of it. Player settings carry the forced transcoding profile, the maximum bit rate, whether real file paths are reported, and whether scrobbling is enabled, so this changed how the victim's client streamed and scrobbled. No library content and no account credentials were exposed. ## Details Two write paths on player records were not scoped to the player's owner. `POST /api/player` (native API) is reachable by any authenticated user. The repository authorized the write with the `userId` taken from the request body, then saved the record using the `id` taken from the body. When that id matched an existing player, the create turned into an `UPDATE ... WHERE id = ?` with no ownership predicate, and the update set was not stripped of `user_id`. A request of the form `{'id':'<victim player id>','userId':'<attacker id>','name':'pwn'}` therefore overwrote the victim's row and reassigned it to the attacker, who could then edit it freely as its owner. The same class of bug was fixed for `PUT /api/player/{id}` in v0.62.0 (GHSA-x65f-m8x9-pjxm); the create path was not covered by that fix. `players.Register`, which resolves the player for each request, reused a player by the id supplied by the client and checked only that the client name matched. The id comes from the Subsonic `nd-player-<hex(username)>` cookie, which is present in the default configuration, or from the Jellyfin `DeviceId` in the `X-Emby-Authorization` header when the Jellyfin API is enabled (`Jellyfin.Enabled`, off by default). A request that carried another user's player id was served with that player attached for the rest of the request, inheriting its transcoding profile and its report-real-path setting, and overwrote its name, user agent, IP and last-seen values on the next write past the one-minute throttle. This path never transferred ownership. ## Impact An authenticated user, with no admin rights, could change another user's player settings, and through `POST /api/player` become its owner. Ownership transfer also removes the player from the victim's own list. The limiting factor is the player id: it is a random 22-character id that is returned only to its owner and to admins. It is not enumerable, and no regular-user endpoint discloses another user's player id. An attacker needs that id from some other source, such as an admin page, a shared log, or a captured request. That is why attack complexity is rated high. ## Patches Fixed in **v0.64.1**. `Save` now always creates a new player and ignores any id supplied in the request body, so a create can never become an unscoped update. Edits keep going through `Update`, which authorizes against the stored `user_id` in the `WHERE` clause. `Register` now reuses a player only when it belongs to the requesting user, and otherwise falls back to matching the user's own players, exactly as it already did when the client name did not match. Fix commit: https://github.com/navidrome/navidrome/commit/9e8811e4c5 ## Workarounds None. Disabling the Jellyfin API removes one entry point for the registration path, but the Subsonic path is present in the default configuration. ## Credits Reported by @RealFakeAccount, who found the `POST /api/player` ownership takeover and identified the registration path, and by @qrn12580, who independently reported the registration path with a working proof of concept and found the Jellyfin `DeviceId` entry point. Both reports came through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-3g4p-jhv2-xrxf": {
+                "cve_id": "GHSA-3g4p-jhv2-xrxf",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-3rwv-f797-f9p3": {
+                "cve_id": "GHSA-3rwv-f797-f9p3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-4p3r-6362-833w": {
+                "cve_id": "GHSA-4p3r-6362-833w",
+                "title": "Transcoding command templates exposed to non-admin users",
+                "description": "## Summary Authenticated non-admin users can read transcoding configuration through the native API when `EnableTranscodingConfig` is enabled. The affected responses include the full transcoding command templates in the `command` field. `EnableTranscodingConfig` defaults to `false`, so a server is only affected if an administrator turned it on. The issue is read-only. Create, update, and delete operations were correctly rejected for the same non-admin user in testing. ## Impact A low-privilege user can retrieve transcoding profiles that are intended to be controlled by administrators, including command templates and target formats. This can disclose local command paths, media processing options, and administrator-configured transcoding behavior. It also weakens the intended security boundary around the transcoding configuration feature. Authentication is required, so the endpoints are not reachable anonymously. What is disclosed is operator-authored configuration, not credentials, user data, or media access. Writes were already restricted to administrators, and streaming is unaffected. ## Reproduction The following was reproduced against the official `deluan/navidrome:0.61.2` image with `ND_ENABLETRANSCODINGCONFIG=true`. 1. Start Navidrome with transcoding configuration enabled. 2. Create or use an administrator account. 3. Create a non-admin user with `isAdmin: false`. 4. Login as the non-admin user and keep the returned JWT. 5. Request `GET /api/transcoding` with `X-ND-Authorization: Bearer <non-admin-token>`. 6. Request `GET /api/transcoding/{id}` with the same token. Observed non-admin list response: ```http GET /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK X-Total-Count: 4 [{'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192}, ...] ``` Observed non-admin single-entry response: ```http GET /api/transcoding/Udt9sUvbUvW48KpqcLCoFr HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK {'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192} ``` Controls: ```http GET /api/transcoding HTTP/1.1 HTTP/1.1 401 Unauthorized {'error':'Not authenticated'} ``` ```http POST /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> Content-Type: application/json {'name':'poc','targetFormat':'poc','command':'poc','defaultBitRate':64} HTTP/1.1 403 Forbidden {'error':'Saving transcoding: Permission denied'} ``` ## Root Cause and Technical Details The native API registers `/transcoding` inside the authenticated route group, not inside the `adminOnlyMiddleware` group: ```go r.Group(func(r chi.Router) { r.Use(server.Authenticator(api.ds)) r.Use(server.JWTRefresher) r.Use(server.UpdateLastAccessMiddleware(api.ds)) // ... api.R(r, '/transcoding', model.Transcoding{}, conf.Server.EnableTranscodingConfig) // ... r.With(adminOnlyMiddleware).Group(func(r chi.Router) { api.addInspectRoute(r) api.addConfigRoute(r) api.addUserLibraryRoute(r) api.RX(r, '/library', api.libs.NewRepository, true) }) }) ``` `api.R` wires REST read methods for authenticated users. In `persistence/transcoding_repository.go`, write methods check `loggedUser(r.ctx).IsAdmin`, but read methods do not: ```go func (r *transcodingRepository) Count(options ...rest.QueryOptions) (int64, error) { return r.count(Select(), r.parseRestOptions(r.ctx, options...)) } func (r *transcodingRepository) Read(id string) (any, error) { return r.Get(id) } func (r *transcodingRepository) ReadAll(options ...rest.QueryOptions) (any, error) { sel := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns('*') res := model.Transcodings{} err := r.queryAll(sel, &res) return res, err } ``` The write paths do enforce administrator privileges. This leaves the read paths exposed to any authenticated user. ## Patch Fixed in 0.62.0, commit `11640f2e4` (#5564). ## Workarounds On affected versions, leave `EnableTranscodingConfig` at its default of `false`. The endpoint only exposes the command templates when it is enabled. Blocking the reads, or moving `/transcoding` under `adminOnlyMiddleware`, was tried first and reverted. The web UI reads this resource in ordinary non-admin flows (the player edit dropdown, the player list, and the share/download format pickers), all of which need only `name` and `targetFormat`. The only sensitive field is `command`, the admin-owned ffmpeg template. The shipped fix is field-level redaction rather than denying the read: - `Read` and `ReadAll` still return the profiles to any authenticated user, but blank the `command` field for non-admins. `Count` stays open, because the UI needs list pagination. - Writes (`Save`, `Update`, `Delete`, `Put`) remain admin-only, as they already were. - Streaming is unaffected. It resolves profiles through `Get` and `FindByFormat` on `model.TranscodingRepository`, which are not redacted, so on-the-fly transcoding keeps working for non-admin users. Regression tests cover non-admin reads returning a blank `command`, admin reads keeping it, non-admin `Get`/`FindByFormat` keeping it, and writes still being denied.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-82gh-4ggp-gfg5": {
+                "cve_id": "GHSA-82gh-4ggp-gfg5",
+                "title": "Share creation trusts a client-supplied userId, exposing other users' library content",
+                "description": "## Summary `POST /api/share` accepted a client-supplied `userId` and stored it as the share owner. The owner decides the library-access context used to resolve and stream the share contents, so on 0.63.x any authenticated user could create a share attributed to a user with wider library access (for example an admin) and, through it, read and stream content from libraries they have no access to. On earlier versions the spoofed owner only mis-attributed the share. ## Details The share repository only filled in the owner when the field was empty, so a spoofed `userId` in the request body persisted. From v0.63.0 the public share page loaded playlist shares, and the public stream endpoint checked library access, as the stored owner. A share of any public playlist, or of albums or tracks the caller could not see (see GHSA-3rwv-f797-f9p3), created with `userId` set to an admin or another user with broader library access, served those tracks to anyone holding the link. Before v0.63.0 playlist shares were loaded with a synthetic admin context regardless of owner, so spoofing changed only who the share was attributed to. The spoofed `userId` must be an existing user id; any public playlist exposes its owner's id as `ownerId` in the native API. The same code path is used by Subsonic `createShare`, but that endpoint has no `userId` parameter, so it is not affected. ## Impact Any logged-in user could: - On v0.63.0 through v0.63.2, read and stream tracks from libraries they have not been granted, by sharing a public playlist (or, combined with GHSA-3rwv-f797-f9p3, albums or tracks) as a user with access to those libraries. - Create shares that show up under another user's name. Sharing is enabled by default since v0.63.0. Before that, only instances with `EnableSharing = true` were affected. Per-user library restrictions must be in use for the cross-library read to matter. The cross-library read requires v0.63.0 or later; the mis-attribution affects every version with sharing. ## Patches Fixed in **v0.64.0**. The share owner is now always the authenticated caller. The client-supplied `userId` is ignored. Fix commit: https://github.com/navidrome/navidrome/commit/1a8463f7d ## Workarounds For versions before 0.64.0, disable sharing (`EnableSharing = false`). ## Related The same report also covered a SQL injection via the artist `role` filter and a plugin HTTP/WebSocket-client SSRF bypass via DNS names. Those are published separately as GHSA-hm54-32q6-3rcr and GHSA-pr2j-mfc8-qjcc. ## Credits Reported by @gigioneggiando through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-8jrh-w926-8rvw": {
+                "cve_id": "GHSA-8jrh-w926-8rvw",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f22h-6qxh-rqq2": {
+                "cve_id": "GHSA-f22h-6qxh-rqq2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f295-6wp9-qqfg": {
+                "cve_id": "GHSA-f295-6wp9-qqfg",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-hm54-32q6-3rcr": {
+                "cve_id": "GHSA-hm54-32q6-3rcr",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-mpgw-cc94-xrpp": {
+                "cve_id": "GHSA-mpgw-cc94-xrpp",
+                "title": "Cross-library playlist import and sharing bypass in Navidrome",
+                "description": "### Summary Navidrome allows an authenticated non-admin user to import an M3U playlist containing paths to media files in libraries the user is not authorized to access. If the attacker knows or guesses a valid restricted media path, the imported playlist can store the restricted track ID. When playlist sharing is enabled, the attacker can share the playlist and expose the restricted track through public share/stream URLs. ### Details The M3U import (`POST /api/playlist` with an M3U body) resolved playlist entries against all configured libraries, and `MediaFileRepository.FindByPaths` had no per-user library filter, so a path under any library root resolved to its media file regardless of the importing user's access. As a result, a non-admin user can add tracks from restricted libraries to a playlist they own. Playlist sharing can further expose those tracks because shared playlist loading retrieves playlist tracks with elevated access. Affected flow: 1. A non-admin authenticated user imports an M3U playlist. 2. The playlist references a valid path to a track in a restricted library. 3. Navidrome resolves the path and stores the restricted media file ID in the attacker-owned playlist. 4. If sharing is enabled, the attacker shares the playlist. 5. Public share/stream URLs expose the restricted track. ### PoC Create an M3U playlist that references a track in a library the importing user cannot access: ``` #EXTM3U /path/to/restricted-library/secret/test.mp3 ``` Import the playlist as a non-admin user with access only to a different library. Observed behavior: - The restricted track is resolved and added to the user's playlist. If playlist sharing is enabled, share the playlist and access the generated public share/stream URL. Observed behavior: - The restricted track is included in the shared playlist and can be streamed through the public URL. ### Impact An authenticated non-admin user can store tracks from libraries they are not authorised to use in their own playlist, provided they know or can guess valid media paths under a library root with an audio file extension. Without sharing, this reveals that the path exists and the track's duration and size through the playlist totals; streaming stays blocked. If playlist sharing is enabled (`EnableSharing`, off by default in all affected versions), the attacker can expose the restricted tracks to unauthenticated users through the public share and stream URLs, because shared playlists were loaded with an admin context and shared streams did not check library access. ### Patches Fixed in **v0.63.0**: `FindByPaths` applies the user's library filter, shared playlists load as the share owner, and shared streams check the owner's library access. Fix commit: https://github.com/navidrome/navidrome/commit/fa138afea576e14c13e7c8150d195fddce15a954 (#5640) ### Workarounds Keep sharing disabled (`EnableSharing = false`, the default on affected versions) to prevent unauthenticated exposure. No configuration prevents the import itself; upgrade to v0.63.0 or later.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-p994-r776-mw52": {
+                "cve_id": "GHSA-p994-r776-mw52",
+                "title": "Subsonic API allows unauthenticated brute-force of user passwords",
+                "description": "### Summary The Subsonic API endpoints under `/rest/*` validated credentials on every request with no limit on failed attempts, so an unauthenticated client could brute-force the password of any account. The UI login (`POST /auth/login`) and the Jellyfin login were already rate limited through `AuthRequestLimit` / `AuthWindowLength` (enabled by default, 5 requests per 20 seconds), but the Subsonic API had no equivalent protection. ### Details `authenticate()` in `server/subsonic/middlewares.go` checked the `u`+`p`, `t`+`s` and `jwt` credentials of every request without tracking failures, applying a delay, or locking an account out. The Subsonic API is normally exposed to the internet so that mobile players can reach it, so any public instance could be targeted directly. ### PoC Against a default instance with a known username: ```bash for password in $(cat passwords.txt); do RESPONSE=$(curl -s 'http://host:4533/rest/ping?u=admin&p=${password}&v=1.16.1&c=poc&f=json') if echo '$RESPONSE' | grep -q ''status':'ok''; then echo 'FOUND: ${password}' exit 0 fi done ``` No throttling, delay or lockout occurs, regardless of how many attempts fail. The only mitigation was blocking the source IP outside Navidrome, for example with fail2ban. ### Impact No prerequisites beyond network access and a guessable password. Compromising an account exposes that user's library, and for an admin account also user management, server configuration and library operations. ## Patches Fixed in **v0.64.1**. Failed Subsonic logins are now capped per client IP and username, reusing the existing `AuthRequestLimit` and `AuthWindowLength` settings, and `AuthRequestLimit=0` disables the limit as it does for the other login paths. Only failures count, since Subsonic clients send credentials on every request. At most `AuthRequestLimit` credential checks for one key run at a time and failures are recorded after each check, so a concurrent burst can get at most `2*AuthRequestLimit-1` guesses through one window before every further attempt is rejected, while valid parallel requests only wait. A request that is over the limit gets exactly the same response as a wrong password (HTTP 200 with Subsonic error code 40, no `Retry-After`), so an attacker cannot tell a block from a failed guess, and it is answered without a database lookup. Fix commit: https://github.com/navidrome/navidrome/commit/c3b9b4ecb3 ## Workarounds On affected versions, put Navidrome behind a reverse proxy or fail2ban rule that rate limits `/rest/`, and use long, unique passwords. ## Credits Reported by @osageling through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pcjv-h48m-833g": {
+                "cve_id": "GHSA-pcjv-h48m-833g",
+                "title": "Bookmarks, playlist tracks and now-playing skipped the library filter, exposing track metadata from other libraries",
+                "description": "## Summary On a multi-library instance, a user restricted to some libraries could read the metadata of tracks in libraries they had no access to. Subsonic `getBookmarks` and four other reads built their own queries without the per-user library filter that every other media read applies. ## Details - **`getBookmarks` returned bookmarks for any track.** The query joined bookmarks to tracks scoped only by user, never by library. `createBookmark` stored a bookmark for any ID without checking that the caller could read it. A bookmark created while the user had access also kept returning the track after that access was revoked. - **Playlist tracks were readable by position.** `GET /api/playlist/{id}/tracks/{position}` returned the full track without a library check. The position is a small integer, so no track ID was needed, only a public playlist holding tracks from another library. The `X-Total-Count` header counted the hidden tracks too, and the playlist cover grid could show album art from them. - **Playlist writes were unchecked.** Creating a playlist, replacing its tracks, or adding tracks by song, album, artist or disc ID accepted tracks from any library. The stored song count, duration and size counted them too, so a user could tell a hidden track from an unknown ID and learn its duration and size. - **`getNowPlaying` listed every user's playback.** The now-playing list is shared across the server and was returned unfiltered, so any user could see tracks playing from libraries they could not access, including their IDs. ## Impact A non-admin user with access to a subset of libraries could disclose metadata of tracks in other libraries: title, album, artist, duration, bit rate, format, size, and tag data such as MusicBrainz IDs, genres and ISRC. Audio was not exposed: streaming, downloading and cover art stayed filtered for the same IDs. The `path` returned by the Subsonic API is built from tags unless the caller's player has `reportRealPath` enabled, which a user can set on their own player; in that case the on-disk path of the leaked track was returned as well. No prior access to the target library was needed. `getNowPlaying` hands out track IDs from any library while someone plays them, and playlist positions need no ID at all. Only multi-library instances with per-user library restrictions are affected. With one library, or when every user sees every library, no boundary is crossed. Admin users are not affected. ## Patches Fixed in **v0.64.1**. The affected queries now apply the library filter, `createBookmark` rejects tracks the caller cannot read, playlist writes drop them, and `getNowPlaying` only lists tracks from the caller's libraries. Existing bookmarks are hidden rather than deleted, so they come back with their saved position if access is restored. Fix commit: https://github.com/navidrome/navidrome/commit/8e784b6af7baa7ccfcfaf56edaecf56d598ad045 ## Workarounds None through configuration. `EnableNowPlaying = false` does not help: it only stops the web UI notification, and `getNowPlaying` still answers. ## Credits Reported by @sondt99 through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pr2j-mfc8-qjcc": {
+                "cve_id": "GHSA-pr2j-mfc8-qjcc",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-r5qr-m328-qcf4": {
+                "cve_id": "GHSA-r5qr-m328-qcf4",
+                "title": "Arbitrary file read via symlinks in the music library",
+                "description": "## Summary The scanner classified files by the name of the directory entry, not by what it pointed to. A symlink named `passwd.wav` pointing at `/etc/passwd` was imported as a track, and `/rest/stream` and `/rest/getTranscodeStream` then served the target file's bytes to any user who could play it. ## Details Anyone who can create a symlink inside a music library folder (limited shell access, `rsync`, an FTP or SFTP server that allows symlinks, a shared NAS folder) can point it at any file the Navidrome process can read. After a scan the symlink shows up as a song under an unknown artist and album. Playing it fails, but the stream response still carries the raw bytes of the target file. The `Scanner.FollowSymlinks` option did not help: it only applied to directory symlinks, and file symlinks were followed regardless. ## Impact An attacker with write access to a library folder and a Navidrome account can read any file the server process can access, such as `/etc/passwd`, the configuration file, or `navidrome.db`. A symlink to a real audio file in another library is also imported. That case cannot be told apart from a legitimate out-of-library symlink and is not changed by this fix. Do not give untrusted users write access to library folders. ## Patches Fixed in **v0.63.0**. The scanner now resolves the whole symlink chain and classifies the file by the real target's extension, so a link to a non-audio file is never imported. `Scanner.FollowSymlinks` now also applies to file symlinks; set it to `false` to skip them entirely. v0.63.0 and v0.63.1 had a bug in that resolution that made the scanner skip every file symlink, which broke libraries built from symlinks. **v0.63.2** restores them with full OS-level resolution and also classifies a chain by its final target even when an intermediate link has an audio extension. Upgrade to v0.63.2 or later. Fix commits: https://github.com/navidrome/navidrome/commit/ecba19a08 (v0.63.0), https://github.com/navidrome/navidrome/commit/7fa13761d (v0.63.2) ## Workarounds Do not allow untrusted users to write to library folders. On v0.63.0 or later, `Scanner.FollowSymlinks = false` disables file symlinks completely. ## Credits Reported by @miampf through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-wp9c-pw66-c6j2": {
+                "cve_id": "GHSA-wp9c-pw66-c6j2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-x65f-m8x9-pjxm": {
+                "cve_id": "GHSA-x65f-m8x9-pjxm",
+                "title": "Non-admin user could update another user's player via PUT /api/player/{id}",
+                "description": "# Description ### Impact In Navidrome 0.61.2 and earlier, the native API endpoint `PUT /api/player/{id}` checked ownership against the `userId` field in the request body instead of the stored row. An authenticated non-admin user who knew another user's player id could send a body with their own `userId` to pass the check, while the write still targeted the victim's row. This allowed them to overwrite that player's settings (name, max bit rate, transcoding, scrobble flag) and reassign its ownership to themselves. Player ids are random, and the API does not list other users' players to non-admins, so there is no way to obtain a victim's player id through Navidrome. Reads were already scoped correctly. The realistic impact is a modified or lost player configuration for one user. No data is disclosed and no privileges are gained. Single-user instances are not affected. ### Patches Fixed in #5563, released in v0.62.0. The ownership check is now part of the `UPDATE` statement's `WHERE` clause, so a write can only match a row the caller owns. `user_id` is never written on update, so ownership cannot be reassigned by anyone. The same hardening was applied to share updates. ### Workarounds None. Upgrade to v0.62.0 or later. ### Proof of concept As a non-admin user, with a victim's player id: ``` PUT /api/player/<victim_player_id> {'name':'hijacked','userId':'<attacker_user_id>','maxBitRate':1} ``` Before the fix this returned `200` and moved the player to the attacker. After the fix it returns `403` and the row is unchanged. ### Credit Reported by @tonghuaroot. ### References - https://github.com/navidrome/navidrome/pull/5563",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
             }
         },
         "3.24": {
@@ -444,6 +1116,214 @@
                         "fixed": "0.56.1-r0"
                     }
                 ]
+            },
+            "GHSA-37h4-53gj-cw8m": {
+                "cve_id": "GHSA-37h4-53gj-cw8m",
+                "title": "Player records could be overwritten, and their ownership taken over, by any authenticated user",
+                "description": "## Summary Any authenticated user who knew another user's player id could modify that player, and on one path take ownership of it. Player settings carry the forced transcoding profile, the maximum bit rate, whether real file paths are reported, and whether scrobbling is enabled, so this changed how the victim's client streamed and scrobbled. No library content and no account credentials were exposed. ## Details Two write paths on player records were not scoped to the player's owner. `POST /api/player` (native API) is reachable by any authenticated user. The repository authorized the write with the `userId` taken from the request body, then saved the record using the `id` taken from the body. When that id matched an existing player, the create turned into an `UPDATE ... WHERE id = ?` with no ownership predicate, and the update set was not stripped of `user_id`. A request of the form `{'id':'<victim player id>','userId':'<attacker id>','name':'pwn'}` therefore overwrote the victim's row and reassigned it to the attacker, who could then edit it freely as its owner. The same class of bug was fixed for `PUT /api/player/{id}` in v0.62.0 (GHSA-x65f-m8x9-pjxm); the create path was not covered by that fix. `players.Register`, which resolves the player for each request, reused a player by the id supplied by the client and checked only that the client name matched. The id comes from the Subsonic `nd-player-<hex(username)>` cookie, which is present in the default configuration, or from the Jellyfin `DeviceId` in the `X-Emby-Authorization` header when the Jellyfin API is enabled (`Jellyfin.Enabled`, off by default). A request that carried another user's player id was served with that player attached for the rest of the request, inheriting its transcoding profile and its report-real-path setting, and overwrote its name, user agent, IP and last-seen values on the next write past the one-minute throttle. This path never transferred ownership. ## Impact An authenticated user, with no admin rights, could change another user's player settings, and through `POST /api/player` become its owner. Ownership transfer also removes the player from the victim's own list. The limiting factor is the player id: it is a random 22-character id that is returned only to its owner and to admins. It is not enumerable, and no regular-user endpoint discloses another user's player id. An attacker needs that id from some other source, such as an admin page, a shared log, or a captured request. That is why attack complexity is rated high. ## Patches Fixed in **v0.64.1**. `Save` now always creates a new player and ignores any id supplied in the request body, so a create can never become an unscoped update. Edits keep going through `Update`, which authorizes against the stored `user_id` in the `WHERE` clause. `Register` now reuses a player only when it belongs to the requesting user, and otherwise falls back to matching the user's own players, exactly as it already did when the client name did not match. Fix commit: https://github.com/navidrome/navidrome/commit/9e8811e4c5 ## Workarounds None. Disabling the Jellyfin API removes one entry point for the registration path, but the Subsonic path is present in the default configuration. ## Credits Reported by @RealFakeAccount, who found the `POST /api/player` ownership takeover and identified the registration path, and by @qrn12580, who independently reported the registration path with a working proof of concept and found the Jellyfin `DeviceId` entry point. Both reports came through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-3g4p-jhv2-xrxf": {
+                "cve_id": "GHSA-3g4p-jhv2-xrxf",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-3rwv-f797-f9p3": {
+                "cve_id": "GHSA-3rwv-f797-f9p3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-4p3r-6362-833w": {
+                "cve_id": "GHSA-4p3r-6362-833w",
+                "title": "Transcoding command templates exposed to non-admin users",
+                "description": "## Summary Authenticated non-admin users can read transcoding configuration through the native API when `EnableTranscodingConfig` is enabled. The affected responses include the full transcoding command templates in the `command` field. `EnableTranscodingConfig` defaults to `false`, so a server is only affected if an administrator turned it on. The issue is read-only. Create, update, and delete operations were correctly rejected for the same non-admin user in testing. ## Impact A low-privilege user can retrieve transcoding profiles that are intended to be controlled by administrators, including command templates and target formats. This can disclose local command paths, media processing options, and administrator-configured transcoding behavior. It also weakens the intended security boundary around the transcoding configuration feature. Authentication is required, so the endpoints are not reachable anonymously. What is disclosed is operator-authored configuration, not credentials, user data, or media access. Writes were already restricted to administrators, and streaming is unaffected. ## Reproduction The following was reproduced against the official `deluan/navidrome:0.61.2` image with `ND_ENABLETRANSCODINGCONFIG=true`. 1. Start Navidrome with transcoding configuration enabled. 2. Create or use an administrator account. 3. Create a non-admin user with `isAdmin: false`. 4. Login as the non-admin user and keep the returned JWT. 5. Request `GET /api/transcoding` with `X-ND-Authorization: Bearer <non-admin-token>`. 6. Request `GET /api/transcoding/{id}` with the same token. Observed non-admin list response: ```http GET /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK X-Total-Count: 4 [{'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192}, ...] ``` Observed non-admin single-entry response: ```http GET /api/transcoding/Udt9sUvbUvW48KpqcLCoFr HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK {'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192} ``` Controls: ```http GET /api/transcoding HTTP/1.1 HTTP/1.1 401 Unauthorized {'error':'Not authenticated'} ``` ```http POST /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> Content-Type: application/json {'name':'poc','targetFormat':'poc','command':'poc','defaultBitRate':64} HTTP/1.1 403 Forbidden {'error':'Saving transcoding: Permission denied'} ``` ## Root Cause and Technical Details The native API registers `/transcoding` inside the authenticated route group, not inside the `adminOnlyMiddleware` group: ```go r.Group(func(r chi.Router) { r.Use(server.Authenticator(api.ds)) r.Use(server.JWTRefresher) r.Use(server.UpdateLastAccessMiddleware(api.ds)) // ... api.R(r, '/transcoding', model.Transcoding{}, conf.Server.EnableTranscodingConfig) // ... r.With(adminOnlyMiddleware).Group(func(r chi.Router) { api.addInspectRoute(r) api.addConfigRoute(r) api.addUserLibraryRoute(r) api.RX(r, '/library', api.libs.NewRepository, true) }) }) ``` `api.R` wires REST read methods for authenticated users. In `persistence/transcoding_repository.go`, write methods check `loggedUser(r.ctx).IsAdmin`, but read methods do not: ```go func (r *transcodingRepository) Count(options ...rest.QueryOptions) (int64, error) { return r.count(Select(), r.parseRestOptions(r.ctx, options...)) } func (r *transcodingRepository) Read(id string) (any, error) { return r.Get(id) } func (r *transcodingRepository) ReadAll(options ...rest.QueryOptions) (any, error) { sel := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns('*') res := model.Transcodings{} err := r.queryAll(sel, &res) return res, err } ``` The write paths do enforce administrator privileges. This leaves the read paths exposed to any authenticated user. ## Patch Fixed in 0.62.0, commit `11640f2e4` (#5564). ## Workarounds On affected versions, leave `EnableTranscodingConfig` at its default of `false`. The endpoint only exposes the command templates when it is enabled. Blocking the reads, or moving `/transcoding` under `adminOnlyMiddleware`, was tried first and reverted. The web UI reads this resource in ordinary non-admin flows (the player edit dropdown, the player list, and the share/download format pickers), all of which need only `name` and `targetFormat`. The only sensitive field is `command`, the admin-owned ffmpeg template. The shipped fix is field-level redaction rather than denying the read: - `Read` and `ReadAll` still return the profiles to any authenticated user, but blank the `command` field for non-admins. `Count` stays open, because the UI needs list pagination. - Writes (`Save`, `Update`, `Delete`, `Put`) remain admin-only, as they already were. - Streaming is unaffected. It resolves profiles through `Get` and `FindByFormat` on `model.TranscodingRepository`, which are not redacted, so on-the-fly transcoding keeps working for non-admin users. Regression tests cover non-admin reads returning a blank `command`, admin reads keeping it, non-admin `Get`/`FindByFormat` keeping it, and writes still being denied.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-82gh-4ggp-gfg5": {
+                "cve_id": "GHSA-82gh-4ggp-gfg5",
+                "title": "Share creation trusts a client-supplied userId, exposing other users' library content",
+                "description": "## Summary `POST /api/share` accepted a client-supplied `userId` and stored it as the share owner. The owner decides the library-access context used to resolve and stream the share contents, so on 0.63.x any authenticated user could create a share attributed to a user with wider library access (for example an admin) and, through it, read and stream content from libraries they have no access to. On earlier versions the spoofed owner only mis-attributed the share. ## Details The share repository only filled in the owner when the field was empty, so a spoofed `userId` in the request body persisted. From v0.63.0 the public share page loaded playlist shares, and the public stream endpoint checked library access, as the stored owner. A share of any public playlist, or of albums or tracks the caller could not see (see GHSA-3rwv-f797-f9p3), created with `userId` set to an admin or another user with broader library access, served those tracks to anyone holding the link. Before v0.63.0 playlist shares were loaded with a synthetic admin context regardless of owner, so spoofing changed only who the share was attributed to. The spoofed `userId` must be an existing user id; any public playlist exposes its owner's id as `ownerId` in the native API. The same code path is used by Subsonic `createShare`, but that endpoint has no `userId` parameter, so it is not affected. ## Impact Any logged-in user could: - On v0.63.0 through v0.63.2, read and stream tracks from libraries they have not been granted, by sharing a public playlist (or, combined with GHSA-3rwv-f797-f9p3, albums or tracks) as a user with access to those libraries. - Create shares that show up under another user's name. Sharing is enabled by default since v0.63.0. Before that, only instances with `EnableSharing = true` were affected. Per-user library restrictions must be in use for the cross-library read to matter. The cross-library read requires v0.63.0 or later; the mis-attribution affects every version with sharing. ## Patches Fixed in **v0.64.0**. The share owner is now always the authenticated caller. The client-supplied `userId` is ignored. Fix commit: https://github.com/navidrome/navidrome/commit/1a8463f7d ## Workarounds For versions before 0.64.0, disable sharing (`EnableSharing = false`). ## Related The same report also covered a SQL injection via the artist `role` filter and a plugin HTTP/WebSocket-client SSRF bypass via DNS names. Those are published separately as GHSA-hm54-32q6-3rcr and GHSA-pr2j-mfc8-qjcc. ## Credits Reported by @gigioneggiando through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-8jrh-w926-8rvw": {
+                "cve_id": "GHSA-8jrh-w926-8rvw",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f22h-6qxh-rqq2": {
+                "cve_id": "GHSA-f22h-6qxh-rqq2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f295-6wp9-qqfg": {
+                "cve_id": "GHSA-f295-6wp9-qqfg",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-hm54-32q6-3rcr": {
+                "cve_id": "GHSA-hm54-32q6-3rcr",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-mpgw-cc94-xrpp": {
+                "cve_id": "GHSA-mpgw-cc94-xrpp",
+                "title": "Cross-library playlist import and sharing bypass in Navidrome",
+                "description": "### Summary Navidrome allows an authenticated non-admin user to import an M3U playlist containing paths to media files in libraries the user is not authorized to access. If the attacker knows or guesses a valid restricted media path, the imported playlist can store the restricted track ID. When playlist sharing is enabled, the attacker can share the playlist and expose the restricted track through public share/stream URLs. ### Details The M3U import (`POST /api/playlist` with an M3U body) resolved playlist entries against all configured libraries, and `MediaFileRepository.FindByPaths` had no per-user library filter, so a path under any library root resolved to its media file regardless of the importing user's access. As a result, a non-admin user can add tracks from restricted libraries to a playlist they own. Playlist sharing can further expose those tracks because shared playlist loading retrieves playlist tracks with elevated access. Affected flow: 1. A non-admin authenticated user imports an M3U playlist. 2. The playlist references a valid path to a track in a restricted library. 3. Navidrome resolves the path and stores the restricted media file ID in the attacker-owned playlist. 4. If sharing is enabled, the attacker shares the playlist. 5. Public share/stream URLs expose the restricted track. ### PoC Create an M3U playlist that references a track in a library the importing user cannot access: ``` #EXTM3U /path/to/restricted-library/secret/test.mp3 ``` Import the playlist as a non-admin user with access only to a different library. Observed behavior: - The restricted track is resolved and added to the user's playlist. If playlist sharing is enabled, share the playlist and access the generated public share/stream URL. Observed behavior: - The restricted track is included in the shared playlist and can be streamed through the public URL. ### Impact An authenticated non-admin user can store tracks from libraries they are not authorised to use in their own playlist, provided they know or can guess valid media paths under a library root with an audio file extension. Without sharing, this reveals that the path exists and the track's duration and size through the playlist totals; streaming stays blocked. If playlist sharing is enabled (`EnableSharing`, off by default in all affected versions), the attacker can expose the restricted tracks to unauthenticated users through the public share and stream URLs, because shared playlists were loaded with an admin context and shared streams did not check library access. ### Patches Fixed in **v0.63.0**: `FindByPaths` applies the user's library filter, shared playlists load as the share owner, and shared streams check the owner's library access. Fix commit: https://github.com/navidrome/navidrome/commit/fa138afea576e14c13e7c8150d195fddce15a954 (#5640) ### Workarounds Keep sharing disabled (`EnableSharing = false`, the default on affected versions) to prevent unauthenticated exposure. No configuration prevents the import itself; upgrade to v0.63.0 or later.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-p994-r776-mw52": {
+                "cve_id": "GHSA-p994-r776-mw52",
+                "title": "Subsonic API allows unauthenticated brute-force of user passwords",
+                "description": "### Summary The Subsonic API endpoints under `/rest/*` validated credentials on every request with no limit on failed attempts, so an unauthenticated client could brute-force the password of any account. The UI login (`POST /auth/login`) and the Jellyfin login were already rate limited through `AuthRequestLimit` / `AuthWindowLength` (enabled by default, 5 requests per 20 seconds), but the Subsonic API had no equivalent protection. ### Details `authenticate()` in `server/subsonic/middlewares.go` checked the `u`+`p`, `t`+`s` and `jwt` credentials of every request without tracking failures, applying a delay, or locking an account out. The Subsonic API is normally exposed to the internet so that mobile players can reach it, so any public instance could be targeted directly. ### PoC Against a default instance with a known username: ```bash for password in $(cat passwords.txt); do RESPONSE=$(curl -s 'http://host:4533/rest/ping?u=admin&p=${password}&v=1.16.1&c=poc&f=json') if echo '$RESPONSE' | grep -q ''status':'ok''; then echo 'FOUND: ${password}' exit 0 fi done ``` No throttling, delay or lockout occurs, regardless of how many attempts fail. The only mitigation was blocking the source IP outside Navidrome, for example with fail2ban. ### Impact No prerequisites beyond network access and a guessable password. Compromising an account exposes that user's library, and for an admin account also user management, server configuration and library operations. ## Patches Fixed in **v0.64.1**. Failed Subsonic logins are now capped per client IP and username, reusing the existing `AuthRequestLimit` and `AuthWindowLength` settings, and `AuthRequestLimit=0` disables the limit as it does for the other login paths. Only failures count, since Subsonic clients send credentials on every request. At most `AuthRequestLimit` credential checks for one key run at a time and failures are recorded after each check, so a concurrent burst can get at most `2*AuthRequestLimit-1` guesses through one window before every further attempt is rejected, while valid parallel requests only wait. A request that is over the limit gets exactly the same response as a wrong password (HTTP 200 with Subsonic error code 40, no `Retry-After`), so an attacker cannot tell a block from a failed guess, and it is answered without a database lookup. Fix commit: https://github.com/navidrome/navidrome/commit/c3b9b4ecb3 ## Workarounds On affected versions, put Navidrome behind a reverse proxy or fail2ban rule that rate limits `/rest/`, and use long, unique passwords. ## Credits Reported by @osageling through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pcjv-h48m-833g": {
+                "cve_id": "GHSA-pcjv-h48m-833g",
+                "title": "Bookmarks, playlist tracks and now-playing skipped the library filter, exposing track metadata from other libraries",
+                "description": "## Summary On a multi-library instance, a user restricted to some libraries could read the metadata of tracks in libraries they had no access to. Subsonic `getBookmarks` and four other reads built their own queries without the per-user library filter that every other media read applies. ## Details - **`getBookmarks` returned bookmarks for any track.** The query joined bookmarks to tracks scoped only by user, never by library. `createBookmark` stored a bookmark for any ID without checking that the caller could read it. A bookmark created while the user had access also kept returning the track after that access was revoked. - **Playlist tracks were readable by position.** `GET /api/playlist/{id}/tracks/{position}` returned the full track without a library check. The position is a small integer, so no track ID was needed, only a public playlist holding tracks from another library. The `X-Total-Count` header counted the hidden tracks too, and the playlist cover grid could show album art from them. - **Playlist writes were unchecked.** Creating a playlist, replacing its tracks, or adding tracks by song, album, artist or disc ID accepted tracks from any library. The stored song count, duration and size counted them too, so a user could tell a hidden track from an unknown ID and learn its duration and size. - **`getNowPlaying` listed every user's playback.** The now-playing list is shared across the server and was returned unfiltered, so any user could see tracks playing from libraries they could not access, including their IDs. ## Impact A non-admin user with access to a subset of libraries could disclose metadata of tracks in other libraries: title, album, artist, duration, bit rate, format, size, and tag data such as MusicBrainz IDs, genres and ISRC. Audio was not exposed: streaming, downloading and cover art stayed filtered for the same IDs. The `path` returned by the Subsonic API is built from tags unless the caller's player has `reportRealPath` enabled, which a user can set on their own player; in that case the on-disk path of the leaked track was returned as well. No prior access to the target library was needed. `getNowPlaying` hands out track IDs from any library while someone plays them, and playlist positions need no ID at all. Only multi-library instances with per-user library restrictions are affected. With one library, or when every user sees every library, no boundary is crossed. Admin users are not affected. ## Patches Fixed in **v0.64.1**. The affected queries now apply the library filter, `createBookmark` rejects tracks the caller cannot read, playlist writes drop them, and `getNowPlaying` only lists tracks from the caller's libraries. Existing bookmarks are hidden rather than deleted, so they come back with their saved position if access is restored. Fix commit: https://github.com/navidrome/navidrome/commit/8e784b6af7baa7ccfcfaf56edaecf56d598ad045 ## Workarounds None through configuration. `EnableNowPlaying = false` does not help: it only stops the web UI notification, and `getNowPlaying` still answers. ## Credits Reported by @sondt99 through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pr2j-mfc8-qjcc": {
+                "cve_id": "GHSA-pr2j-mfc8-qjcc",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-r5qr-m328-qcf4": {
+                "cve_id": "GHSA-r5qr-m328-qcf4",
+                "title": "Arbitrary file read via symlinks in the music library",
+                "description": "## Summary The scanner classified files by the name of the directory entry, not by what it pointed to. A symlink named `passwd.wav` pointing at `/etc/passwd` was imported as a track, and `/rest/stream` and `/rest/getTranscodeStream` then served the target file's bytes to any user who could play it. ## Details Anyone who can create a symlink inside a music library folder (limited shell access, `rsync`, an FTP or SFTP server that allows symlinks, a shared NAS folder) can point it at any file the Navidrome process can read. After a scan the symlink shows up as a song under an unknown artist and album. Playing it fails, but the stream response still carries the raw bytes of the target file. The `Scanner.FollowSymlinks` option did not help: it only applied to directory symlinks, and file symlinks were followed regardless. ## Impact An attacker with write access to a library folder and a Navidrome account can read any file the server process can access, such as `/etc/passwd`, the configuration file, or `navidrome.db`. A symlink to a real audio file in another library is also imported. That case cannot be told apart from a legitimate out-of-library symlink and is not changed by this fix. Do not give untrusted users write access to library folders. ## Patches Fixed in **v0.63.0**. The scanner now resolves the whole symlink chain and classifies the file by the real target's extension, so a link to a non-audio file is never imported. `Scanner.FollowSymlinks` now also applies to file symlinks; set it to `false` to skip them entirely. v0.63.0 and v0.63.1 had a bug in that resolution that made the scanner skip every file symlink, which broke libraries built from symlinks. **v0.63.2** restores them with full OS-level resolution and also classifies a chain by its final target even when an intermediate link has an audio extension. Upgrade to v0.63.2 or later. Fix commits: https://github.com/navidrome/navidrome/commit/ecba19a08 (v0.63.0), https://github.com/navidrome/navidrome/commit/7fa13761d (v0.63.2) ## Workarounds Do not allow untrusted users to write to library folders. On v0.63.0 or later, `Scanner.FollowSymlinks = false` disables file symlinks completely. ## Credits Reported by @miampf through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-wp9c-pw66-c6j2": {
+                "cve_id": "GHSA-wp9c-pw66-c6j2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-x65f-m8x9-pjxm": {
+                "cve_id": "GHSA-x65f-m8x9-pjxm",
+                "title": "Non-admin user could update another user's player via PUT /api/player/{id}",
+                "description": "# Description ### Impact In Navidrome 0.61.2 and earlier, the native API endpoint `PUT /api/player/{id}` checked ownership against the `userId` field in the request body instead of the stored row. An authenticated non-admin user who knew another user's player id could send a body with their own `userId` to pass the check, while the write still targeted the victim's row. This allowed them to overwrite that player's settings (name, max bit rate, transcoding, scrobble flag) and reassign its ownership to themselves. Player ids are random, and the API does not list other users' players to non-admins, so there is no way to obtain a victim's player id through Navidrome. Reads were already scoped correctly. The realistic impact is a modified or lost player configuration for one user. No data is disclosed and no privileges are gained. Single-user instances are not affected. ### Patches Fixed in #5563, released in v0.62.0. The ownership check is now part of the `UPDATE` statement's `WHERE` clause, so a write can only match a row the caller owns. `user_id` is never written on update, so ownership cannot be reassigned by anyone. The same hardening was applied to share updates. ### Workarounds None. Upgrade to v0.62.0 or later. ### Proof of concept As a non-admin user, with a victim's player id: ``` PUT /api/player/<victim_player_id> {'name':'hijacked','userId':'<attacker_user_id>','maxBitRate':1} ``` Before the fix this returned `200` and moved the player to the attacker. After the fix it returns `403` and the row is unchanged. ### Credit Reported by @tonghuaroot. ### References - https://github.com/navidrome/navidrome/pull/5563",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
             }
         },
         "3.21": {
@@ -535,6 +1415,238 @@
                     {
                         "introduced": "0.51.1-r5",
                         "fixed": "0.60.0-r0"
+                    }
+                ]
+            },
+            "GHSA-37h4-53gj-cw8m": {
+                "cve_id": "GHSA-37h4-53gj-cw8m",
+                "title": "Player records could be overwritten, and their ownership taken over, by any authenticated user",
+                "description": "## Summary Any authenticated user who knew another user's player id could modify that player, and on one path take ownership of it. Player settings carry the forced transcoding profile, the maximum bit rate, whether real file paths are reported, and whether scrobbling is enabled, so this changed how the victim's client streamed and scrobbled. No library content and no account credentials were exposed. ## Details Two write paths on player records were not scoped to the player's owner. `POST /api/player` (native API) is reachable by any authenticated user. The repository authorized the write with the `userId` taken from the request body, then saved the record using the `id` taken from the body. When that id matched an existing player, the create turned into an `UPDATE ... WHERE id = ?` with no ownership predicate, and the update set was not stripped of `user_id`. A request of the form `{'id':'<victim player id>','userId':'<attacker id>','name':'pwn'}` therefore overwrote the victim's row and reassigned it to the attacker, who could then edit it freely as its owner. The same class of bug was fixed for `PUT /api/player/{id}` in v0.62.0 (GHSA-x65f-m8x9-pjxm); the create path was not covered by that fix. `players.Register`, which resolves the player for each request, reused a player by the id supplied by the client and checked only that the client name matched. The id comes from the Subsonic `nd-player-<hex(username)>` cookie, which is present in the default configuration, or from the Jellyfin `DeviceId` in the `X-Emby-Authorization` header when the Jellyfin API is enabled (`Jellyfin.Enabled`, off by default). A request that carried another user's player id was served with that player attached for the rest of the request, inheriting its transcoding profile and its report-real-path setting, and overwrote its name, user agent, IP and last-seen values on the next write past the one-minute throttle. This path never transferred ownership. ## Impact An authenticated user, with no admin rights, could change another user's player settings, and through `POST /api/player` become its owner. Ownership transfer also removes the player from the victim's own list. The limiting factor is the player id: it is a random 22-character id that is returned only to its owner and to admins. It is not enumerable, and no regular-user endpoint discloses another user's player id. An attacker needs that id from some other source, such as an admin page, a shared log, or a captured request. That is why attack complexity is rated high. ## Patches Fixed in **v0.64.1**. `Save` now always creates a new player and ignores any id supplied in the request body, so a create can never become an unscoped update. Edits keep going through `Update`, which authorizes against the stored `user_id` in the `WHERE` clause. `Register` now reuses a player only when it belongs to the requesting user, and otherwise falls back to matching the user's own players, exactly as it already did when the client name did not match. Fix commit: https://github.com/navidrome/navidrome/commit/9e8811e4c5 ## Workarounds None. Disabling the Jellyfin API removes one entry point for the registration path, but the Subsonic path is present in the default configuration. ## Credits Reported by @RealFakeAccount, who found the `POST /api/player` ownership takeover and identified the registration path, and by @qrn12580, who independently reported the registration path with a working proof of concept and found the Jellyfin `DeviceId` entry point. Both reports came through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-3g4p-jhv2-xrxf": {
+                "cve_id": "GHSA-3g4p-jhv2-xrxf",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-3rwv-f797-f9p3": {
+                "cve_id": "GHSA-3rwv-f797-f9p3",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-4p3r-6362-833w": {
+                "cve_id": "GHSA-4p3r-6362-833w",
+                "title": "Transcoding command templates exposed to non-admin users",
+                "description": "## Summary Authenticated non-admin users can read transcoding configuration through the native API when `EnableTranscodingConfig` is enabled. The affected responses include the full transcoding command templates in the `command` field. `EnableTranscodingConfig` defaults to `false`, so a server is only affected if an administrator turned it on. The issue is read-only. Create, update, and delete operations were correctly rejected for the same non-admin user in testing. ## Impact A low-privilege user can retrieve transcoding profiles that are intended to be controlled by administrators, including command templates and target formats. This can disclose local command paths, media processing options, and administrator-configured transcoding behavior. It also weakens the intended security boundary around the transcoding configuration feature. Authentication is required, so the endpoints are not reachable anonymously. What is disclosed is operator-authored configuration, not credentials, user data, or media access. Writes were already restricted to administrators, and streaming is unaffected. ## Reproduction The following was reproduced against the official `deluan/navidrome:0.61.2` image with `ND_ENABLETRANSCODINGCONFIG=true`. 1. Start Navidrome with transcoding configuration enabled. 2. Create or use an administrator account. 3. Create a non-admin user with `isAdmin: false`. 4. Login as the non-admin user and keep the returned JWT. 5. Request `GET /api/transcoding` with `X-ND-Authorization: Bearer <non-admin-token>`. 6. Request `GET /api/transcoding/{id}` with the same token. Observed non-admin list response: ```http GET /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK X-Total-Count: 4 [{'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192}, ...] ``` Observed non-admin single-entry response: ```http GET /api/transcoding/Udt9sUvbUvW48KpqcLCoFr HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> HTTP/1.1 200 OK {'id':'Udt9sUvbUvW48KpqcLCoFr','name':'mp3 audio','targetFormat':'mp3','command':'ffmpeg -i %s -ss %t -map 0:a:0 -b:a %bk -v 0 -f mp3 -','defaultBitRate':192} ``` Controls: ```http GET /api/transcoding HTTP/1.1 HTTP/1.1 401 Unauthorized {'error':'Not authenticated'} ``` ```http POST /api/transcoding HTTP/1.1 X-ND-Authorization: Bearer <non-admin-token> Content-Type: application/json {'name':'poc','targetFormat':'poc','command':'poc','defaultBitRate':64} HTTP/1.1 403 Forbidden {'error':'Saving transcoding: Permission denied'} ``` ## Root Cause and Technical Details The native API registers `/transcoding` inside the authenticated route group, not inside the `adminOnlyMiddleware` group: ```go r.Group(func(r chi.Router) { r.Use(server.Authenticator(api.ds)) r.Use(server.JWTRefresher) r.Use(server.UpdateLastAccessMiddleware(api.ds)) // ... api.R(r, '/transcoding', model.Transcoding{}, conf.Server.EnableTranscodingConfig) // ... r.With(adminOnlyMiddleware).Group(func(r chi.Router) { api.addInspectRoute(r) api.addConfigRoute(r) api.addUserLibraryRoute(r) api.RX(r, '/library', api.libs.NewRepository, true) }) }) ``` `api.R` wires REST read methods for authenticated users. In `persistence/transcoding_repository.go`, write methods check `loggedUser(r.ctx).IsAdmin`, but read methods do not: ```go func (r *transcodingRepository) Count(options ...rest.QueryOptions) (int64, error) { return r.count(Select(), r.parseRestOptions(r.ctx, options...)) } func (r *transcodingRepository) Read(id string) (any, error) { return r.Get(id) } func (r *transcodingRepository) ReadAll(options ...rest.QueryOptions) (any, error) { sel := r.newSelect(r.parseRestOptions(r.ctx, options...)).Columns('*') res := model.Transcodings{} err := r.queryAll(sel, &res) return res, err } ``` The write paths do enforce administrator privileges. This leaves the read paths exposed to any authenticated user. ## Patch Fixed in 0.62.0, commit `11640f2e4` (#5564). ## Workarounds On affected versions, leave `EnableTranscodingConfig` at its default of `false`. The endpoint only exposes the command templates when it is enabled. Blocking the reads, or moving `/transcoding` under `adminOnlyMiddleware`, was tried first and reverted. The web UI reads this resource in ordinary non-admin flows (the player edit dropdown, the player list, and the share/download format pickers), all of which need only `name` and `targetFormat`. The only sensitive field is `command`, the admin-owned ffmpeg template. The shipped fix is field-level redaction rather than denying the read: - `Read` and `ReadAll` still return the profiles to any authenticated user, but blank the `command` field for non-admins. `Count` stays open, because the UI needs list pagination. - Writes (`Save`, `Update`, `Delete`, `Put`) remain admin-only, as they already were. - Streaming is unaffected. It resolves profiles through `Get` and `FindByFormat` on `model.TranscodingRepository`, which are not redacted, so on-the-fly transcoding keeps working for non-admin users. Regression tests cover non-admin reads returning a blank `command`, admin reads keeping it, non-admin `Get`/`FindByFormat` keeping it, and writes still being denied.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-82gh-4ggp-gfg5": {
+                "cve_id": "GHSA-82gh-4ggp-gfg5",
+                "title": "Share creation trusts a client-supplied userId, exposing other users' library content",
+                "description": "## Summary `POST /api/share` accepted a client-supplied `userId` and stored it as the share owner. The owner decides the library-access context used to resolve and stream the share contents, so on 0.63.x any authenticated user could create a share attributed to a user with wider library access (for example an admin) and, through it, read and stream content from libraries they have no access to. On earlier versions the spoofed owner only mis-attributed the share. ## Details The share repository only filled in the owner when the field was empty, so a spoofed `userId` in the request body persisted. From v0.63.0 the public share page loaded playlist shares, and the public stream endpoint checked library access, as the stored owner. A share of any public playlist, or of albums or tracks the caller could not see (see GHSA-3rwv-f797-f9p3), created with `userId` set to an admin or another user with broader library access, served those tracks to anyone holding the link. Before v0.63.0 playlist shares were loaded with a synthetic admin context regardless of owner, so spoofing changed only who the share was attributed to. The spoofed `userId` must be an existing user id; any public playlist exposes its owner's id as `ownerId` in the native API. The same code path is used by Subsonic `createShare`, but that endpoint has no `userId` parameter, so it is not affected. ## Impact Any logged-in user could: - On v0.63.0 through v0.63.2, read and stream tracks from libraries they have not been granted, by sharing a public playlist (or, combined with GHSA-3rwv-f797-f9p3, albums or tracks) as a user with access to those libraries. - Create shares that show up under another user's name. Sharing is enabled by default since v0.63.0. Before that, only instances with `EnableSharing = true` were affected. Per-user library restrictions must be in use for the cross-library read to matter. The cross-library read requires v0.63.0 or later; the mis-attribution affects every version with sharing. ## Patches Fixed in **v0.64.0**. The share owner is now always the authenticated caller. The client-supplied `userId` is ignored. Fix commit: https://github.com/navidrome/navidrome/commit/1a8463f7d ## Workarounds For versions before 0.64.0, disable sharing (`EnableSharing = false`). ## Related The same report also covered a SQL injection via the artist `role` filter and a plugin HTTP/WebSocket-client SSRF bypass via DNS names. Those are published separately as GHSA-hm54-32q6-3rcr and GHSA-pr2j-mfc8-qjcc. ## Credits Reported by @gigioneggiando through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-8jrh-w926-8rvw": {
+                "cve_id": "GHSA-8jrh-w926-8rvw",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f22h-6qxh-rqq2": {
+                "cve_id": "GHSA-f22h-6qxh-rqq2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.53.3-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-f295-6wp9-qqfg": {
+                "cve_id": "GHSA-f295-6wp9-qqfg",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-hm54-32q6-3rcr": {
+                "cve_id": "GHSA-hm54-32q6-3rcr",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.55.2-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-mpgw-cc94-xrpp": {
+                "cve_id": "GHSA-mpgw-cc94-xrpp",
+                "title": "Cross-library playlist import and sharing bypass in Navidrome",
+                "description": "### Summary Navidrome allows an authenticated non-admin user to import an M3U playlist containing paths to media files in libraries the user is not authorized to access. If the attacker knows or guesses a valid restricted media path, the imported playlist can store the restricted track ID. When playlist sharing is enabled, the attacker can share the playlist and expose the restricted track through public share/stream URLs. ### Details The M3U import (`POST /api/playlist` with an M3U body) resolved playlist entries against all configured libraries, and `MediaFileRepository.FindByPaths` had no per-user library filter, so a path under any library root resolved to its media file regardless of the importing user's access. As a result, a non-admin user can add tracks from restricted libraries to a playlist they own. Playlist sharing can further expose those tracks because shared playlist loading retrieves playlist tracks with elevated access. Affected flow: 1. A non-admin authenticated user imports an M3U playlist. 2. The playlist references a valid path to a track in a restricted library. 3. Navidrome resolves the path and stores the restricted media file ID in the attacker-owned playlist. 4. If sharing is enabled, the attacker shares the playlist. 5. Public share/stream URLs expose the restricted track. ### PoC Create an M3U playlist that references a track in a library the importing user cannot access: ``` #EXTM3U /path/to/restricted-library/secret/test.mp3 ``` Import the playlist as a non-admin user with access only to a different library. Observed behavior: - The restricted track is resolved and added to the user's playlist. If playlist sharing is enabled, share the playlist and access the generated public share/stream URL. Observed behavior: - The restricted track is included in the shared playlist and can be streamed through the public URL. ### Impact An authenticated non-admin user can store tracks from libraries they are not authorised to use in their own playlist, provided they know or can guess valid media paths under a library root with an audio file extension. Without sharing, this reveals that the path exists and the track's duration and size through the playlist totals; streaming stays blocked. If playlist sharing is enabled (`EnableSharing`, off by default in all affected versions), the attacker can expose the restricted tracks to unauthenticated users through the public share and stream URLs, because shared playlists were loaded with an admin context and shared streams did not check library access. ### Patches Fixed in **v0.63.0**: `FindByPaths` applies the user's library filter, shared playlists load as the share owner, and shared streams check the owner's library access. Fix commit: https://github.com/navidrome/navidrome/commit/fa138afea576e14c13e7c8150d195fddce15a954 (#5640) ### Workarounds Keep sharing disabled (`EnableSharing = false`, the default on affected versions) to prevent unauthenticated exposure. No configuration prevents the import itself; upgrade to v0.63.0 or later.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.63.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-p994-r776-mw52": {
+                "cve_id": "GHSA-p994-r776-mw52",
+                "title": "Subsonic API allows unauthenticated brute-force of user passwords",
+                "description": "### Summary The Subsonic API endpoints under `/rest/*` validated credentials on every request with no limit on failed attempts, so an unauthenticated client could brute-force the password of any account. The UI login (`POST /auth/login`) and the Jellyfin login were already rate limited through `AuthRequestLimit` / `AuthWindowLength` (enabled by default, 5 requests per 20 seconds), but the Subsonic API had no equivalent protection. ### Details `authenticate()` in `server/subsonic/middlewares.go` checked the `u`+`p`, `t`+`s` and `jwt` credentials of every request without tracking failures, applying a delay, or locking an account out. The Subsonic API is normally exposed to the internet so that mobile players can reach it, so any public instance could be targeted directly. ### PoC Against a default instance with a known username: ```bash for password in $(cat passwords.txt); do RESPONSE=$(curl -s 'http://host:4533/rest/ping?u=admin&p=${password}&v=1.16.1&c=poc&f=json') if echo '$RESPONSE' | grep -q ''status':'ok''; then echo 'FOUND: ${password}' exit 0 fi done ``` No throttling, delay or lockout occurs, regardless of how many attempts fail. The only mitigation was blocking the source IP outside Navidrome, for example with fail2ban. ### Impact No prerequisites beyond network access and a guessable password. Compromising an account exposes that user's library, and for an admin account also user management, server configuration and library operations. ## Patches Fixed in **v0.64.1**. Failed Subsonic logins are now capped per client IP and username, reusing the existing `AuthRequestLimit` and `AuthWindowLength` settings, and `AuthRequestLimit=0` disables the limit as it does for the other login paths. Only failures count, since Subsonic clients send credentials on every request. At most `AuthRequestLimit` credential checks for one key run at a time and failures are recorded after each check, so a concurrent burst can get at most `2*AuthRequestLimit-1` guesses through one window before every further attempt is rejected, while valid parallel requests only wait. A request that is over the limit gets exactly the same response as a wrong password (HTTP 200 with Subsonic error code 40, no `Retry-After`), so an attacker cannot tell a block from a failed guess, and it is answered without a database lookup. Fix commit: https://github.com/navidrome/navidrome/commit/c3b9b4ecb3 ## Workarounds On affected versions, put Navidrome behind a reverse proxy or fail2ban rule that rate limits `/rest/`, and use long, unique passwords. ## Credits Reported by @osageling through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pcjv-h48m-833g": {
+                "cve_id": "GHSA-pcjv-h48m-833g",
+                "title": "Bookmarks, playlist tracks and now-playing skipped the library filter, exposing track metadata from other libraries",
+                "description": "## Summary On a multi-library instance, a user restricted to some libraries could read the metadata of tracks in libraries they had no access to. Subsonic `getBookmarks` and four other reads built their own queries without the per-user library filter that every other media read applies. ## Details - **`getBookmarks` returned bookmarks for any track.** The query joined bookmarks to tracks scoped only by user, never by library. `createBookmark` stored a bookmark for any ID without checking that the caller could read it. A bookmark created while the user had access also kept returning the track after that access was revoked. - **Playlist tracks were readable by position.** `GET /api/playlist/{id}/tracks/{position}` returned the full track without a library check. The position is a small integer, so no track ID was needed, only a public playlist holding tracks from another library. The `X-Total-Count` header counted the hidden tracks too, and the playlist cover grid could show album art from them. - **Playlist writes were unchecked.** Creating a playlist, replacing its tracks, or adding tracks by song, album, artist or disc ID accepted tracks from any library. The stored song count, duration and size counted them too, so a user could tell a hidden track from an unknown ID and learn its duration and size. - **`getNowPlaying` listed every user's playback.** The now-playing list is shared across the server and was returned unfiltered, so any user could see tracks playing from libraries they could not access, including their IDs. ## Impact A non-admin user with access to a subset of libraries could disclose metadata of tracks in other libraries: title, album, artist, duration, bit rate, format, size, and tag data such as MusicBrainz IDs, genres and ISRC. Audio was not exposed: streaming, downloading and cover art stayed filtered for the same IDs. The `path` returned by the Subsonic API is built from tags unless the caller's player has `reportRealPath` enabled, which a user can set on their own player; in that case the on-disk path of the leaked track was returned as well. No prior access to the target library was needed. `getNowPlaying` hands out track IDs from any library while someone plays them, and playlist positions need no ID at all. Only multi-library instances with per-user library restrictions are affected. With one library, or when every user sees every library, no boundary is crossed. Admin users are not affected. ## Patches Fixed in **v0.64.1**. The affected queries now apply the library filter, `createBookmark` rejects tracks the caller cannot read, playlist writes drop them, and `getNowPlaying` only lists tracks from the caller's libraries. Existing bookmarks are hidden rather than deleted, so they come back with their saved position if access is restored. Fix commit: https://github.com/navidrome/navidrome/commit/8e784b6af7baa7ccfcfaf56edaecf56d598ad045 ## Workarounds None through configuration. `EnableNowPlaying = false` does not help: it only stops the web UI notification, and `getNowPlaying` still answers. ## Credits Reported by @sondt99 through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.1-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.1-r0"
+                    }
+                ]
+            },
+            "GHSA-pr2j-mfc8-qjcc": {
+                "cve_id": "GHSA-pr2j-mfc8-qjcc",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.58.5-r6",
+                        "fixed": "0.64.0-r0"
+                    },
+                    {
+                        "introduced": "0.60.3-r4",
+                        "fixed": "0.64.0-r0"
+                    }
+                ]
+            },
+            "GHSA-r5qr-m328-qcf4": {
+                "cve_id": "GHSA-r5qr-m328-qcf4",
+                "title": "Arbitrary file read via symlinks in the music library",
+                "description": "## Summary The scanner classified files by the name of the directory entry, not by what it pointed to. A symlink named `passwd.wav` pointing at `/etc/passwd` was imported as a track, and `/rest/stream` and `/rest/getTranscodeStream` then served the target file's bytes to any user who could play it. ## Details Anyone who can create a symlink inside a music library folder (limited shell access, `rsync`, an FTP or SFTP server that allows symlinks, a shared NAS folder) can point it at any file the Navidrome process can read. After a scan the symlink shows up as a song under an unknown artist and album. Playing it fails, but the stream response still carries the raw bytes of the target file. The `Scanner.FollowSymlinks` option did not help: it only applied to directory symlinks, and file symlinks were followed regardless. ## Impact An attacker with write access to a library folder and a Navidrome account can read any file the server process can access, such as `/etc/passwd`, the configuration file, or `navidrome.db`. A symlink to a real audio file in another library is also imported. That case cannot be told apart from a legitimate out-of-library symlink and is not changed by this fix. Do not give untrusted users write access to library folders. ## Patches Fixed in **v0.63.0**. The scanner now resolves the whole symlink chain and classifies the file by the real target's extension, so a link to a non-audio file is never imported. `Scanner.FollowSymlinks` now also applies to file symlinks; set it to `false` to skip them entirely. v0.63.0 and v0.63.1 had a bug in that resolution that made the scanner skip every file symlink, which broke libraries built from symlinks. **v0.63.2** restores them with full OS-level resolution and also classifies a chain by its final target even when an intermediate link has an audio extension. Upgrade to v0.63.2 or later. Fix commits: https://github.com/navidrome/navidrome/commit/ecba19a08 (v0.63.0), https://github.com/navidrome/navidrome/commit/7fa13761d (v0.63.2) ## Workarounds Do not allow untrusted users to write to library folders. On v0.63.0 or later, `Scanner.FollowSymlinks = false` disables file symlinks completely. ## Credits Reported by @miampf through GitHub's private security advisory channel.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.63.0-r0"
+                    }
+                ]
+            },
+            "GHSA-wp9c-pw66-c6j2": {
+                "cve_id": "GHSA-wp9c-pw66-c6j2",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
+                    }
+                ]
+            },
+            "GHSA-x65f-m8x9-pjxm": {
+                "cve_id": "GHSA-x65f-m8x9-pjxm",
+                "title": "Non-admin user could update another user's player via PUT /api/player/{id}",
+                "description": "# Description ### Impact In Navidrome 0.61.2 and earlier, the native API endpoint `PUT /api/player/{id}` checked ownership against the `userId` field in the request body instead of the stored row. An authenticated non-admin user who knew another user's player id could send a body with their own `userId` to pass the check, while the write still targeted the victim's row. This allowed them to overwrite that player's settings (name, max bit rate, transcoding, scrobble flag) and reassign its ownership to themselves. Player ids are random, and the API does not list other users' players to non-admins, so there is no way to obtain a victim's player id through Navidrome. Reads were already scoped correctly. The realistic impact is a modified or lost player configuration for one user. No data is disclosed and no privileges are gained. Single-user instances are not affected. ### Patches Fixed in #5563, released in v0.62.0. The ownership check is now part of the `UPDATE` statement's `WHERE` clause, so a write can only match a row the caller owns. `user_id` is never written on update, so ownership cannot be reassigned by anyone. The same hardening was applied to share updates. ### Workarounds None. Upgrade to v0.62.0 or later. ### Proof of concept As a non-admin user, with a victim's player id: ``` PUT /api/player/<victim_player_id> {'name':'hijacked','userId':'<attacker_user_id>','maxBitRate':1} ``` Before the fix this returned `200` and moved the player to the attacker. After the fix it returns `403` and the row is unchanged. ### Credit Reported by @tonghuaroot. ### References - https://github.com/navidrome/navidrome/pull/5563",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "0.51.1-r5",
+                        "fixed": "0.62.0-r0"
                     }
                 ]
             }

