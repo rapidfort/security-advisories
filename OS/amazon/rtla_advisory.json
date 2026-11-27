@@ -7968,6 +7968,20 @@
                     }
                 ]
             },
+            "CVE-2025-39756": {
+                "cve_id": "CVE-2025-39756",
+                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
+                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nfs: Prevent file descriptor table allocations exceeding INT_MAX\n\nWhen sysctl_nr_open is set to a very high value (for example, 1073741816\nas set by systemd), processes attempting to use file descriptors near\nthe limit can trigger massive memory allocation attempts that exceed\nINT_MAX, resulting in a WARNING in mm/slub.c:\n\n  WARNING: CPU: 0 PID: 44 at mm/slub.c:5027 __kvmalloc_node_noprof+0x21a/0x288\n\nThis happens because kvmalloc_array() and kvmalloc() check if the\nrequested size exceeds INT_MAX and emit a warning when the allocation is\nnot flagged with __GFP_NOWARN.\n\nSpecifically, when nr_open is set to 1073741816 (0x3ffffff8) and a\nprocess calls dup2(oldfd, 1073741880), the kernel attempts to allocate:\n- File descriptor array: 1073741880 * 8 bytes = 8,589,935,040 bytes\n- Multiple bitmaps: ~400MB\n- Total allocation size: > 8GB (exceeding INT_MAX = 2,147,483,647)\n\nReproducer:\n1. Set /proc/sys/fs/nr_open to 1073741816:\n   # echo 1073741816 > /proc/sys/fs/nr_open\n\n2. Run a program that uses a high file descriptor:\n   #include <unistd.h>\n   #include <sys/resource.h>\n\n   int main() {\n       struct rlimit rlim = {1073741824, 1073741824};\n       setrlimit(RLIMIT_NOFILE, &rlim);\n       dup2(2, 1073741880);  // Triggers the warning\n       return 0;\n   }\n\n3. Observe WARNING in dmesg at mm/slub.c:5027\n\nsystemd commit a8b627a introduced automatic bumping of fs.nr_open to the\nmaximum possible value. The rationale was that systems with memory\ncontrol groups (memcg) no longer need separate file descriptor limits\nsince memory is properly accounted. However, this change overlooked\nthat:\n\n1. The kernel's allocation functions still enforce INT_MAX as a maximum\n   size regardless of memcg accounting\n2. Programs and tests that legitimately test file descriptor limits can\n   inadvertently trigger massive allocations\n3. The resulting allocations (>8GB) are impractical and will always fail\n\nsystemd's algorithm starts with INT_MAX and keeps halving the value\nuntil the kernel accepts it. On most systems, this results in nr_open\nbeing set to 1073741816 (0x3ffffff8), which is just under 1GB of file\ndescriptors.\n\nWhile processes rarely use file descriptors near this limit in normal\noperation, certain selftests (like\ntools/testing/selftests/core/unshare_test.c) and programs that test file\ndescriptor limits can trigger this issue.\n\nFix this by adding a check in alloc_fdtable() to ensure the requested\nallocation size does not exceed INT_MAX. This causes the operation to\nfail with -EMFILE instead of triggering a kernel warning and avoids the\nimpractical >8GB memory allocation request.",
+                "severity": "MEDIUM",
+                "status": "fixed",
+                "events": [
+                    {
+                        "introduced": "6.17.1-300.fc43",
+                        "identifier": "fc43",
+                        "fixed": "7.3.5-101.fc43"
+                    }
+                ]
+            },
             "CVE-2025-39763": {
                 "cve_id": "CVE-2025-39763",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -30732,20 +30746,6 @@
                     }
                 ]
             },
-            "CVE-2026-64487": {
-                "cve_id": "CVE-2026-64487",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nALSA: caiaq: fix out-of-bounds read in the Traktor Kontrol S4 input parser\n\nsnd_usb_caiaq_tks4_dispatch() decodes the Traktor Kontrol S4 input\nstream in fixed 16-byte (TKS4_MSGBLOCK_SIZE) message blocks. On every\niteration it advances buf and subtracts the block size while looping on\n\"while (len)\".\n\nlen is urb->actual_length. That value is supplied by the device and is\nnot guaranteed to be a multiple of 16. When a final short block leaves\nlen between 1 and 15, the loop runs once more, reads up to buf[15], and\nthen does \"len -= TKS4_MSGBLOCK_SIZE\". As len is unsigned this underflows\nto a huge value. The loop then keeps iterating and walking buf far past\nthe end of the 512-byte ep4_in_buf, reading out of bounds until a bogus\nblock id happens to be hit.\n\nIterate only while a full message block is available. This stops the\nunsigned underflow and silently drops any trailing partial block, which\ncarries no complete control value anyway.\n\nThe sibling endpoint-4 parsers are not affected. The Traktor Kontrol X1\nand Maschine arms in snd_usb_caiaq_ep4_reply_dispatch() floor\nurb->actual_length before dispatching.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.5-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-64510": {
                 "cve_id": "CVE-2026-64510",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
@@ -34890,38 +34890,10 @@
                     }
                 ]
             },
-            "CVE-2026-72251": {
-                "cve_id": "CVE-2026-72251",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nf_nat_sip: reload possible stale data pointer\n\nquoting sashiko:\n ------------------------------------------------------------------------\n [..] noticed a potential memory bug and header corruption involving the\n SIP NAT helper.\n\n In net/netfilter/nf_nat_sip.c:nf_nat_sip():\n\tif (skb_ensure_writable(skb, skb->len)) {\n\t\tnf_ct_helper_log(skb, ct, \"cannot mangle packet\");\n\t\treturn NF_DROP;\n\t}\n\tuh = (void *)skb->data + protoff;\n\tuh->dest = ct_sip_info->forced_dport;\n\tif (!nf_nat_mangle_udp_packet(skb, ct, ctinfo, protoff,\n\t\t\t\t      0, 0, NULL, 0)) {\n\n If a cloned or fragmented SKB is reallocated by skb_ensure_writable(), the\n old data buffer is freed. However, nf_nat_sip() fails to update *dptr to\n point to the new buffer.\n\n It also appears to use nf_nat_mangle_udp_packet() on what could be a TCP\n packet, which would overwrite the sequence number with a checksum update.\n ------------------------------------------------------------------------\n\nnf_conntrack_sip linerizes skbs, hence no fragmented skb can be seen.\nBut clones are possible, so rebuild dptr.\n\nDisable nf_nat_mangle_udp_packet() branch for TCP streams.\nIt doesn't look like this can ever happen, else we should have received\nbug reports about this, so just check the conntrack is UDP and drop\notherwise.\n\nThe calling conntrack_sip set ->forced_dport for SIP_HDR_VIA_UDP messages,\nso I don't think this is ever expected to be true for a TCP stream.",
-                "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.5-101.fc43"
-                    }
-                ]
-            },
             "CVE-2026-72252": {
                 "cve_id": "CVE-2026-72252",
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nft_set_pipapo: don't leak bad clone into future transaction\n\nOn memory allocation failure the cloned nft_pipapo_match can enter a bad\nstate:\n - some fields can have their lookup tables resized while others did\n   not\n - bits might have been toggled\n - scratch map can be undersized which also means m->bsize_max can be\n   lower than what is required\n\nThis means that the next insertion in the same batch can trigger\nout-of-bounds writes.\n\nFurthermore, a failure in the first can result in the bad clone to\nleak into the next transaction because the abort callback is never\nexecuted in this case (the upper layer saw an error and no attempt to\nallocate a transactional request was made).\n\nRecord a state for the nft_pipapo_match structure:\n- NEW (pristine clone)\n- MOD (modified clone with good state)\n- ERR (potentially bogus content)\n\nThen make it so that deletes and insertions fail when the clone\nentered ERR state.\n\nIn case the very first insert attempt results in an error, free the\nclone right away.",
-                "severity": "HIGH",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.5-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-72253": {
-                "cve_id": "CVE-2026-72253",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnetfilter: nf_conntrack_sip: validate skb_dst() before accessing it\n\ntc ingress and openvswitch do not guarantee routing information to be\navailable. These subsystems use the conntrack helper infrastructure, and\nthe SIP helper relies on the skb_dst() to be present if\nsip_external_media is set to 1 (which is disabled by default as a module\nparameter).\n\nThis effectively disables the sip_external_media toggle for these\nsubsystems without resulting in a crash.",
                 "severity": "HIGH",
                 "status": "fixed",
                 "events": [
@@ -36547,20 +36519,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nbnxt: fix head underflow on XDP head-grow\n\nThe xdp.py test test_xdp_native_adjst_head_grow_data crashes when run on\na bnxt machine (and also crashes in NIPA).\n\nIt seems that the bug is an underflow in bnxt_rx_multi_page_skb, which\nbuilds the skb head:\n\n  napi_build_skb(data_ptr - bp->rx_offset, rxr->rx_page_size);\n\nThe problem with this expression is that in page mode, rx_offset is:\n\n  bp->rx_offset = NET_IP_ALIGN + XDP_PACKET_HEADROOM;\n\nWhich evaluates (at least on x86_64) to 258.\n\nThe test test_xdp_native_adjst_head_grow_data tests a case where the\nhead is adjusted by -256.\n\nWhen this test runs, data_ptr is shifted to frag_start + 2 (where\nfrag_start = page_address(page) + offset).\n\nThen, bnxt_rx_multi_page_skb is invoked and the napi_build_skb\nexpression subtracts 258, landing at an address before frag_start. This\ncould be either the previous fragment or the previous physical page when\nthe offset is < 256 (e.g. if the fragment started at offset 0).\n\nWhen the skb is freed, the page pool fragment reference is dropped on\neither the wrong page or the wrong frag of the right page. In either\ncase, the corrupted reference count can lead to the page being\nprematurely recycled while still in use. Once (incorrectly) recycled, it\ncan be handed out again and on driver teardown this would result in a\ndouble free.\n\nThe commit under fixes updated this code to handle the case where the\nnative page size is >= 64k, but it unintentionally broke the head grow\ncase.\n\nTo fix this, add an offset field to struct bnxt_sw_rx_bd, mirroring the\nexisting offset field in struct bnxt_sw_rx_agg_bd. Populate it on\nallocation and preserve it on reuse.\n\nIn bnxt_rx_multi_page_skb, use the newly added offset field to compute\nthe fragment start and pass that to napi_build_skb. Adjust the layout\nwith skb_reserve.\n\nThere are two cases, the non-adjustment case and the adjustment case.\n\nIn both cases, the skb is built at page_address(page) + offset to\naccount for the case where the native page size >= 64K and skb_reserve\nis called with data_ptr - (page_address(page) + offset). That\ndifference equals bp->rx_offset when data_ptr was not moved, or\nbp->rx_offset + xdp_adjust when XDP adjusted the head.\n\nRe-running the failing test with this commit applied causes the test to\nrun successfully to completion.\n\nThe other rx_skb_func implementations don't have this issue.",
                 "severity": "CRITICAL",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.5-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-74270": {
-                "cve_id": "CVE-2026-74270",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nhandshake: Require admin permission for DONE command\n\nACCEPT and DONE are the two downcalls of the handshake genl\nfamily, both intended for use by the trusted handshake agent\n(tlshd). ACCEPT already requires GENL_ADMIN_PERM; DONE has\nno privilege check at all.\n\nThe fd-lookup in handshake_nl_done_doit() only confirms that\nsome pending handshake request exists for the supplied sockfd;\nit does not authenticate the sender. An unprivileged process\nthat guesses or observes a valid sockfd can therefore submit\na DONE with HANDSHAKE_A_DONE_STATUS == 0, leaving the kernel\nconsumer to proceed as if the handshake succeeded. A non-zero\nstatus on a forged DONE tears down a legitimate in-flight\nhandshake before tlshd can report its real result.",
-                "severity": "HIGH",
                 "status": "fixed",
                 "events": [
                     {
@@ -64337,20 +64295,6 @@
                 "title": "In the Linux kernel, the following vulnerability has been resolve ...",
                 "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: propagate SETXATTR value decode errors\n\nnfsd4_decode_setxattr() stores the status returned while assembling a\nnon-empty attribute value, but then unconditionally returns nfs_ok. An\nallocation failure can therefore leave a NULL value buffer paired with a\nnon-zero length and allow compound processing to continue.\n\nReturn the decoder status so that the operation stops on the original\nerror.",
                 "severity": "UNKNOWN",
-                "status": "fixed",
-                "events": [
-                    {
-                        "introduced": "6.17.1-300.fc43",
-                        "identifier": "fc43",
-                        "fixed": "7.3.5-101.fc43"
-                    }
-                ]
-            },
-            "CVE-2026-99362": {
-                "cve_id": "CVE-2026-99362",
-                "title": "In the Linux kernel, the following vulnerability has been resolve ...",
-                "description": "In the Linux kernel, the following vulnerability has been resolved:\n\nnfsd: preflight SEQUENCE replies before accepting a slot\n\nnfsd4_sequence() narrows the reply buffer to the session's cached\nreply limit before it accepts the slot seqid. A client may negotiate\nca_maxresponsesize_cached down to NFSD_MIN_HDR_SEQ_SZ, and\nnfsd4_alloc_slot() then gives every slot a zero-length sl_data[]. A\nCOMPOUND tag can fill that narrowed buffer until it holds the\nSEQUENCE opcode but not the status word that follows.\nnfsd4_encode_operation() returns without running\nnfsd4_encode_sequence(), so cstate.data_offset stays zero. It leaves\nop->status at nfs_ok as well, so the COMPOUND is treated as having\nsucceeded.\n\nnfsd4_store_cache_entry() declines to cache a lone SEQUENCE that\nreturned an error. That test reads the status the operation\nreported, so it passes here. The copy starts at offset zero and\ntakes the whole reply, RPC and COMPOUND headers included, into the\nzero-length sl_data[]. The COMPOUND tag is copied along with it, so\nthe client picks most of the bytes written past the end of the slot:\n\n  BUG: KASAN: slab-out-of-bounds in read_bytes_from_xdr_buf+0x1bc/0x390\n  Write of size 80 at addr ffff888003a549cd by task kunit_try_catch/24\n   __asan_memcpy+0x38/0x60\n   read_bytes_from_xdr_buf+0x1bc/0x390\n   nfsd4_sequence_done+0x5b0/0x810\n   nfs4svc_encode_compoundres+0x1bf/0x240\n\nCheck that the fixed-size SEQUENCE result, plus room for a following\noperation's error status, fits the negotiated limit before narrowing\nthe buffer and consuming the slot seqid. The slot and its reply\ncache are left unchanged, as RFC 8881 Section 2.10.6.1.2 requires of\nan error returned from SEQUENCE.",
-                "severity": "CRITICAL",
                 "status": "fixed",
                 "events": [
                     {
